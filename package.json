@@ -1,0 +1,26 @@
+{
+  "name": "@narada2/agent-cli",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "narada-agent-cli": "./bin/narada-agent-cli.mjs",
+    "agent-runtime-server": "./bin/agent-runtime-server.mjs"
+  },
+  "exports": {
+    ".": "./src/agent-cli.mjs",
+    "./provider-resolution": "./src/provider-resolution.mjs",
+    "./intelligence-providers": "./src/intelligence-providers.json",
+    "./windows-wrapper-template": "./templates/Start-AgentCliSession.ps1",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node --test src/agent-cli.test.mjs",
+    "typecheck": "tsc --noEmit --allowJs --checkJs false bin/narada-agent-cli.mjs bin/agent-runtime-server.mjs src/agent-cli.mjs src/provider-resolution.mjs"
+  },
+  "dependencies": {
+    "@narada2/carrier-action-admission": "workspace:*",
+    "@narada2/carrier-protocol": "workspace:*",
+    "@narada2/mcp-fabric": "workspace:*"
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "schema": "narada.agent_cli.intelligence_providers.v1",
+  "description": "Authoritative provider metadata for agent-cli provider resolution, launcher projection, docs, and drift tests.",
+  "support_states": [
+    "declared",
+    "admitted_unsupported",
+    "adapter_implemented",
+    "verified_supported",
+    "deprecated",
+    "removed"
+  ],
+  "providers": {
+    "openai-api": {
+      "meaning": "OpenAI API via OpenAI-compatible chat completions.",
+      "base_url": "https://api.openai.com",
+      "default_model": "gpt-5.5",
+      "adapter_kind": "openai-compatible-chat-completions",
+      "support_state": "verified_supported",
+      "base_url_env_names": ["NARADA_AI_BASE_URL"],
+      "model_env_names": ["NARADA_AI_MODEL"],
+      "credential_env_names": ["NARADA_AI_API_KEY"]
+    },
+    "kimi-api": {
+      "meaning": "Kimi/Moonshot API via OpenAI-compatible chat completions.",
+      "base_url": "https://api.moonshot.ai",
+      "default_model": "kimi-k2.6",
+      "adapter_kind": "openai-compatible-chat-completions",
+      "support_state": "verified_supported",
+      "base_url_env_names": ["NARADA_KIMI_API_BASE_URL", "NARADA_AI_BASE_URL"],
+      "model_env_names": ["NARADA_KIMI_MODEL", "NARADA_AI_MODEL"],
+      "credential_env_names": ["NARADA_KIMI_API_KEY", "NARADA_AI_API_KEY"]
+    },
+    "anthropic-api": {
+      "meaning": "Anthropic API via the Anthropic Messages API.",
+      "base_url": "https://api.anthropic.com",
+      "default_model": "claude-sonnet-4.6",
+      "adapter_kind": "anthropic-messages",
+      "support_state": "verified_supported",
+      "base_url_env_names": ["NARADA_AI_BASE_URL"],
+      "model_env_names": ["NARADA_AI_MODEL"],
+      "credential_env_names": ["ANTHROPIC_API_KEY", "NARADA_AI_API_KEY"]
+    },
+    "codex-subscription": {
+      "meaning": "Local Codex CLI subscription auth via codex mcp-server; no OpenAI API key or API billing path.",
+      "base_url": "codex://local-subscription",
+      "default_model": "gpt-5.5",
+      "adapter_kind": "codex-mcp-server",
+      "support_state": "verified_supported",
+      "base_url_env_names": [],
+      "model_env_names": ["NARADA_CODEX_MODEL", "NARADA_AI_MODEL"],
+      "credential_env_names": []
+    }
+  }
+}
