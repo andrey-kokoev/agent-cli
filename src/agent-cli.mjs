@@ -1297,9 +1297,30 @@ function classifyTool(name, args) {
 // MCP Server Discovery & Management
 // ---------------------------------------------------------------------------
 async function discoverAndStartMcpServers(siteRoot) {
-  const fabric = loadSiteMcpFabric(siteRoot, { required: false });
+  const fabricRequired = isMcpFabricRequired();
+  let fabric;
+  try {
+    fabric = loadSiteMcpFabric(siteRoot, { required: fabricRequired });
+  } catch (error) {
+    throw createMcpStartupError('mcp_fabric_load_failed', `MCP fabric load failed: ${error.message}`, {
+      phase: 'fabric_load',
+      site_root: siteRoot,
+      cause_code: error.code ?? null,
+      details: error.details ?? {},
+    });
+  }
+  if (fabricRequired && Object.keys(fabric.servers).length === 0) {
+    throw createMcpStartupError('mcp_fabric_empty', `No MCP servers found in ${fabric.mcp_dir}`, {
+      phase: 'fabric_load',
+      site_root: siteRoot,
+      mcp_dir: fabric.mcp_dir,
+      files: fabric.files ?? [],
+      registry_validation: fabric.registry_validation ?? null,
+    });
+  }
 
   const servers = {};
+  const failures = [];
   for (const [serverName, serverConfig] of Object.entries(fabric.servers)) {
     try {
       const args = [...serverConfig.args];
@@ -1316,11 +1337,14 @@ async function discoverAndStartMcpServers(siteRoot) {
       });
 
       let buffer = '';
+      const stdoutPollution = [];
+      const stderrDiagnostics = [];
       proc.stdout.setEncoding('utf-8');
       proc.stderr.setEncoding('utf-8');
       proc.stderr.on('data', (d) => {
         const msg = d.toString().trim();
         if (shouldSuppressMcpStderr(msg)) return;
+        if (msg) stderrDiagnostics.push(msg.slice(0, 1000));
         if (msg) process.stderr.write(`[${serverName}] ${msg}\n`);
       });
 
@@ -1340,16 +1364,23 @@ async function discoverAndStartMcpServers(siteRoot) {
               pending.delete(msg.id);
             }
           } catch {
-            // ignore malformed
+            stdoutPollution.push(line.slice(0, 1000));
           }
         }
       });
 
-      const send = (req, timeoutMs = 15000) => new Promise((resolve, reject) => {
+      const startupTimeoutMs = Math.max(1, Number(serverConfig.startup_timeout_sec ?? 10) * 1000);
+      const send = (req, timeoutMs = 15000, timeoutCode = 'mcp_request_timeout') => new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           if (pending.has(req.id)) {
             pending.delete(req.id);
-            reject(new Error(`MCP request timeout after ${timeoutMs}ms`));
+            reject(createMcpStartupError(timeoutCode, `MCP request timeout after ${timeoutMs}ms`, {
+              phase: req.method,
+              server_name: serverName,
+              timeout_ms: timeoutMs,
+              stdout_pollution: stdoutPollution,
+              stderr: stderrDiagnostics,
+            }));
           }
         }, timeoutMs);
         pending.set(req.id, { resolve, reject, timeout });
@@ -1359,11 +1390,45 @@ async function discoverAndStartMcpServers(siteRoot) {
       // Initialize with timeout
       let initResult, toolsResult;
       try {
-        initResult = await send({ jsonrpc: '2.0', id: randomId(), method: 'initialize', params: { protocolVersion: '2024-11-05' } }, 10000);
-        toolsResult = await send({ jsonrpc: '2.0', id: randomId(), method: 'tools/list', params: {} }, 10000);
+        initResult = await send(
+          { jsonrpc: '2.0', id: randomId(), method: 'initialize', params: { protocolVersion: '2024-11-05' } },
+          startupTimeoutMs,
+          'mcp_startup_timeout',
+        );
+        toolsResult = await send(
+          { jsonrpc: '2.0', id: randomId(), method: 'tools/list', params: {} },
+          startupTimeoutMs,
+          'mcp_tool_hydration_timeout',
+        );
       } catch (err) {
-        console.error(`[agent-cli] Failed to initialize MCP server ${serverName}: ${err.message}`);
-        proc.kill();
+        const failure = mcpStartupDiagnostic(err, {
+          code: 'mcp_server_startup_failed',
+          phase: 'initialize_or_tools_list',
+          server_name: serverName,
+          command: serverConfig.command,
+          args: serverConfig.args,
+          stdout_pollution: stdoutPollution,
+          stderr: stderrDiagnostics,
+        });
+        failures.push(failure);
+        console.error(`[agent-cli] Failed to initialize MCP server ${serverName}: ${failure.message}`);
+        await stopMcpStartupProcess(proc);
+        continue;
+      }
+
+      if (stdoutPollution.length > 0) {
+        const failure = {
+          schema: 'narada.agent_cli.mcp_startup_diagnostic.v0',
+          code: 'mcp_stdout_pollution',
+          message: `MCP server ${serverName} emitted non-JSON stdout during startup`,
+          phase: 'initialize_or_tools_list',
+          server_name: serverName,
+          stdout_pollution: stdoutPollution,
+          stderr: stderrDiagnostics,
+        };
+        failures.push(failure);
+        console.error(`[agent-cli] ${failure.message}`);
+        await stopMcpStartupProcess(proc);
         continue;
       }
 
@@ -1377,11 +1442,70 @@ async function discoverAndStartMcpServers(siteRoot) {
         registry_metadata_authoritative: serverConfig.registry_metadata_authoritative === true,
       };
     } catch (err) {
-      console.error(`[agent-cli] Failed to start MCP server ${serverName}: ${err.message}`);
+      const failure = mcpStartupDiagnostic(err, {
+        code: 'mcp_server_spawn_failed',
+        phase: 'spawn',
+        server_name: serverName,
+        command: serverConfig.command,
+        args: serverConfig.args,
+      });
+      failures.push(failure);
+      console.error(`[agent-cli] Failed to start MCP server ${serverName}: ${failure.message}`);
     }
   }
 
+  if (fabricRequired && failures.length > 0) {
+    throw createMcpStartupError('mcp_startup_failed', 'One or more required MCP servers failed startup', {
+      phase: 'startup',
+      site_root: siteRoot,
+      failures,
+    });
+  }
+
   return servers;
+}
+
+function stopMcpStartupProcess(proc) {
+  if (!proc || proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve();
+  return new Promise((resolveStop) => {
+    const timeout = setTimeout(resolveStop, 1000);
+    proc.once('exit', () => {
+      clearTimeout(timeout);
+      resolveStop();
+    });
+    proc.kill();
+  });
+}
+
+function isMcpFabricRequired() {
+  if (process.env.NARADA_AGENT_CLI_REQUIRE_MCP_FABRIC === '0') return false;
+  if (process.env.NARADA_AGENT_CLI_REQUIRE_MCP_FABRIC === '1') return true;
+  return process.env.NARADA_SITE_ROOT !== undefined
+    && process.env.NARADA_AGENT_ID !== undefined
+    && (process.env.NARADA_AGENT_START_EVENT_ID !== undefined || process.env.NARADA_CARRIER_SESSION_ID !== undefined);
+}
+
+function createMcpStartupError(code, message, details = {}) {
+  const error = new Error(message);
+  error.code = code;
+  error.details = details;
+  error.diagnostic = {
+    schema: 'narada.agent_cli.mcp_startup_diagnostic.v0',
+    ...details,
+    code,
+    message,
+  };
+  return error;
+}
+
+function mcpStartupDiagnostic(error, fallback = {}) {
+  if (error?.diagnostic) return error.diagnostic;
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    schema: 'narada.agent_cli.mcp_startup_diagnostic.v0',
+    ...fallback,
+    message,
+  };
 }
 
 function shouldSuppressMcpStderr(message) {

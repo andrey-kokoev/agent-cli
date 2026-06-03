@@ -808,6 +808,163 @@ const missingToolEvidence = JSON.parse(readFileSync(missingToolContent.evidence_
 assert.equal(missingToolEvidence.reason, 'mcp_tool_not_available');
 rmSync(missingToolSite, { recursive: true, force: true });
 
+async function withRequiredMcpFabric(fn) {
+  const previous = process.env.NARADA_AGENT_CLI_REQUIRE_MCP_FABRIC;
+  process.env.NARADA_AGENT_CLI_REQUIRE_MCP_FABRIC = '1';
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.NARADA_AGENT_CLI_REQUIRE_MCP_FABRIC;
+    } else {
+      process.env.NARADA_AGENT_CLI_REQUIRE_MCP_FABRIC = previous;
+    }
+  }
+}
+
+const missingFabricSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-missing-fabric-'));
+try {
+  await assert.rejects(
+    () => withRequiredMcpFabric(() => discoverAndStartMcpServers(missingFabricSite)),
+    (error) => {
+      assert.equal(error.code, 'mcp_fabric_load_failed');
+      assert.equal(error.diagnostic.schema, 'narada.agent_cli.mcp_startup_diagnostic.v0');
+      assert.equal(error.diagnostic.code, 'mcp_fabric_load_failed');
+      assert.equal(error.diagnostic.cause_code, 'mcp_fabric_missing');
+      return true;
+    },
+  );
+} finally {
+  rmSync(missingFabricSite, { recursive: true, force: true });
+}
+
+const emptyFabricSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-empty-fabric-'));
+mkdirSync(join(emptyFabricSite, '.ai', 'mcp'), { recursive: true });
+try {
+  await assert.rejects(
+    () => withRequiredMcpFabric(() => discoverAndStartMcpServers(emptyFabricSite)),
+    (error) => {
+      assert.equal(error.code, 'mcp_fabric_load_failed');
+      assert.equal(error.diagnostic.schema, 'narada.agent_cli.mcp_startup_diagnostic.v0');
+      assert.equal(error.diagnostic.cause_code, 'mcp_fabric_empty');
+      return true;
+    },
+  );
+} finally {
+  rmSync(emptyFabricSite, { recursive: true, force: true });
+}
+
+const pollutedFabricSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-polluted-fabric-'));
+mkdirSync(join(pollutedFabricSite, '.ai', 'mcp'), { recursive: true });
+const pollutedServerPath = join(pollutedFabricSite, 'polluted-mcp-server.mjs');
+writeFileSync(pollutedServerPath, `
+import readline from 'node:readline';
+console.log('startup banner');
+const rl = readline.createInterface({ input: process.stdin });
+rl.on('line', (line) => {
+  const request = JSON.parse(line);
+  if (request.method === 'initialize') {
+    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05' } }));
+    return;
+  }
+  if (request.method === 'tools/list') {
+    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { tools: [] } }));
+  }
+});
+`, 'utf8');
+writeFileSync(join(pollutedFabricSite, '.ai', 'mcp', 'polluted-mcp.json'), `${JSON.stringify({
+  mcpServers: {
+    polluted: {
+      transport: 'stdio',
+      command: 'node',
+      args: [pollutedServerPath],
+    },
+  },
+}, null, 2)}\n`, 'utf8');
+try {
+  await assert.rejects(
+    () => withRequiredMcpFabric(() => discoverAndStartMcpServers(pollutedFabricSite)),
+    (error) => {
+      assert.equal(error.code, 'mcp_startup_failed');
+      assert.equal(error.diagnostic.schema, 'narada.agent_cli.mcp_startup_diagnostic.v0');
+      assert.equal(error.diagnostic.failures[0].code, 'mcp_stdout_pollution');
+      assert.deepEqual(error.diagnostic.failures[0].stdout_pollution, ['startup banner']);
+      return true;
+    },
+  );
+} finally {
+  rmSync(pollutedFabricSite, { recursive: true, force: true });
+}
+
+const startupTimeoutSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-startup-timeout-'));
+mkdirSync(join(startupTimeoutSite, '.ai', 'mcp'), { recursive: true });
+const startupTimeoutServerPath = join(startupTimeoutSite, 'startup-timeout-mcp-server.mjs');
+writeFileSync(startupTimeoutServerPath, `
+setInterval(() => {}, 1000);
+`, 'utf8');
+writeFileSync(join(startupTimeoutSite, '.ai', 'mcp', 'startup-timeout-mcp.json'), `${JSON.stringify({
+  mcpServers: {
+    timeout: {
+      transport: 'stdio',
+      command: 'node',
+      args: [startupTimeoutServerPath],
+      startup_timeout_sec: 0.01,
+    },
+  },
+}, null, 2)}\n`, 'utf8');
+try {
+  await assert.rejects(
+    () => withRequiredMcpFabric(() => discoverAndStartMcpServers(startupTimeoutSite)),
+    (error) => {
+      assert.equal(error.code, 'mcp_startup_failed');
+      assert.equal(error.diagnostic.failures[0].code, 'mcp_startup_timeout');
+      assert.equal(error.diagnostic.failures[0].phase, 'initialize');
+      assert.equal(error.diagnostic.failures[0].timeout_ms, 10);
+      return true;
+    },
+  );
+} finally {
+  rmSync(startupTimeoutSite, { recursive: true, force: true });
+}
+
+const toolHydrationTimeoutSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-tool-timeout-'));
+mkdirSync(join(toolHydrationTimeoutSite, '.ai', 'mcp'), { recursive: true });
+const toolHydrationTimeoutServerPath = join(toolHydrationTimeoutSite, 'tool-timeout-mcp-server.mjs');
+writeFileSync(toolHydrationTimeoutServerPath, `
+import readline from 'node:readline';
+const rl = readline.createInterface({ input: process.stdin });
+rl.on('line', (line) => {
+  const request = JSON.parse(line);
+  if (request.method === 'initialize') {
+    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05' } }));
+  }
+});
+`, 'utf8');
+writeFileSync(join(toolHydrationTimeoutSite, '.ai', 'mcp', 'tool-timeout-mcp.json'), `${JSON.stringify({
+  mcpServers: {
+    timeout: {
+      transport: 'stdio',
+      command: 'node',
+      args: [toolHydrationTimeoutServerPath],
+      startup_timeout_sec: 0.2,
+    },
+  },
+}, null, 2)}\n`, 'utf8');
+try {
+  await assert.rejects(
+    () => withRequiredMcpFabric(() => discoverAndStartMcpServers(toolHydrationTimeoutSite)),
+    (error) => {
+      assert.equal(error.code, 'mcp_startup_failed');
+      assert.equal(error.diagnostic.failures[0].code, 'mcp_tool_hydration_timeout');
+      assert.equal(error.diagnostic.failures[0].phase, 'tools/list');
+      assert.equal(error.diagnostic.failures[0].timeout_ms, 200);
+      return true;
+    },
+  );
+} finally {
+  rmSync(toolHydrationTimeoutSite, { recursive: true, force: true });
+}
+
 const discoveredSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-discovered-mcp-'));
 mkdirSync(join(discoveredSite, '.ai', 'mcp'), { recursive: true });
 mkdirSync(join(discoveredSite, '.narada', 'capabilities'), { recursive: true });
