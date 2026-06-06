@@ -45,6 +45,14 @@ function Resolve-NaradaPackageRoot {
         throw "narada_package_not_resolvable: $PackageName; set NARADA_PROPER_ROOT or install the package where Node can resolve it"
     }
 
+    if ($PackageName -eq '@narada2/agent-cli') {
+        $agentCliRoot = if ($env:NARADA_AGENT_CLI_ROOT) { $env:NARADA_AGENT_CLI_ROOT } else { 'D:\code\agent-cli' }
+        $agentCliPackageJson = Join-Path $agentCliRoot 'package.json'
+        if (Test-Path -LiteralPath $agentCliPackageJson -PathType Leaf) {
+            return $agentCliRoot
+        }
+    }
+
     $parts = $PackageName -split '/'
     return (Join-Path (Join-Path $NaradaProperRoot 'packages') $parts[$parts.Count - 1])
 }
