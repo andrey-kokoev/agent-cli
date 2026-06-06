@@ -50,9 +50,10 @@ disable this execution path.
 
 ## Carrier session goal
 
-Use `/goal` to show the current carrier session goal, `/goal <text>` to set it, and
-`/goal clear` to clear it. The CLI initializes this session-local value from
-`NARADA_AGENT_CLI_GOAL`, `NARADA_CARRIER_GOAL`, or `NARADA_GOAL` when present.
+Use `/goal` to show the current carrier session goal, `/goal <text>` to set it,
+`/goal pause` or `/goal resume` to control it, and `/goal clear` to clear it. The
+CLI initializes this session-local value as active from `NARADA_AGENT_CLI_GOAL`,
+`NARADA_CARRIER_GOAL`, or `NARADA_GOAL` when present.
 
 ## Conversation observers
 

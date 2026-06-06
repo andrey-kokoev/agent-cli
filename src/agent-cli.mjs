@@ -83,7 +83,7 @@ const sessionSettings = {
   model: options.model ?? MODEL,
   thinking: normalizeThinkingLevel(options.thinking ?? THINKING_LEVEL),
   stream: options.stream ?? parseBooleanEnv(process.env.NARADA_AGENT_CLI_STREAM, !SERVER_MODE),
-  goal: normalizeCarrierGoal(process.env.NARADA_AGENT_CLI_GOAL ?? process.env.NARADA_CARRIER_GOAL ?? process.env.NARADA_GOAL ?? ''),
+  goal: createCarrierGoalState(process.env.NARADA_AGENT_CLI_GOAL ?? process.env.NARADA_CARRIER_GOAL ?? process.env.NARADA_GOAL ?? ''),
 };
 const transcriptDisplaySettings = {
   toolOutputs: parseBooleanEnv(process.env.NARADA_AGENT_CLI_TOOL_OUTPUTS, true),
@@ -234,7 +234,7 @@ async function main() {
     ['Model', sessionSettings.model],
     ['Thinking', sessionSettings.thinking],
     ['Stream', sessionSettings.stream ? 'on' : 'off'],
-    ['Goal', sessionSettings.goal || 'not set'],
+    ['Goal', carrierGoalStatusLabel(sessionSettings.goal)],
     ['MCP servers', Object.keys(mcpServers).length],
     ...Object.entries(mcpServers).map(([name, srv]) => [`  ${name}`, `${srv.tools.length} tools`]),
     ['Tools', allTools.length],
@@ -686,7 +686,7 @@ async function handleSlashCommand(input, {
       '',
       '/help                 Show commands',
       '/status               Show session state',
-      '/goal [text|clear]    Show or set carrier session goal',
+      '/goal [text|pause|resume|clear] Show, set, pause, resume, or clear carrier goal',
       '/stats [args]         Show local Codex transcript statistics',
       '/model <name>         Set model for later turns',
       '/thinking <level>     none, low, medium, high',
@@ -719,7 +719,8 @@ async function handleSlashCommand(input, {
     appendSession(SESSION_PATH, sessionEventEntry(result.changed ? 'session_setting_changed' : 'carrier_command_executed', {
       command: '/goal',
       setting: 'goal',
-      value: carrierSessionSettings.goal,
+      value: result.goal.value,
+      status: result.goal.status,
       action: result.action,
     }));
     return 'handled';
@@ -791,7 +792,7 @@ async function handleSlashCommand(input, {
       Model: carrierSessionSettings.model ?? sessionSettings.model,
       Thinking: carrierSessionSettings.thinking ?? sessionSettings.thinking,
       Stream: (carrierSessionSettings.stream ?? sessionSettings.stream) ? 'on' : 'off',
-      Goal: carrierSessionSettings.goal || 'not set',
+      Goal: carrierGoalStatusLabel(carrierSessionSettings.goal),
       'MCP servers': Object.keys(mcpServers).length,
       Tools: allTools.length,
       'Tool outputs': displaySettings.toolOutputs ? 'shown' : 'hidden',
@@ -851,17 +852,20 @@ function handleToolOutputDisplayCommand(value = '', displaySettings = transcript
 
 function handleGoalCommand(value = '', settings = sessionSettings) {
   const requested = String(value ?? '').trim();
+  settings.goal = normalizeCarrierGoalState(settings.goal);
   if (!requested) {
     return {
       action: 'show',
       changed: false,
       goal: settings.goal,
-      message: settings.goal ? `Current goal: ${settings.goal}` : 'No carrier session goal is set.',
+      message: settings.goal.value
+        ? `Current goal (${settings.goal.status}): ${settings.goal.value}`
+        : 'No carrier session goal is set.',
     };
   }
   const normalized = requested.toLowerCase();
   if (normalized === 'clear') {
-    settings.goal = '';
+    settings.goal = createCarrierGoalState('');
     return {
       action: 'clear',
       changed: true,
@@ -869,13 +873,76 @@ function handleGoalCommand(value = '', settings = sessionSettings) {
       message: 'Carrier session goal cleared.',
     };
   }
+  if (normalized === 'pause') {
+    if (!settings.goal.value) {
+      return {
+        action: 'pause',
+        changed: false,
+        goal: settings.goal,
+        message: 'No carrier session goal is set.',
+      };
+    }
+    settings.goal.status = 'paused';
+    return {
+      action: 'pause',
+      changed: true,
+      goal: settings.goal,
+      message: `Carrier session goal paused: ${settings.goal.value}`,
+    };
+  }
+  if (normalized === 'resume') {
+    if (!settings.goal.value) {
+      return {
+        action: 'resume',
+        changed: false,
+        goal: settings.goal,
+        message: 'No carrier session goal is set.',
+      };
+    }
+    settings.goal.status = 'active';
+    return {
+      action: 'resume',
+      changed: true,
+      goal: settings.goal,
+      message: `Carrier session goal resumed: ${settings.goal.value}`,
+    };
+  }
   settings.goal = normalizeCarrierGoal(requested);
+  settings.goal = createCarrierGoalState(settings.goal, 'active');
   return {
     action: 'set',
     changed: true,
     goal: settings.goal,
-    message: `Carrier session goal set: ${settings.goal}`,
+    message: `Carrier session goal set: ${settings.goal.value}`,
   };
+}
+
+function createCarrierGoalState(value = '', status = 'active') {
+  const normalized = normalizeCarrierGoal(value);
+  return {
+    value: normalized,
+    status: normalized ? normalizeCarrierGoalStatus(status) : 'unset',
+  };
+}
+
+function normalizeCarrierGoalState(goal) {
+  if (goal && typeof goal === 'object') {
+    return createCarrierGoalState(goal.value ?? '', goal.status ?? 'active');
+  }
+  return createCarrierGoalState(goal ?? '');
+}
+
+function normalizeCarrierGoalStatus(status = 'active') {
+  const normalized = String(status ?? '').trim().toLowerCase();
+  return normalized === 'paused' ? 'paused' : 'active';
+}
+
+function carrierGoalStatusLabel(goal) {
+  const normalized = normalizeCarrierGoalState(goal);
+  if (!normalized.value) return 'not set';
+  return normalized.status === 'paused'
+    ? `${normalized.value} (paused)`
+    : `${normalized.value} (active)`;
 }
 
 function normalizeCarrierGoal(value = '') {
@@ -1544,7 +1611,7 @@ async function runConversationTurn(messages, tools, mcpServers, rl, options = {}
     let response;
     try {
       recordTurnStarted();
-      response = await callChatApiFn(messages, tools, { ...sessionSettings, turn, abortSignal: turn?.abortSignal, emit, mcpServers });
+      response = await callChatApiFn(messagesWithCarrierGoal(messages, sessionSettings.goal), tools, { ...sessionSettings, turn, abortSignal: turn?.abortSignal, emit, mcpServers });
     } catch (error) {
       if (turn?.interruptRequested || isAbortError(error)) {
         emit?.('turn_interrupted', { turn_id: turn?.turnId ?? null, terminal_state: 'interrupted' });
@@ -1608,6 +1675,18 @@ async function runConversationTurn(messages, tools, mcpServers, rl, options = {}
     recordTurnTerminal('turn_completed');
     return { terminal_state: 'completed' };
   }
+}
+
+function messagesWithCarrierGoal(messages, goal = sessionSettings.goal) {
+  const normalized = normalizeCarrierGoalState(goal);
+  if (!normalized.value || normalized.status !== 'active') return messages;
+  const goalMessage = {
+    role: 'system',
+    content: `Active carrier session goal: ${normalized.value}\nUse this as the persistent task target and completion criterion while it remains active.`,
+  };
+  const insertAt = messages.findIndex((message) => message.role !== 'system');
+  if (insertAt === -1) return [...messages, goalMessage];
+  return [...messages.slice(0, insertAt), goalMessage, ...messages.slice(insertAt)];
 }
 
 function terminalStatusForEventKind(eventKind) {
@@ -2944,6 +3023,7 @@ async function runServerConversationTurn({ requestId, state, messages, allTools,
 }
 
 function serverStatus({ requestId, state, allTools, mcpServers }) {
+  const goal = normalizeCarrierGoalState(sessionSettings.goal);
   return {
     request_id: requestId,
     transport: 'jsonl_stdio',
@@ -2951,7 +3031,9 @@ function serverStatus({ requestId, state, allTools, mcpServers }) {
     model: sessionSettings.model,
     thinking: sessionSettings.thinking,
     stream: sessionSettings.stream,
-    goal: sessionSettings.goal,
+    goal: goal.value || null,
+    goal_status: goal.status,
+    goal_display: carrierGoalStatusLabel(goal),
     active_turn_state: state.activeTurn ? 'running' : 'idle',
     active_turn_id: state.activeTurn?.turnId ?? null,
     mcp_server_count: Object.keys(mcpServers).length,
@@ -4449,6 +4531,7 @@ export {
   readCarrierHostCommandOutputRef,
   handleInteractiveControlLine,
   handleSlashCommand,
+  messagesWithCarrierGoal,
   runCodexTranscriptStats,
   createInputQueue,
   normalizeInputEvent,

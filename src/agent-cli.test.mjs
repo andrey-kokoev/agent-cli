@@ -46,6 +46,7 @@ import {
   handleInteractiveControlLine,
   handleObserverCommand,
   handleSlashCommand,
+  messagesWithCarrierGoal,
   handleToolOutputDisplayCommand,
   runCodexTranscriptStats,
   inputRecordDisplayLabel,
@@ -904,38 +905,83 @@ const goalSettings = { goal: '' };
 assert.deepEqual(handleGoalCommand('', goalSettings), {
   action: 'show',
   changed: false,
-  goal: '',
+  goal: { value: '', status: 'unset' },
   message: 'No carrier session goal is set.',
 });
 assert.deepEqual(handleGoalCommand(' finish provider parity ', goalSettings), {
   action: 'set',
   changed: true,
-  goal: 'finish provider parity',
+  goal: { value: 'finish provider parity', status: 'active' },
   message: 'Carrier session goal set: finish provider parity',
 });
-assert.equal(goalSettings.goal, 'finish provider parity');
+assert.deepEqual(goalSettings.goal, { value: 'finish provider parity', status: 'active' });
+assert.deepEqual(handleGoalCommand('pause', goalSettings), {
+  action: 'pause',
+  changed: true,
+  goal: { value: 'finish provider parity', status: 'paused' },
+  message: 'Carrier session goal paused: finish provider parity',
+});
+assert.deepEqual(handleGoalCommand('', goalSettings), {
+  action: 'show',
+  changed: false,
+  goal: { value: 'finish provider parity', status: 'paused' },
+  message: 'Current goal (paused): finish provider parity',
+});
+assert.deepEqual(handleGoalCommand('resume', goalSettings), {
+  action: 'resume',
+  changed: true,
+  goal: { value: 'finish provider parity', status: 'active' },
+  message: 'Carrier session goal resumed: finish provider parity',
+});
 assert.deepEqual(handleGoalCommand('clear', goalSettings), {
   action: 'clear',
   changed: true,
-  goal: '',
+  goal: { value: '', status: 'unset' },
   message: 'Carrier session goal cleared.',
+});
+assert.deepEqual(handleGoalCommand('pause', goalSettings), {
+  action: 'pause',
+  changed: false,
+  goal: { value: '', status: 'unset' },
+  message: 'No carrier session goal is set.',
 });
 assert.deepEqual(handleGoalCommand('none', goalSettings), {
   action: 'set',
   changed: true,
-  goal: 'none',
+  goal: { value: 'none', status: 'active' },
   message: 'Carrier session goal set: none',
 });
 assert.deepEqual(handleGoalCommand('reset', goalSettings), {
   action: 'set',
   changed: true,
-  goal: 'reset',
+  goal: { value: 'reset', status: 'active' },
   message: 'Carrier session goal set: reset',
 });
+assert.deepEqual(messagesWithCarrierGoal([
+  { role: 'system', content: 'base role' },
+  { role: 'user', content: 'next turn' },
+], { value: 'finish parity', status: 'active' }), [
+  { role: 'system', content: 'base role' },
+  { role: 'system', content: 'Active carrier session goal: finish parity\nUse this as the persistent task target and completion criterion while it remains active.' },
+  { role: 'user', content: 'next turn' },
+]);
+assert.deepEqual(messagesWithCarrierGoal([{ role: 'user', content: 'next turn' }], { value: 'finish parity', status: 'paused' }), [
+  { role: 'user', content: 'next turn' },
+]);
 const printedGoalMessages = [];
 process.stdout.write = (value = '') => { printedGoalMessages.push(stripAnsiForTest(String(value))); return true; };
 try {
   assert.equal(await handleSlashCommand('/goal finish cross-carrier command', {
+    mcpServers: {},
+    allTools: [],
+    carrierSessionSettings: goalSettings,
+  }), 'handled');
+  assert.equal(await handleSlashCommand('/goal pause', {
+    mcpServers: {},
+    allTools: [],
+    carrierSessionSettings: goalSettings,
+  }), 'handled');
+  assert.equal(await handleSlashCommand('/goal resume', {
     mcpServers: {},
     allTools: [],
     carrierSessionSettings: goalSettings,
@@ -948,9 +994,11 @@ try {
 } finally {
   process.stdout.write = originalSlashStdoutWrite;
 }
-assert.equal(goalSettings.goal, 'finish cross-carrier command');
+assert.deepEqual(goalSettings.goal, { value: 'finish cross-carrier command', status: 'active' });
 assert.equal(printedGoalMessages.some((message) => message.includes('Carrier session goal set: finish cross-carrier command')), true);
-assert.equal(printedGoalMessages.some((message) => message.includes('Current goal: finish cross-carrier command')), true);
+assert.equal(printedGoalMessages.some((message) => message.includes('Carrier session goal paused: finish cross-carrier command')), true);
+assert.equal(printedGoalMessages.some((message) => message.includes('Carrier session goal resumed: finish cross-carrier command')), true);
+assert.equal(printedGoalMessages.some((message) => message.includes('Current goal (active): finish cross-carrier command')), true);
 const printedToolsMessages = [];
 const toolsFixtureServers = {
   'local-filesystem': {
