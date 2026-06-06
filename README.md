@@ -40,3 +40,26 @@ current shell.
 
 If native MCP discovery is blocking work, set `NARADA_CODEX_NATIVE_MCP_TOOLS=false` before
 starting the session. Nested Codex runs will use the JSON handoff fallback instead.
+
+## Carrier host commands
+
+In interactive mode, prefix a line with `!` to execute a command on the carrier host instead
+of sending it to the provider, for example `! git status`. Host commands emit carrier session
+evidence and do not create provider turns. Set `NARADA_AGENT_CLI_HOST_COMMANDS=false` to
+disable this execution path.
+
+## Carrier session goal
+
+Use `/goal` to show the current carrier session goal, `/goal <text>` to set it, and
+`/goal clear` to clear it. The CLI initializes this session-local value from
+`NARADA_AGENT_CLI_GOAL`, `NARADA_CARRIER_GOAL`, or `NARADA_GOAL` when present.
+
+## Conversation observers
+
+Observer interjections can arrive through the carrier control input channel as labeled
+`source_kind: "agent"` events with observer metadata. The CLI renders operator-visible
+observer notes distinctly and routes agent-visible notes through the normal provider-turn
+path, queueing them while another turn is active.
+
+Use `/observers` to inspect observer posture. Use `/observer mute` and `/observer unmute`
+to suppress or restore visible observer interjections for the current session.

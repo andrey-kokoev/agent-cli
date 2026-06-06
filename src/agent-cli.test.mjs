@@ -6,7 +6,11 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
 import { commandTokens } from '@narada2/carrier-command-contract';
-import { validateSessionEvent } from '@narada2/carrier-protocol';
+import {
+  classifyCarrierInputHold,
+  classifyCarrierInputQueueAdmission,
+  validateSessionEvent,
+} from '@narada2/carrier-protocol';
 import {
   PROVIDER_SUPPORT_STATES,
   REQUEST_ADAPTERS,
@@ -28,6 +32,8 @@ import {
   directiveReceiptEvidence,
   discoverAndStartMcpServers,
   executeMcpTool,
+  classifyCarrierHostCommandInput,
+  executeCarrierHostCommand,
   formatDuration,
   formatHeaderRow,
   formatHeaderRows,
@@ -35,7 +41,10 @@ import {
   formatProgressStatus,
   formatTimestamp,
   formatToolResultContent,
+  formatObserverPosture,
+  handleGoalCommand,
   handleInteractiveControlLine,
+  handleObserverCommand,
   handleSlashCommand,
   handleToolOutputDisplayCommand,
   runCodexTranscriptStats,
@@ -43,6 +52,7 @@ import {
   normalizeDisplayTerms,
   normalizeInputEvent,
   normalizeInputRecord,
+  normalizeCarrierGoal,
   normalizeThinkingLevel,
   parseArgs,
   parseBooleanEnv,
@@ -52,8 +62,10 @@ import {
   parseAnthropicMessagesResponse,
   parseCodexExecJsonLine,
   parseNaradaToolCall,
+  isObserverInputEvent,
   isPotentialNaradaToolCallText,
   printAgentMessage,
+  readCarrierHostCommandOutputRef,
   renderMarkdownForTerminal,
   rewriteSubmittedPromptForTest,
   runConversationTurn,
@@ -66,6 +78,7 @@ import {
   sessionLogEntry,
   shouldDeferInteractiveInput,
   shouldDisplayToolOutputs,
+  observerVisibility,
   styleInputRouteLabel,
   shouldSuppressMcpStderr,
   startInteractiveControlJsonlWatcher,
@@ -76,12 +89,32 @@ import {
 const metadata = JSON.parse(readFileSync(new URL('./intelligence-providers.json', import.meta.url), 'utf8')).providers;
 const naradaToolCallEnvelope = JSON.parse(readFileSync(new URL('../../narada/packages/carrier-provider-contract/contracts/narada-tool-call-envelope.json', import.meta.url), 'utf8'));
 const transcriptProjectionCases = JSON.parse(readFileSync(new URL('../../narada/packages/carrier-protocol/fixtures/transcript-projection-cases.json', import.meta.url), 'utf8'));
+const inputPipelineCases = JSON.parse(readFileSync(new URL('../../narada/packages/carrier-protocol/fixtures/carrier-input-pipeline-cases.json', import.meta.url), 'utf8'));
 assert.equal(transcriptProjectionCases.schema, 'narada.carrier.transcript_projection_cases.v1');
 for (const entry of transcriptProjectionCases.cases) {
   const sessionEvent = JSON.parse(readFileSync(new URL(`../../narada/packages/carrier-protocol/fixtures/${entry.fixture}`, import.meta.url), 'utf8'));
   assert.deepEqual(validateSessionEvent(sessionEvent), [], entry.name);
   assert.equal(typeof entry.expected_actor, 'string');
   assert.equal(typeof entry.expected_text, 'string');
+}
+assert.equal(inputPipelineCases.schema, 'narada.carrier.input_pipeline_cases.v1');
+for (const entry of inputPipelineCases.cases) {
+  const normalized = normalizeInputEvent(entry.input);
+  const queueAdmission = classifyCarrierInputQueueAdmission(normalized, entry.state);
+  const hold = classifyCarrierInputHold(normalized, entry.state);
+  assert.equal(queueAdmission.admission_action, entry.expected.admission_action, entry.name);
+  assert.equal(queueAdmission.creates_turn, entry.expected.creates_turn, entry.name);
+  assert.equal(queueAdmission.complete_without_provider, entry.expected.complete_without_provider, entry.name);
+  assert.equal(queueAdmission.dispatch_to_provider, entry.expected.dispatch_to_provider, entry.name);
+  assert.deepEqual(queueAdmission.queue_events.map((event) => event.event_kind), entry.expected.queue_event_kinds, entry.name);
+  assert.deepEqual(queueAdmission.admission_events.map((event) => event.event_kind), entry.expected.admission_event_kinds, entry.name);
+  assert.deepEqual(queueAdmission.visible_events.map((event) => event.event_kind), entry.expected.visible_event_kinds ?? [], entry.name);
+  assert.equal(hold.hold_action, entry.expected.hold_action, entry.name);
+  assert.equal(hold.should_defer, entry.expected.should_defer, entry.name);
+  assert.equal(shouldDeferInteractiveInput(normalized, {
+    rl: { line: entry.state.composerHasDraft ? 'draft' : '' },
+    promptState: { active: true },
+  }), entry.expected.should_defer, entry.name);
 }
 const tempDir = resolve('.ai/tmp-agent-cli-programmatic-test');
 mkdirSync(tempDir, { recursive: true });
@@ -138,6 +171,24 @@ assert.equal(normalizedEvent.source_kind, 'system');
 assert.equal(normalizedEvent.delivery_mode, 'admit_for_current_turn');
 assert.equal(normalizedEvent.directive_id, 'dir_1');
 assert.match(normalizedEvent.event_id, /^input_/);
+const observerEvent = normalizeInputEvent({
+  content: 'Ask what evidence is missing.',
+  source: 'observer',
+  rule_id: 'hesitation-source-check',
+  visibility: 'operator_visible',
+  confidence: 'medium',
+}, { transport: 'control_jsonl' });
+assert.equal(observerEvent.source, 'observer');
+assert.equal(observerEvent.source_kind, 'agent');
+assert.equal(observerEvent.source_id, 'narada.observer');
+assert.equal(observerEvent.delivery_mode, 'admit_after_active_turn');
+assert.equal(observerEvent.metadata.observer.role, 'observer');
+assert.equal(observerEvent.metadata.observer.rule_id, 'hesitation-source-check');
+assert.equal(observerEvent.metadata.observer.visibility, 'operator_visible');
+assert.equal(isObserverInputEvent(observerEvent), true);
+assert.equal(isObserverInputEvent({ source_kind: 'agent', source_id: 'observerish-agent', metadata: { agent_control_input: true } }), false);
+assert.equal(observerVisibility(observerEvent), 'operator_visible');
+assert.equal(inputRecordDisplayLabel(observerEvent), 'narada.observer -> operator');
 const receiptEvidence = directiveReceiptEvidence(normalizedEvent, {
   agentId: 'narada.architect',
   carrierSessionId: 'carrier_session_test',
@@ -167,6 +218,10 @@ assert.equal(deferredNotice, 'queued-system:1');
 defer = false;
 await deferredQueue.drainUntilIdle();
 assert.equal(deferredQueue.pendingCount, 0);
+const observerQueue = createInputQueue({ drain: async () => ({ terminal_state: 'completed_without_provider' }) });
+await observerQueue.enqueue(observerEvent);
+assert.equal(observerQueue.pendingObserverCount, 1);
+assert.equal(observerQueue.state().pendingObserverCount, 1);
 const abandonedQueue = createInputQueue({ drain: async () => ({ terminal_state: 'completed' }) });
 await abandonedQueue.enqueue(normalizeInputEvent({ content: 'abandon me', source: 'operator_steering' }, { transport: 'terminal' }));
 assert.equal(abandonedQueue.pendingCount, 1);
@@ -249,6 +304,41 @@ assert.equal(nativeControlEvents.length, 1);
 assert.equal(nativeControlEvents[0].source, 'system_directive');
 assert.equal(nativeControlEvents[0].source_kind, 'system');
 assert.equal(nativeControlEvents[0].directive_id, 'dir_native');
+const observerControlEvents = [];
+const observerControlQueue = createInputQueue({
+  drain: async (event) => { observerControlEvents.push(event); return { terminal_state: 'completed_without_provider' }; },
+});
+await handleInteractiveControlLine(JSON.stringify({
+  schema: 'narada.carrier.control.input_event.v1',
+  control_event_id: 'control_observer_1',
+  input_event_id: 'input_observer_1',
+  written_at: '2026-05-30T00:00:00.000Z',
+  input: {
+    schema: 'narada.carrier.input_event.v1',
+    event_id: 'input_observer_1',
+    source_kind: 'agent',
+    source_id: 'narada.observer',
+    transport: 'control_jsonl',
+    delivery_mode: 'admit_after_active_turn',
+    hold_condition: null,
+    content: 'Ask what evidence is missing.',
+    created_at: '2026-05-30T00:00:00.000Z',
+    authority_ref: null,
+    directive_id: null,
+    metadata: {
+      observer: {
+        role: 'observer',
+        rule_id: 'hesitation-source-check',
+        visibility: 'operator_visible',
+        confidence: 'medium',
+      },
+    },
+  },
+}), { inputQueue: observerControlQueue });
+assert.equal(observerControlEvents.length, 1);
+assert.equal(observerControlEvents[0].source, 'observer');
+assert.equal(observerControlEvents[0].source_kind, 'agent');
+assert.equal(observerControlEvents[0].metadata.observer.visibility, 'operator_visible');
 assert.deepEqual(removeInvalidToolHistory([
   { role: 'user', content: 'run startup sequence' },
   { role: 'tool', content: '{}', tool_call_id: 'orphan:0' },
@@ -285,6 +375,26 @@ assert.equal(normalizeThinkingLevel('bad'), 'medium');
 assert.equal(parseBooleanEnv('1', false), true);
 assert.equal(parseBooleanEnv('off', true), false);
 assert.equal(parseBooleanEnv(undefined, true), true);
+assert.deepEqual(classifyCarrierHostCommandInput('! git status'), {
+  is_host_command: true,
+  command_text: 'git status',
+  admission_action: 'execute',
+  admission_reason: 'host_command_enabled',
+  execution_surface: 'carrier_host_shell',
+  creates_provider_turn: false,
+});
+assert.equal(classifyCarrierHostCommandInput('hello ! git status').is_host_command, false);
+assert.equal(classifyCarrierHostCommandInput('/status').is_host_command, false);
+assert.deepEqual(classifyCarrierHostCommandInput('!   '), {
+  is_host_command: true,
+  command_text: '',
+  admission_action: 'reject',
+  admission_reason: 'empty_host_command',
+  execution_surface: 'carrier_host_shell',
+  creates_provider_turn: false,
+});
+assert.equal(classifyCarrierHostCommandInput('! git status', { enabled: false }).admission_reason, 'host_commands_disabled');
+assert.equal(classifyCarrierHostCommandInput('! git status', { approvalMode: 'prompt_for_approval' }).admission_action, 'prompt_for_approval');
 assert.deepEqual(parseArgs(['--stream', '--model', 'gpt-x']), { stream: true, model: 'gpt-x' });
 assert.deepEqual(parseArgs(['--no-stream', '--thinking', 'low']), { stream: false, thinking: 'low' });
 assert.deepEqual(parseArgs(['--color', '--no-color']), { color: false });
@@ -366,6 +476,93 @@ try {
 }
 assert.equal(stripAnsiForTest(toolDirectionLabel('invoke')), 'narada.architect -> agent-cli');
 assert.equal(stripAnsiForTest(toolDirectionLabel('result')), 'agent-cli -> narada.architect');
+const hostCommandOutputDir = mkdtempSync(join(tmpdir(), 'narada-agent-cli-host-command-'));
+const hostCommandEvents = [];
+const nodeCommand = 'echo host-ok';
+const hostCommandResult = await executeCarrierHostCommand(classifyCarrierHostCommandInput(`! ${nodeCommand}`), {
+  commandId: 'host_command_success_test',
+  cwd: tempDir,
+  outputDir: hostCommandOutputDir,
+  appendSessionFn: (entry) => hostCommandEvents.push(entry),
+  printResult: false,
+});
+assert.equal(hostCommandResult.terminal_state, 'completed');
+assert.equal(hostCommandResult.exit_code, 0);
+assert.equal(hostCommandResult.stdout.trim(), 'host-ok');
+assert.equal(hostCommandResult.creates_provider_turn, false);
+assert.deepEqual(hostCommandEvents.map((entry) => entry.event_kind), [
+  'carrier_host_command_requested',
+  'carrier_host_command_admitted',
+  'carrier_host_command_started',
+  'carrier_host_command_completed',
+]);
+assert.equal(hostCommandEvents[0].payload.command_text, nodeCommand);
+assert.equal(hostCommandEvents.at(-1).payload.terminal_state, 'completed');
+assert.equal(hostCommandEvents.at(-1).payload.stdout.trim(), 'host-ok');
+const hostCommandRejectedEvents = [];
+const rejectedHostCommand = await executeCarrierHostCommand(classifyCarrierHostCommandInput('!   '), {
+  commandId: 'host_command_rejected_test',
+  cwd: tempDir,
+  appendSessionFn: (entry) => hostCommandRejectedEvents.push(entry),
+  printResult: false,
+});
+assert.equal(rejectedHostCommand.terminal_state, 'rejected');
+assert.deepEqual(hostCommandRejectedEvents.map((entry) => entry.event_kind), [
+  'carrier_host_command_requested',
+  'carrier_host_command_rejected',
+]);
+assert.equal(hostCommandRejectedEvents.at(-1).payload.admission_reason, 'empty_host_command');
+const hostCommandFailedEvents = [];
+const failedHostCommand = await executeCarrierHostCommand(classifyCarrierHostCommandInput('! fail-for-test'), {
+  commandId: 'host_command_failed_test',
+  cwd: tempDir,
+  outputDir: hostCommandOutputDir,
+  appendSessionFn: (entry) => hostCommandFailedEvents.push(entry),
+  printResult: false,
+  spawnFn: () => {
+    const child = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    process.nextTick(() => {
+      child.stdout.end();
+      child.stderr.end();
+      child.emit('close', 7);
+    });
+    return child;
+  },
+});
+assert.equal(failedHostCommand.terminal_state, 'failed');
+assert.equal(failedHostCommand.exit_code, 7);
+assert.equal(hostCommandFailedEvents.at(-1).event_kind, 'carrier_host_command_failed');
+assert.equal(hostCommandFailedEvents.at(-1).payload.terminal_state, 'failed');
+const hostCommandLargeEvents = [];
+const largeHostCommand = await executeCarrierHostCommand(classifyCarrierHostCommandInput('! large-output-for-test'), {
+  commandId: 'host_command_large_test',
+  cwd: tempDir,
+  outputDir: hostCommandOutputDir,
+  appendSessionFn: (entry) => hostCommandLargeEvents.push(entry),
+  printResult: false,
+  spawnFn: () => {
+    const child = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    process.nextTick(() => {
+      child.stdout.end('x'.repeat(9000));
+      child.stderr.end();
+      child.emit('close', 0);
+    });
+    return child;
+  },
+});
+assert.equal(largeHostCommand.terminal_state, 'completed');
+assert.equal(largeHostCommand.output_ref.payload_ref, 'mcp_payload:carrier_host_command_output:host_command_large_test@v1');
+assert.equal(existsSync(largeHostCommand.output_path), true);
+assert.equal(hostCommandLargeEvents.at(-1).payload.stdout, undefined);
+assert.equal(hostCommandLargeEvents.at(-1).payload.output_ref.payload_ref, largeHostCommand.output_ref.payload_ref);
+const largeHostCommandOutput = readCarrierHostCommandOutputRef(largeHostCommand.output_ref, { outputDir: hostCommandOutputDir });
+assert.equal(largeHostCommandOutput.schema, 'narada.carrier.host_command_output.v1');
+assert.equal(largeHostCommandOutput.stdout.length, 9000);
+rmSync(hostCommandOutputDir, { recursive: true, force: true });
 assert.equal(shouldSuppressMcpStderr('(node:1) ExperimentalWarning: SQLite is an experimental feature and might change at any time'), true);
 assert.equal(shouldSuppressMcpStderr('(Use `node --trace-warnings ...` to show where the warning was created)'), true);
 assert.equal(shouldSuppressMcpStderr('real MCP server error'), false);
@@ -665,6 +862,7 @@ assert.equal(codexExecEventText(nativeMcpCompletedEvent), '');
 assert.deepEqual(commandTokens(), [
   '/help',
   '/status',
+  '/goal',
   '/stats',
   '/model',
   '/thinking',
@@ -672,6 +870,9 @@ assert.deepEqual(commandTokens(), [
   '/tool-outputs',
   '/tools',
   '/tool',
+  '/observers',
+  '/observer mute',
+  '/observer unmute',
   '/queue',
   '/queue clear',
   '/queue drop <index>',
@@ -698,6 +899,58 @@ try {
   process.stdout.write = originalSlashStdoutWrite;
 }
 assert.equal(printedStatsMessages.some((message) => message.includes('stats args: --date 2026-06-01 --top 3')), true);
+assert.equal(normalizeCarrierGoal('  ship   the  carrier   goal  '), 'ship the carrier goal');
+const goalSettings = { goal: '' };
+assert.deepEqual(handleGoalCommand('', goalSettings), {
+  action: 'show',
+  changed: false,
+  goal: '',
+  message: 'No carrier session goal is set.',
+});
+assert.deepEqual(handleGoalCommand(' finish provider parity ', goalSettings), {
+  action: 'set',
+  changed: true,
+  goal: 'finish provider parity',
+  message: 'Carrier session goal set: finish provider parity',
+});
+assert.equal(goalSettings.goal, 'finish provider parity');
+assert.deepEqual(handleGoalCommand('clear', goalSettings), {
+  action: 'clear',
+  changed: true,
+  goal: '',
+  message: 'Carrier session goal cleared.',
+});
+assert.deepEqual(handleGoalCommand('none', goalSettings), {
+  action: 'set',
+  changed: true,
+  goal: 'none',
+  message: 'Carrier session goal set: none',
+});
+assert.deepEqual(handleGoalCommand('reset', goalSettings), {
+  action: 'set',
+  changed: true,
+  goal: 'reset',
+  message: 'Carrier session goal set: reset',
+});
+const printedGoalMessages = [];
+process.stdout.write = (value = '') => { printedGoalMessages.push(stripAnsiForTest(String(value))); return true; };
+try {
+  assert.equal(await handleSlashCommand('/goal finish cross-carrier command', {
+    mcpServers: {},
+    allTools: [],
+    carrierSessionSettings: goalSettings,
+  }), 'handled');
+  assert.equal(await handleSlashCommand('/goal', {
+    mcpServers: {},
+    allTools: [],
+    carrierSessionSettings: goalSettings,
+  }), 'handled');
+} finally {
+  process.stdout.write = originalSlashStdoutWrite;
+}
+assert.equal(goalSettings.goal, 'finish cross-carrier command');
+assert.equal(printedGoalMessages.some((message) => message.includes('Carrier session goal set: finish cross-carrier command')), true);
+assert.equal(printedGoalMessages.some((message) => message.includes('Current goal: finish cross-carrier command')), true);
 const printedToolsMessages = [];
 const toolsFixtureServers = {
   'local-filesystem': {
@@ -739,6 +992,8 @@ assert.deepEqual(toolStatus.mcp_tools, [{
   registry_source: null,
   registry_metadata_authoritative: false,
 }]);
+assert.equal(toolStatus.observer_muted, false);
+assert.deepEqual(toolStatus.observer_visibilities, ['record_only', 'operator_visible', 'agent_visible', 'conversation_visible']);
 const displaySettings = { toolOutputs: true };
 const printedToolOutputMessages = [];
 process.stdout.write = (value = '') => { printedToolOutputMessages.push(stripAnsiForTest(String(value))); return true; };
@@ -757,6 +1012,25 @@ try {
   process.stdout.write = originalSlashStdoutWrite;
 }
 assert.equal(printedToolOutputMessages.some((message) => message.includes('Tool call outputs are hidden')), true);
+const observerSettings = { observerMuted: false };
+assert.equal(formatObserverPosture(observerSettings).includes('Visible interjections: shown'), true);
+assert.deepEqual(handleObserverCommand('mute', observerSettings), {
+  status: 'ok',
+  muted: true,
+  message: 'Visible observer interjections are muted for this session.',
+});
+assert.equal(observerSettings.observerMuted, true);
+const printedObserverMessages = [];
+process.stdout.write = (value = '') => { printedObserverMessages.push(stripAnsiForTest(String(value))); return true; };
+try {
+  assert.equal(await handleSlashCommand('/observers', { mcpServers: {}, allTools: [], displaySettings: observerSettings }), 'handled');
+  assert.equal(await handleSlashCommand('/observer unmute', { mcpServers: {}, allTools: [], displaySettings: observerSettings }), 'handled');
+} finally {
+  process.stdout.write = originalSlashStdoutWrite;
+}
+assert.equal(observerSettings.observerMuted, false);
+assert.equal(printedObserverMessages.some((message) => message.includes('Conversation observers')), true);
+assert.equal(printedObserverMessages.some((message) => message.includes('Visible observer interjections are shown')), true);
 assert.equal(await handleSlashCommand('/exit', { mcpServers: {}, allTools: [] }), 'exit');
 const slashQueue = createInputQueue({ drain: async () => ({ terminal_state: 'completed' }) });
 await slashQueue.enqueue(normalizeInputEvent({ content: 'first steering', source: 'operator_steering' }, { transport: 'terminal' }));
@@ -1337,6 +1611,91 @@ try {
   if (previousSiteRoot === undefined) delete process.env.NARADA_SITE_ROOT;
   else process.env.NARADA_SITE_ROOT = previousSiteRoot;
   rmSync(directiveServerSite, { recursive: true, force: true });
+}
+
+const observerServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-observer-server-'));
+mkdirSync(join(observerServerSite, '.ai', 'mcp'), { recursive: true });
+process.env.NARADA_SITE_ROOT = observerServerSite;
+try {
+  const observerInputRequest = ({ id, visibility, content }) => ({
+    id,
+    method: 'carrier.input.deliver',
+    params: {
+      input: {
+        schema: 'narada.carrier.control.input_event.v1',
+        control_event_id: `control_${id}`,
+        input_event_id: `input_${id}`,
+        written_at: new Date().toISOString(),
+        input: {
+          schema: 'narada.carrier.input_event.v1',
+          event_id: `input_${id}`,
+          source_kind: 'agent',
+          source_id: 'narada.observer',
+          transport: 'control_jsonl',
+          delivery_mode: 'admit_after_active_turn',
+          hold_condition: null,
+          content,
+          created_at: new Date().toISOString(),
+          authority_ref: null,
+          directive_id: null,
+          metadata: {
+            observer: {
+              role: 'observer',
+              rule_id: 'server-observer-smoke',
+              visibility,
+            },
+          },
+        },
+      },
+    },
+  });
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let observerStdout = '';
+  let providerCalls = 0;
+  output.setEncoding('utf8');
+  output.on('data', (chunk) => { observerStdout += chunk; });
+  const serverDone = runServerMode({
+    input,
+    output,
+    callChatApiFn: async () => {
+      providerCalls += 1;
+      return { choices: [{ message: { role: 'assistant', content: 'should not run' } }] };
+    },
+  });
+  input.write(`${JSON.stringify({ id: 'observer-status-1', method: 'observers.status', params: {} })}\n`);
+  input.write(`${JSON.stringify(observerInputRequest({
+    id: 'observer_visible_1',
+    visibility: 'operator_visible',
+    content: 'operator visible observer note',
+  }))}\n`);
+  input.write(`${JSON.stringify({ id: 'observer-mute-1', method: 'observer.mute', params: {} })}\n`);
+  input.write(`${JSON.stringify(observerInputRequest({
+    id: 'observer_agent_muted_1',
+    visibility: 'agent_visible',
+    content: 'agent visible observer note',
+  }))}\n`);
+  input.write(`${JSON.stringify(observerInputRequest({
+    id: 'observer_conversation_muted_1',
+    visibility: 'conversation_visible',
+    content: 'conversation visible observer note',
+  }))}\n`);
+  input.end();
+  await serverDone;
+  const observerEvents = observerStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+  assert.equal(observerEvents.some((event) => event.event === 'observer_status' && event.request_id === 'observer-status-1' && event.observer_muted === false), true);
+  assert.equal(observerEvents.some((event) => event.event === 'observer_status' && event.request_id === 'observer-mute-1' && event.observer_muted === true), true);
+  assert.equal(observerEvents.some((event) => event.event === 'observer_interjection_visible' && event.request_id === 'observer_visible_1' && event.content === 'operator visible observer note'), true);
+  assert.equal(observerEvents.some((event) => event.event === 'observer_input_complete' && event.request_id === 'observer_visible_1' && event.visibility === 'operator_visible'), true);
+  assert.equal(observerEvents.some((event) => event.event === 'observer_input_complete' && event.request_id === 'observer_agent_muted_1' && event.visibility === 'agent_visible'), true);
+  assert.equal(observerEvents.some((event) => event.event === 'observer_input_complete' && event.request_id === 'observer_conversation_muted_1' && event.visibility === 'conversation_visible'), true);
+  assert.equal(observerEvents.some((event) => event.event === 'observer_interjection_visible' && event.request_id === 'observer_conversation_muted_1'), false);
+  assert.equal(observerEvents.some((event) => event.event === 'turn_started' && String(event.request_id).startsWith('observer_')), false);
+  assert.equal(providerCalls, 0);
+} finally {
+  if (previousSiteRoot === undefined) delete process.env.NARADA_SITE_ROOT;
+  else process.env.NARADA_SITE_ROOT = previousSiteRoot;
+  rmSync(observerServerSite, { recursive: true, force: true });
 }
 
 const interruptServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-interrupt-server-'));
