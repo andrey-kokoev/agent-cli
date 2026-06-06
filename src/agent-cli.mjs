@@ -43,6 +43,7 @@ const {
 } = providerEnvironment(INTELLIGENCE_PROVIDER, PROVIDER_METADATA);
 const THINKING_LEVEL = process.env.NARADA_AI_THINKING ?? process.env.NARADA_THINKING_LEVEL ?? 'medium';
 const CODEX_SUBSCRIPTION_TRANSPORT = process.env.NARADA_CODEX_SUBSCRIPTION_TRANSPORT ?? 'exec-json';
+const CODEX_NATIVE_MCP_TOOLS = parseBooleanEnv(process.env.NARADA_CODEX_NATIVE_MCP_TOOLS, true);
 const SITE_ROOT = resolve(process.env.NARADA_SITE_ROOT ?? process.cwd());
 const SITE_ID = process.env.NARADA_SITE_ID ?? process.env.NARADA_SITE_NAME ?? 'unknown-site';
 const REQUEST_ADAPTERS = Object.freeze({
@@ -72,6 +73,9 @@ const sessionSettings = {
   model: options.model ?? MODEL,
   thinking: normalizeThinkingLevel(options.thinking ?? THINKING_LEVEL),
   stream: options.stream ?? parseBooleanEnv(process.env.NARADA_AGENT_CLI_STREAM, !SERVER_MODE),
+};
+const transcriptDisplaySettings = {
+  toolOutputs: parseBooleanEnv(process.env.NARADA_AGENT_CLI_TOOL_OUTPUTS, true),
 };
 const STARTUP_SYSTEM_DIRECTIVE = options.startupSystemDirectiveText
   ?? process.env.NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE
@@ -181,11 +185,6 @@ const HEARTBEAT_PATH = join(CARRIER_SESSION_DIR, 'heartbeat.json');
 const HEARTBEAT_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_HEARTBEAT_ENABLE, true);
 let activeHeartbeat = null;
 
-// Set window title for OSL binding
-if (process.title !== IDENTITY) {
-  process.title = IDENTITY;
-}
-
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -223,6 +222,7 @@ async function main() {
     ['MCP servers', Object.keys(mcpServers).length],
     ...Object.entries(mcpServers).map(([name, srv]) => [`  ${name}`, `${srv.tools.length} tools`]),
     ['Tools', allTools.length],
+    ['Tool outputs', transcriptDisplaySettings.toolOutputs ? 'shown' : 'hidden'],
     ['Approvals', 'disabled'],
     ['Help', '/help'],
   ], { before: true, after: true });
@@ -399,7 +399,7 @@ function recordCarrierDiagnostic(level, message, extra = {}) {
   }));
 }
 
-async function handleSlashCommand(input, { mcpServers, allTools, inputQueue = null, statsRunner = runCodexTranscriptStats }) {
+async function handleSlashCommand(input, { mcpServers, allTools, inputQueue = null, statsRunner = runCodexTranscriptStats, displaySettings = transcriptDisplaySettings }) {
   const trimmed = String(input ?? '').trim();
   if (!trimmed) return 'none';
   if (trimmed.toLowerCase() === 'exit' || trimmed.toLowerCase() === '/exit' || trimmed.toLowerCase() === '/quit') {
@@ -420,12 +420,34 @@ async function handleSlashCommand(input, { mcpServers, allTools, inputQueue = nu
       '/stats [args]         Show local Codex transcript statistics',
       '/model <name>         Set model for later turns',
       '/thinking <level>     none, low, medium, high',
+      '/tool-output [state]  Toggle displayed tool call outputs (on, off, toggle)',
+      '/tools [filter]       Show discovered MCP tools and input schemas',
       '/queue                Show queued carrier input',
       '/queue clear          Clear queued operator steering',
       '/queue drop <index>   Drop one queued operator steering item',
       '/clear                Clear terminal display',
       '/exit                 Save and quit',
     ].join('\n'));
+    return 'handled';
+  }
+  if (command === '/tools' || command === '/tool') {
+    printCliMessage(formatMcpToolCatalog(mcpServers, { filter: value }));
+    appendSession(SESSION_PATH, sessionEventEntry('session_command', {
+      command: '/tools',
+      arguments: value,
+      tool_count: allTools.length,
+    }));
+    return 'handled';
+  }
+  if (command === '/tool-output' || command === '/tool-outputs') {
+    const result = handleToolOutputDisplayCommand(value, displaySettings);
+    printCliMessage(result.message);
+    appendSession(SESSION_PATH, sessionEventEntry('session_setting_changed', {
+      setting: 'tool_outputs_display',
+      value: result.state ? 'shown' : 'hidden',
+      command,
+      arguments: value,
+    }));
     return 'handled';
   }
   if (command === '/queue') {
@@ -469,6 +491,7 @@ async function handleSlashCommand(input, { mcpServers, allTools, inputQueue = nu
       Stream: sessionSettings.stream ? 'on' : 'off',
       'MCP servers': Object.keys(mcpServers).length,
       Tools: allTools.length,
+      'Tool outputs': displaySettings.toolOutputs ? 'shown' : 'hidden',
     }));
     appendSession(SESSION_PATH, sessionEventEntry('session_command', { command: '/status' }));
     return 'handled';
@@ -500,6 +523,86 @@ async function handleSlashCommand(input, { mcpServers, allTools, inputQueue = nu
   }
   printCliMessage(`Unknown command: ${command}. Type /help.`);
   return 'handled';
+}
+
+function handleToolOutputDisplayCommand(value = '', displaySettings = transcriptDisplaySettings) {
+  const requested = String(value ?? '').trim().toLowerCase();
+  if (!requested || requested === 'toggle') {
+    displaySettings.toolOutputs = !displaySettings.toolOutputs;
+  } else if (requested === 'on' || requested === 'show' || requested === 'shown') {
+    displaySettings.toolOutputs = true;
+  } else if (requested === 'off' || requested === 'hide' || requested === 'hidden') {
+    displaySettings.toolOutputs = false;
+  } else if (requested !== 'status') {
+    return {
+      state: displaySettings.toolOutputs,
+      message: 'Usage: /tool-output [on|off|toggle|status]',
+    };
+  }
+  return {
+    state: displaySettings.toolOutputs,
+    message: `Tool call outputs are ${displaySettings.toolOutputs ? 'shown' : 'hidden'} in the displayed transcript.`,
+  };
+}
+
+function formatMcpToolCatalog(mcpServers = {}, { filter = '' } = {}) {
+  const normalizedFilter = String(filter ?? '').trim().toLowerCase();
+  const rows = [];
+  for (const [serverName, server] of Object.entries(mcpServers ?? {})) {
+    for (const tool of server.tools ?? []) {
+      const haystack = [
+        serverName,
+        tool.name,
+        tool.description,
+      ].join(' ').toLowerCase();
+      if (normalizedFilter && !haystack.includes(normalizedFilter)) continue;
+      rows.push({
+        serverName,
+        tool,
+      });
+    }
+  }
+  if (rows.length === 0) {
+    return normalizedFilter
+      ? `No discovered MCP tools match "${filter}".`
+      : 'No MCP tools discovered.';
+  }
+  return [
+    `Discovered MCP tools (${rows.length})`,
+    '',
+    ...rows.map(({ serverName, tool }) => formatMcpToolCatalogItem(serverName, tool)),
+  ].join('\n');
+}
+
+function formatMcpToolCatalogItem(serverName, tool) {
+  const description = String(tool.description ?? '').trim();
+  const schema = formatCompactJsonSchema(tool.inputSchema ?? { type: 'object', properties: {} });
+  return [
+    `${tool.name} (${serverName})`,
+    ...(description ? [`  ${description}`] : []),
+    `  input_schema: ${schema}`,
+  ].join('\n');
+}
+
+function mcpToolCatalogEntries(mcpServers = {}) {
+  const entries = [];
+  for (const [serverName, server] of Object.entries(mcpServers ?? {})) {
+    for (const tool of server.tools ?? []) {
+      entries.push({
+        server_name: serverName,
+        tool_name: tool.name,
+        description: tool.description ?? '',
+        input_schema: tool.inputSchema ?? { type: 'object', properties: {} },
+        registry_source: server.registry_source ?? null,
+        registry_metadata_authoritative: server.registry_metadata_authoritative === true,
+      });
+    }
+  }
+  return entries;
+}
+
+function shouldDisplayToolOutputs(displaySettings = transcriptDisplaySettings) {
+  return displaySettings.toolOutputs !== false;
 }
 
 function runCodexTranscriptStats(value = '') {
@@ -1067,7 +1170,7 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
   if (category === 'block') {
     if (!serverMode) {
       turn?.clearStatus?.();
-      printToolResultLine(`blocked ${name} in ${formatDuration(Date.now() - startedAt)} · blocklist`, { level: 'warn' });
+      if (shouldDisplayToolOutputs()) printToolResultLine(`blocked ${name} in ${formatDuration(Date.now() - startedAt)} · blocklist`, { level: 'warn' });
     }
     emit?.('tool_result', { turn_id: turnId, tool: name, status: 'blocked' });
     recordToolResult('blocked', `Tool ${name} is blocked by policy.`);
@@ -1126,7 +1229,7 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
     recordToolResult('error', `Tool ${name} not found in any MCP server.`);
     if (!serverMode) {
       turn?.clearStatus?.();
-      printToolResultLine(`failed ${name} in ${formatDuration(Date.now() - startedAt)} · tool not found`, { level: 'error' });
+      if (shouldDisplayToolOutputs()) printToolResultLine(`failed ${name} in ${formatDuration(Date.now() - startedAt)} · tool not found`, { level: 'error' });
     }
     return {
       role: 'tool',
@@ -1203,7 +1306,7 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
             });
             const autoContent = autoResult.content?.[0]?.text ?? JSON.stringify(autoResult);
             turn?.clearStatus?.();
-            printToolResultLine(`ok ${name} in ${formatDuration(Date.now() - startedAt)} · ${formatToolResultContent(autoContent)}`);
+            if (shouldDisplayToolOutputs()) printToolResultLine(`ok ${name} in ${formatDuration(Date.now() - startedAt)} · ${formatToolResultContent(autoContent)}`);
             recordToolResult('ok', autoContent, { result_ref: payloadRefFromOutputRef(extractOutputRef(autoContent)) });
             return { role: 'tool', tool_call_id: toolCall.id, content: autoContent };
           }
@@ -1216,7 +1319,7 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
     const content = result.content?.[0]?.text ?? JSON.stringify(result);
     if (!serverMode) {
       turn?.clearStatus?.();
-      printToolResultLine(`ok ${name} in ${formatDuration(Date.now() - startedAt)} · ${formatToolResultContent(content)}`);
+      if (shouldDisplayToolOutputs()) printToolResultLine(`ok ${name} in ${formatDuration(Date.now() - startedAt)} · ${formatToolResultContent(content)}`);
     }
     emit?.('tool_result', {
       turn_id: turnId,
@@ -1236,7 +1339,7 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
     const recovery = toolFailureRecovery(err?.message);
     if (!serverMode) {
       turn?.clearStatus?.();
-      printToolResultLine(`failed ${name} in ${formatDuration(Date.now() - startedAt)} · ${err.message}${recovery ? `\n${recovery}` : ''}`, { level: 'error' });
+      if (shouldDisplayToolOutputs()) printToolResultLine(`failed ${name} in ${formatDuration(Date.now() - startedAt)} · ${err.message}${recovery ? `\n${recovery}` : ''}`, { level: 'error' });
     }
     emit?.('tool_result', { turn_id: turnId, tool: name, status: 'error', error: err.message, recovery });
     recordToolResult('error', err.message, recovery ? { recovery } : {});
@@ -1791,6 +1894,7 @@ function startInteractiveTurnProgress({ onOperatorDirective = null, readlineInte
       phase: turn.phase,
       totalMs: seconds * 1000,
       phaseMs: phaseSeconds * 1000,
+      operatorDirectiveDraft: operatorDirectiveBuffer,
       operatorDirectiveDraftLength: operatorDirectiveBuffer.length,
       queuedOperatorDirectiveCount,
     }))}`);
@@ -1809,32 +1913,18 @@ function startInteractiveTurnProgress({ onOperatorDirective = null, readlineInte
       return;
     }
     if (!onOperatorDirective) return;
-    for (const char of operatorDirectiveDecoder.write(buffer)) {
-      if (char === '\r' || char === '\n') {
-        const content = operatorDirectiveBuffer.trim();
-        operatorDirectiveBuffer = '';
-        if (!content) {
-          forceNextStatus = true;
-          continue;
-        }
+    operatorDirectiveBuffer = consumeOperatorDirectiveInputText(operatorDirectiveDecoder.write(buffer), {
+      initialBuffer: operatorDirectiveBuffer,
+      submitLine: (content) => {
         Promise.resolve(onOperatorDirective(content)).then((queueState) => {
           queuedOperatorDirectiveCount = queueState?.pendingOperatorDirectiveCount ?? queuedOperatorDirectiveCount + 1;
           printProgressMessage(terminalStyle.operatorDirective(`operator directive queued (${queuedOperatorDirectiveCount})`));
         }).catch((error) => {
           printProgressMessage(terminalStyle.warn(`operator directive queue failed: ${error instanceof Error ? error.message : String(error)}`));
         });
-        continue;
-      }
-      if (char === '\x7f' || char === '\b') {
-        operatorDirectiveBuffer = Array.from(operatorDirectiveBuffer).slice(0, -1).join('');
-        forceNextStatus = true;
-        continue;
-      }
-      if (char >= ' ') {
-        operatorDirectiveBuffer += char;
-        forceNextStatus = true;
-      }
-    }
+      },
+    });
+    forceNextStatus = true;
   };
   const previousRawMode = process.stdin.isTTY ? process.stdin.isRaw : false;
   if (process.stdin.isTTY) process.stdin.setRawMode(true);
@@ -1862,6 +1952,30 @@ function clearReadlineDraft(rl) {
   } catch {
     // Best-effort cleanup for the next prompt only.
   }
+}
+
+function consumeOperatorDirectiveInputText(text, { initialBuffer = '', submitLine = () => {} } = {}) {
+  let draft = String(initialBuffer ?? '');
+  const chunk = String(text ?? '');
+  const containsLineBreak = /[\r\n]/.test(chunk);
+  const flushDraft = () => {
+    const content = draft.trim();
+    draft = '';
+    if (content) submitLine(content);
+  };
+  for (const char of chunk) {
+    if (char === '\r' || char === '\n') {
+      flushDraft();
+      continue;
+    }
+    if (char === '\x7f' || char === '\b') {
+      draft = Array.from(draft).slice(0, -1).join('');
+      continue;
+    }
+    if (char >= ' ') draft += char;
+  }
+  if (containsLineBreak) flushDraft();
+  return draft;
 }
 
 function attachTurnAbortController(turn) {
@@ -2221,6 +2335,7 @@ function serverStatus({ requestId, state, allTools, mcpServers }) {
     active_turn_id: state.activeTurn?.turnId ?? null,
     mcp_server_count: Object.keys(mcpServers).length,
     tool_count: allTools.length,
+    mcp_tools: mcpToolCatalogEntries(mcpServers),
     session_path: SESSION_PATH,
     events_path: EVENTS_PATH,
   };
@@ -2332,7 +2447,7 @@ function reasoningEffort(thinking) {
   return 'medium';
 }
 
-function buildCodexMcpRequest(messages, tools = [], { model = MODEL, thinking = THINKING_LEVEL, siteRoot = SITE_ROOT } = {}) {
+function buildCodexMcpRequest(messages, tools = [], { model = MODEL, thinking = THINKING_LEVEL, siteRoot = SITE_ROOT, nativeMcpTools = CODEX_NATIVE_MCP_TOOLS, mcpServers = {} } = {}) {
   const latestUserIndex = findLastMessageIndex(messages, 'user');
   const latestToolIndex = findLastMessageIndex(messages, 'tool');
   const latestUser = latestUserIndex >= 0 ? messages[latestUserIndex] : null;
@@ -2351,7 +2466,7 @@ function buildCodexMcpRequest(messages, tools = [], { model = MODEL, thinking = 
     ].join('\n')
     : latestUser ? String(latestUser.content ?? '') : '';
   if (!prompt.trim()) throw new Error('codex_subscription_prompt_missing');
-  const developerInstructions = [system, codexToolProtocolInstructions(tools)].filter(Boolean).join('\n\n');
+  const developerInstructions = [system, codexToolProtocolInstructions(tools, { nativeMcpTools })].filter(Boolean).join('\n\n');
 
   if (codexSubscriptionThreadId) {
     return {
@@ -2360,6 +2475,8 @@ function buildCodexMcpRequest(messages, tools = [], { model = MODEL, thinking = 
         threadId: codexSubscriptionThreadId,
         prompt,
         model,
+        native_mcp_tools: nativeMcpTools,
+        ...(nativeMcpTools ? { mcpServers } : {}),
         ...(reasoningEffort(thinking) ? { 'reasoning-effort': reasoningEffort(thinking) } : {}),
       },
     };
@@ -2371,6 +2488,8 @@ function buildCodexMcpRequest(messages, tools = [], { model = MODEL, thinking = 
       prompt,
       cwd: siteRoot,
       model,
+      native_mcp_tools: nativeMcpTools,
+      ...(nativeMcpTools ? { mcpServers } : {}),
       ...(reasoningEffort(thinking) ? { 'reasoning-effort': reasoningEffort(thinking) } : {}),
       sandbox: process.platform === 'win32' ? 'danger-full-access' : 'workspace-write',
       'approval-policy': 'never',
@@ -2386,19 +2505,35 @@ function findLastMessageIndex(messages, role) {
   return -1;
 }
 
-function codexToolProtocolInstructions(tools = []) {
+function codexToolProtocolInstructions(tools = [], { nativeMcpTools = false } = {}) {
   if (!Array.isArray(tools) || tools.length === 0) return '';
   const toolLines = tools
     .map((tool) => {
       const fn = tool.function ?? {};
-      return `- ${fn.name}: ${String(fn.description ?? '').slice(0, 180)}`;
+      const description = String(fn.description ?? '').replace(/\s+/g, ' ').trim().slice(0, 220);
+      const schema = formatCompactJsonSchema(fn.parameters ?? { type: 'object', properties: {} });
+      return [
+        `- ${fn.name}${description ? `: ${description}` : ''}`,
+        `  input_schema: ${schema}`,
+      ].join('\n');
     })
     .join('\n');
+  const header = nativeMcpTools
+    ? [
+      'Narada MCP tools are registered with nested Codex as native MCP tools for this turn.',
+      'Prefer native MCP tool calls when a listed tool is needed.',
+      'If native MCP tool discovery is unavailable in the nested runtime, fall back by responding with exactly one JSON object and no prose:',
+      '{"narada_tool_call":{"name":"tool_name","arguments":{}}}',
+    ]
+    : [
+      'Narada MCP tools are available through agent-cli, not through native Codex tool discovery.',
+      'When a Narada MCP tool is needed, respond with exactly one JSON object and no prose:',
+      '{"narada_tool_call":{"name":"tool_name","arguments":{}}}',
+    ];
   return [
-    'Narada MCP tools are available through agent-cli, not through native Codex tool discovery.',
-    'When a Narada MCP tool is needed, respond with exactly one JSON object and no prose:',
-    '{"narada_tool_call":{"name":"tool_name","arguments":{}}}',
-    'Do not claim a listed Narada MCP tool is unavailable. Request it using the JSON object above.',
+    ...header,
+    'Use each listed input_schema to construct arguments. Do not invent arguments outside the schema unless the schema explicitly allows them.',
+    'Do not claim a listed Narada MCP tool is unavailable.',
     'Available Narada MCP tools:',
     toolLines,
   ].join('\n');
@@ -2687,6 +2822,9 @@ function buildCodexExecArgs(request, { model = MODEL, thinking = THINKING_LEVEL,
     'approval_policy="never"',
   ];
   if (effort) common.push('-c', `model_reasoning_effort="${effort}"`);
+  if (request.arguments?.native_mcp_tools === true) {
+    common.push(...codexExecMcpConfigArgs(request.arguments?.mcpServers ?? {}));
+  }
   if (request.tool === 'codex-reply') {
     return ['exec', 'resume', ...common, request.arguments.threadId, '-'];
   }
@@ -2724,6 +2862,7 @@ function sendCodexExecJsonRequest(request, settings = {}) {
     let content = '';
     let rendered = false;
     let aborted = false;
+    const nativeMcpEventState = { startedAtById: new Map() };
     const abortChild = () => {
       aborted = true;
       terminateChildProcessTree(child);
@@ -2742,6 +2881,7 @@ function sendCodexExecJsonRequest(request, settings = {}) {
         const event = parseCodexExecJsonLine(line);
         if (!event) continue;
         settings.emit?.('provider_event', { provider: 'codex-subscription', event });
+        handleCodexExecMcpToolEvent(event, settings, nativeMcpEventState);
         if (event.type === 'thread.started' && typeof event.thread_id === 'string') {
           threadId = event.thread_id;
         }
@@ -2801,6 +2941,7 @@ function sendCodexExecJsonBufferedRequest(request, settings = {}) {
     let threadId = request.arguments?.threadId ?? null;
     let content = '';
     let aborted = false;
+    const nativeMcpEventState = { startedAtById: new Map() };
     const abortChild = () => {
       aborted = true;
       terminateChildProcessTree(child);
@@ -2823,6 +2964,7 @@ function sendCodexExecJsonBufferedRequest(request, settings = {}) {
         if (!line.trim()) continue;
         const event = parseCodexExecJsonLine(line);
         if (!event) continue;
+        handleCodexExecMcpToolEvent(event, settings, nativeMcpEventState);
         if (event.type === 'thread.started' && typeof event.thread_id === 'string') threadId = event.thread_id;
         content += codexExecEventText(event);
       }
@@ -2841,6 +2983,89 @@ function parseCodexExecJsonLine(line) {
   } catch {
     return null;
   }
+}
+
+function codexExecMcpToolEventSummary(event) {
+  const item = event?.item;
+  if (!item || item.type !== 'mcp_tool_call') return null;
+  const server = item.server ?? 'unknown-server';
+  const tool = item.tool ?? 'unknown_tool';
+  const name = `${server}.${tool}`;
+  const args = item.arguments && typeof item.arguments === 'object' ? item.arguments : {};
+  return {
+    id: item.id ?? null,
+    server,
+    tool,
+    name,
+    arguments: args,
+    status: item.status ?? (event.type === 'item.started' ? 'in_progress' : 'completed'),
+    result: item.result ?? null,
+    error: item.error ?? null,
+  };
+}
+
+function handleCodexExecMcpToolEvent(event, settings = {}, state = {}) {
+  const summary = codexExecMcpToolEventSummary(event);
+  if (!summary) return false;
+  const turnId = settings.turn?.turnId ?? null;
+  if (event.type === 'item.started') {
+    state.startedAtById?.set?.(summary.id, Date.now());
+    const argSummary = argumentSummary(summary.arguments);
+    appendSession(SESSION_PATH, carrierSessionEventEntry('tool_call_requested', {
+      tool_name: summary.name,
+      arguments_summary: stringifySummary(argSummary),
+      requesting_agent_id: IDENTITY,
+      provider: 'codex-subscription',
+      native_mcp_tool_call: true,
+    }));
+    settings.emit?.('tool_call', {
+      turn_id: turnId,
+      tool: summary.name,
+      server: summary.server,
+      arguments: summary.arguments,
+      decision: 'delegated_to_nested_codex',
+      carrier_mutation_admitted: false,
+      native_mcp_tool_call: true,
+    });
+    if (!settings.emit && shouldDisplayToolOutputs()) {
+      printToolRequestLine(`${summary.name}(${JSON.stringify(summary.arguments).slice(0, 200)})`, { before: true });
+    }
+    return true;
+  }
+  if (event.type === 'item.completed') {
+    const startedAt = state.startedAtById?.get?.(summary.id) ?? Date.now();
+    state.startedAtById?.delete?.(summary.id);
+    const durationMs = Math.max(0, Date.now() - startedAt);
+    const status = summary.error ? 'failed' : 'completed';
+    const resultSummary = summary.error?.message ?? summary.result ?? '';
+    appendSession(SESSION_PATH, carrierSessionEventEntry('tool_result_received', {
+      tool_name: summary.name,
+      status,
+      duration_ms: durationMs,
+      result_summary: summarizeToolResult(resultSummary),
+      provider: 'codex-subscription',
+      native_mcp_tool_call: true,
+    }));
+    settings.emit?.('tool_result', {
+      turn_id: turnId,
+      tool: summary.name,
+      server: summary.server,
+      status,
+      duration_ms: durationMs,
+      result: summary.result,
+      error: summary.error,
+      native_mcp_tool_call: true,
+    });
+    if (!settings.emit && shouldDisplayToolOutputs()) {
+      if (summary.error) {
+        printToolResultLine(`failed ${summary.name} in ${formatDuration(durationMs)} · ${summary.error.message ?? 'native MCP tool failed'}`, { level: 'error' });
+      } else {
+        printToolResultLine(`ok ${summary.name} in ${formatDuration(durationMs)} · ${formatToolResultContent(summary.result ?? '')}`);
+      }
+    }
+    return true;
+  }
+  return false;
 }
 
 function codexExecEventText(event) {
@@ -3041,6 +3266,14 @@ function stableStringify(value) {
     .join(',')}}`;
 }
 
+function formatCompactJsonSchema(schema, { limit = 1200 } = {}) {
+  const normalized = schema && typeof schema === 'object' && !Array.isArray(schema)
+    ? schema
+    : { type: 'object', properties: {} };
+  const text = stableStringify(normalized);
+  return text.length > limit ? `${text.slice(0, Math.max(0, limit - 3))}...` : text;
+}
+
 // ---------------------------------------------------------------------------
 // Terminal presentation
 // ---------------------------------------------------------------------------
@@ -3057,7 +3290,7 @@ function createTerminalStyle({ enabled = true } = {}) {
     systemDirective: (text) => color('1;35', text),
     muted: (text) => color('2', text),
     source: (text) => color('90', text),
-    timestamp: (text) => color('2;90', text),
+    timestamp: (text) => color('38;5;240', text),
     key: (text) => color('33', text),
     code: (text) => color('90', text),
     success: (text) => color('32', text),
@@ -3143,7 +3376,7 @@ function styleInputRouteLabel(label) {
 
 function printInlineEvent(label, text, { before = false, timestamp = false, labelStyle = (value) => value, bodyStyle = (value) => value } = {}) {
   const suffix = timestamp ? ` ${terminalStyle.timestamp(formatTimestamp())}` : '';
-  console.log(`${before ? '\n' : ''}${labelStyle(label)}${terminalStyle.muted(':')} ${bodyStyle(String(text ?? ''))}${suffix}`);
+  writeTerminalRecord(`${labelStyle(label)}${terminalStyle.muted(':')} ${bodyStyle(String(text ?? ''))}${suffix}\n`, { before });
 }
 
 function printAgentMessage(text) {
@@ -3155,7 +3388,7 @@ function printAgentMessage(text) {
     label: IDENTITY,
     text: renderedText,
     before: true,
-    after: false,
+    after: true,
     timestamp: true,
     labelStyle: terminalStyle.label,
     bodyStyle: (value) => value,
@@ -3239,11 +3472,12 @@ function formatSubmittedPrompt(promptLabel, text, columns = 80, now = new Date()
   const firstLineWidth = Math.max(16, columns - stripAnsi(prefix).length);
   const lines = wrapTerminalLine(String(text ?? ''), firstLineWidth);
   const [first = '', ...rest] = lines;
-  return [
+  const renderedLines = [
     `${styleInputRouteLabel(promptLabel)}${terminalStyle.muted(':')} ${first}`,
     ...rest.map((line) => `  ${line}`),
-    `  ${terminalStyle.timestamp(formatTimestamp(now))}`,
-  ].join('\n') + '\n';
+  ];
+  appendSuffixToLastLine(renderedLines, ` ${terminalStyle.timestamp(formatTimestamp(now))}`);
+  return renderedLines.join('\n') + '\n';
 }
 
 function printMessageBlock({ label, text, before = false, after = false, timestamp = false, labelStyle = (value) => value, bodyStyle = (value) => value }) {
@@ -3251,12 +3485,23 @@ function printMessageBlock({ label, text, before = false, after = false, timesta
   const labelLine = `${labelStyle(label)}${terminalStyle.muted(':')}`;
   const bodyWidth = Math.max(32, width - 2);
   const lines = String(text ?? '').split(/\r?\n/).flatMap((line) => wrapTerminalLine(line, bodyWidth));
-  const rendered = [
+  const renderedLines = [
     labelLine,
     ...lines.map((line) => `  ${bodyStyle(line)}`),
-    ...(timestamp ? [`  ${terminalStyle.timestamp(formatTimestamp())}`] : []),
-  ].join('\n');
-  console.log(`${before ? '\n' : ''}${rendered}${after ? '\n' : ''}`);
+  ];
+  if (timestamp) appendSuffixToLastLine(renderedLines, ` ${terminalStyle.timestamp(formatTimestamp())}`);
+  const rendered = renderedLines.join('\n');
+  writeTerminalRecord(`${rendered}${after ? '\n\n' : '\n'}`, { before });
+}
+
+function writeTerminalRecord(text, { before = false } = {}) {
+  process.stdout.write(`\r\x1b[K${before ? '\n' : ''}${text}`);
+}
+
+function appendSuffixToLastLine(lines, suffix) {
+  if (!Array.isArray(lines) || lines.length === 0 || !suffix) return lines;
+  lines[lines.length - 1] = `${lines[lines.length - 1]}${suffix}`;
+  return lines;
 }
 
 function formatTimestamp(now = new Date()) {
@@ -3327,7 +3572,7 @@ function wrapTerminalLine(line, width) {
 }
 
 function formatToolResultContent(content) {
-  const text = String(content ?? '');
+  const text = typeof content === 'string' ? content : String(content == null ? '' : stringifySummary(content));
   try {
     const parsed = JSON.parse(text);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -3371,14 +3616,25 @@ function formatDuration(ms) {
   return `${minutes}m ${seconds}s`;
 }
 
-function formatProgressStatus({ spinner, phase, totalMs, phaseMs, operatorDirectiveDraftLength = 0, queuedOperatorDirectiveCount = 0 }) {
+function formatProgressStatus({ spinner, phase, totalMs, phaseMs, operatorDirectiveDraft = '', operatorDirectiveDraftLength = 0, queuedOperatorDirectiveCount = 0 }) {
   const phaseText = String(phase ?? 'working');
   const phaseDuration = formatDuration(phaseMs ?? totalMs ?? 0);
   const totalDuration = formatDuration(totalMs ?? 0);
   const totalSuffix = phaseText === 'thinking' ? '' : ` · total ${totalDuration}`;
   const queuedSuffix = queuedOperatorDirectiveCount > 0 ? ` · queued operator directives ${queuedOperatorDirectiveCount}` : '';
-  const draftSuffix = operatorDirectiveDraftLength > 0 ? ` · typing operator directive (${operatorDirectiveDraftLength})` : '';
-  return `${spinner} ${phaseText} ${phaseDuration}${totalSuffix}${queuedSuffix}${draftSuffix} · Enter queues note · Esc to interrupt`;
+  const draftText = sanitizeOperatorDirectiveDraftForDisplay(operatorDirectiveDraft);
+  const draftLength = operatorDirectiveDraftLength || Array.from(String(operatorDirectiveDraft ?? '')).length;
+  const draftSuffix = draftText
+    ? ` · typing: ${draftText}`
+    : (draftLength > 0 ? ` · typing operator directive (${draftLength})` : '');
+  return `${spinner} ${phaseText} ${phaseDuration}${totalSuffix}${queuedSuffix} · Enter queues note · Esc to interrupt${draftSuffix}`;
+}
+
+function sanitizeOperatorDirectiveDraftForDisplay(value) {
+  return String(value ?? '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/[\u0000-\u001f\u007f]+/g, '')
+    .trimEnd();
 }
 
 function parseColorEnv(value, defaultValue) {
@@ -3523,6 +3779,8 @@ export {
   clearTerminalDisplay,
   cleanAnthropicMessages,
   cleanOpenAiMessages,
+  codexExecMcpToolEventSummary,
+  consumeOperatorDirectiveInputText,
   codexExecEventText,
   discoverAndStartMcpServers,
   environmentBlockLength,
@@ -3553,8 +3811,11 @@ export {
   formatHeaderRows,
   formatKeyValueRows,
   formatProgressStatus,
+  sanitizeOperatorDirectiveDraftForDisplay,
   formatTimestamp,
   formatToolResultContent,
+  handleToolOutputDisplayCommand,
+  shouldDisplayToolOutputs,
   normalizeDisplayTerms,
   printAgentMessage,
   printCliMessage,
@@ -3569,6 +3830,7 @@ export {
   wrapTerminalLine,
   runConversationTurn,
   runServerMode,
+  serverStatus,
   resolveProviderAdapter,
   resolveProviderSupportState,
   directiveAcceptedEvidence,

@@ -1,0 +1,39 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@narada2/carrier-action-admission':
+        specifier: workspace:*
+        version: link:../narada/packages/carrier-action-admission
+      '@narada2/carrier-command-contract':
+        specifier: workspace:*
+        version: link:../narada/packages/carrier-command-contract
+      '@narada2/carrier-protocol':
+        specifier: workspace:*
+        version: link:../narada/packages/carrier-protocol
+      '@narada2/carrier-provider-contract':
+        specifier: workspace:*
+        version: link:../narada/packages/carrier-provider-contract
+      '@narada2/mcp-fabric':
+        specifier: workspace:*
+        version: link:../narada/packages/mcp-fabric
+
+  ../narada/packages/carrier-action-admission: {}
+
+  ../narada/packages/carrier-command-contract: {}
+
+  ../narada/packages/carrier-protocol: {}
+
+  ../narada/packages/carrier-provider-contract: {}
+
+  ../narada/packages/mcp-fabric:
+    dependencies:
+      '@narada2/carrier-action-admission':
+        specifier: workspace:*
+        version: link:../carrier-action-admission

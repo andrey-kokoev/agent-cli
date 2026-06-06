@@ -16,11 +16,14 @@
   },
   "scripts": {
     "test": "node --test src/agent-cli.test.mjs",
-    "typecheck": "tsc --noEmit --allowJs --checkJs false bin/narada-agent-cli.mjs bin/agent-runtime-server.mjs src/agent-cli.mjs src/provider-resolution.mjs"
+    "typecheck": "tsc --noEmit --allowJs --checkJs false bin/narada-agent-cli.mjs bin/agent-runtime-server.mjs src/agent-cli.mjs src/provider-resolution.mjs",
+    "verify:native-codex-mcp": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-native-codex-mcp.ps1"
   },
   "dependencies": {
     "@narada2/carrier-action-admission": "workspace:*",
     "@narada2/carrier-protocol": "workspace:*",
-    "@narada2/mcp-fabric": "workspace:*"
+    "@narada2/mcp-fabric": "workspace:*",
+    "@narada2/carrier-provider-contract": "workspace:*",
+    "@narada2/carrier-command-contract": "workspace:*"
   }
 }

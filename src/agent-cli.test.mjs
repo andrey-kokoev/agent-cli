@@ -5,6 +5,8 @@ import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
+import { commandTokens } from '@narada2/carrier-command-contract';
+import { validateSessionEvent } from '@narada2/carrier-protocol';
 import {
   PROVIDER_SUPPORT_STATES,
   REQUEST_ADAPTERS,
@@ -16,8 +18,10 @@ import {
   buildCodexExecArgs,
   codexExecMcpConfigArgs,
   codexExecConfigToml,
+  codexExecMcpToolEventSummary,
   buildOpenAiChatRequest,
   codexExecEventText,
+  consumeOperatorDirectiveInputText,
   createInputQueue,
   createTerminalStyle,
   environmentBlockLength,
@@ -33,6 +37,7 @@ import {
   formatToolResultContent,
   handleInteractiveControlLine,
   handleSlashCommand,
+  handleToolOutputDisplayCommand,
   runCodexTranscriptStats,
   inputRecordDisplayLabel,
   normalizeDisplayTerms,
@@ -53,11 +58,14 @@ import {
   rewriteSubmittedPromptForTest,
   runConversationTurn,
   runServerMode,
+  serverStatus,
+  sanitizeOperatorDirectiveDraftForDisplay,
   resolveProviderAdapter,
   resolveProviderSupportState,
   sessionEventEntry,
   sessionLogEntry,
   shouldDeferInteractiveInput,
+  shouldDisplayToolOutputs,
   styleInputRouteLabel,
   shouldSuppressMcpStderr,
   startInteractiveControlJsonlWatcher,
@@ -66,6 +74,15 @@ import {
 } from './agent-cli.mjs';
 
 const metadata = JSON.parse(readFileSync(new URL('./intelligence-providers.json', import.meta.url), 'utf8')).providers;
+const naradaToolCallEnvelope = JSON.parse(readFileSync(new URL('../../narada/packages/carrier-provider-contract/contracts/narada-tool-call-envelope.json', import.meta.url), 'utf8'));
+const transcriptProjectionCases = JSON.parse(readFileSync(new URL('../../narada/packages/carrier-protocol/fixtures/transcript-projection-cases.json', import.meta.url), 'utf8'));
+assert.equal(transcriptProjectionCases.schema, 'narada.carrier.transcript_projection_cases.v1');
+for (const entry of transcriptProjectionCases.cases) {
+  const sessionEvent = JSON.parse(readFileSync(new URL(`../../narada/packages/carrier-protocol/fixtures/${entry.fixture}`, import.meta.url), 'utf8'));
+  assert.deepEqual(validateSessionEvent(sessionEvent), [], entry.name);
+  assert.equal(typeof entry.expected_actor, 'string');
+  assert.equal(typeof entry.expected_text, 'string');
+}
 const tempDir = resolve('.ai/tmp-agent-cli-programmatic-test');
 mkdirSync(tempDir, { recursive: true });
 const messageFile = resolve(tempDir, 'message.txt');
@@ -162,6 +179,28 @@ assert.equal(shouldDeferInteractiveInput({ source: 'system_directive' }, { rl: {
 assert.equal(shouldDeferInteractiveInput({ source: 'system_directive' }, { rl: { line: '   ' }, promptState: { active: true } }), false);
 assert.equal(shouldDeferInteractiveInput({ source: 'system_directive' }, { rl: { line: 'partial' }, promptState: { active: true } }), true);
 assert.equal(shouldDeferInteractiveInput({ source: 'system_directive' }, { rl: { line: 'partial' }, promptState: { active: false } }), false);
+assert.equal(sanitizeOperatorDirectiveDraftForDisplay('keep this full draft'), 'keep this full draft');
+assert.equal(sanitizeOperatorDirectiveDraftForDisplay('line\r\nbreak\tand\u0003control'), 'line break andcontrol');
+const submittedOperatorDirectiveLines = [];
+assert.equal(consumeOperatorDirectiveInputText('draft', {
+  initialBuffer: '',
+  submitLine: (content) => submittedOperatorDirectiveLines.push(content),
+}), 'draft');
+assert.deepEqual(submittedOperatorDirectiveLines, []);
+assert.equal(consumeOperatorDirectiveInputText('one\r\ntwo\nthree', {
+  initialBuffer: '',
+  submitLine: (content) => submittedOperatorDirectiveLines.push(content),
+}), '');
+assert.deepEqual(submittedOperatorDirectiveLines, ['one', 'two', 'three']);
+const progressWithDraft = formatProgressStatus({
+  spinner: '-',
+  phase: 'thinking',
+  totalMs: 1000,
+  phaseMs: 1000,
+  operatorDirectiveDraft: 'please keep editing visible',
+  operatorDirectiveDraftLength: 27,
+});
+assert.match(progressWithDraft, /Esc to interrupt · typing: please keep editing visible$/);
 const controlJsonlDir = mkdtempSync(join(tmpdir(), 'narada-agent-cli-control-jsonl-'));
 const controlJsonlPath = join(controlJsonlDir, 'control.jsonl');
 const controlEvents = [];
@@ -285,6 +324,7 @@ assert.equal(stripAnsiForTest(styleInputRouteLabel('operator -> narada.architect
 assert.equal(styleInputRouteLabel('operator -> narada.architect').includes('\x1b[1;32moperator\x1b[0m'), true);
 assert.equal(styleInputRouteLabel('operator -> narada.architect').includes('\x1b[1;36mnarada.architect\x1b[0m'), true);
 assert.equal(formatToolResultContent('{"status":"success","schema":"narada.test.v1","directive_count":2,"extra":true}'), 'success · narada.test.v1 · directives=2\nkeys: status, schema, directive_count, extra');
+assert.equal(formatToolResultContent({ content: [{ type: 'text', text: 'ok' }] }), 'keys: content');
 assert.equal(formatKeyValueRows({ A: 1, Longer: 'two' }), 'A       1\nLonger  two');
 assert.equal(formatDuration(1250), '1s');
 assert.equal(formatDuration(65000), '1m 5s');
@@ -293,7 +333,7 @@ assert.equal(formatTimestamp(new Date('2026-05-28T16:37:21Z')), '2026-05-28Z16:3
 assert.equal(formatProgressStatus({ spinner: '-', phase: 'thinking', totalMs: 6000, phaseMs: 6000 }), '- thinking 6s · Enter queues note · Esc to interrupt');
 assert.equal(formatProgressStatus({ spinner: '/', phase: 'calling fs_read_file', totalMs: 7000, phaseMs: 1200 }), '/ calling fs_read_file 1s · total 7s · Enter queues note · Esc to interrupt');
 assert.equal(formatProgressStatus({ spinner: '/', phase: 'calling fs_read_file', totalMs: 65000, phaseMs: 61000 }), '/ calling fs_read_file 1m 1s · total 1m 5s · Enter queues note · Esc to interrupt');
-assert.equal(formatProgressStatus({ spinner: '|', phase: 'thinking', totalMs: 8000, phaseMs: 8000, operatorDirectiveDraftLength: 12, queuedOperatorDirectiveCount: 2 }), '| thinking 8s · queued operator directives 2 · typing operator directive (12) · Enter queues note · Esc to interrupt');
+assert.equal(formatProgressStatus({ spinner: '|', phase: 'thinking', totalMs: 8000, phaseMs: 8000, operatorDirectiveDraftLength: 12, queuedOperatorDirectiveCount: 2 }), '| thinking 8s · queued operator directives 2 · Enter queues note · Esc to interrupt · typing operator directive (12)');
 assert.equal(formatHeaderRow('Identity', 'narada.architect', {}).includes('Identity'), true);
 assert.equal(formatHeaderRow('Stream', 'on', {}).includes('on'), true);
 assert.equal(formatHeaderRow('Identity', 'narada.architect', {}).includes('\x1b[90m[agent-cli]\x1b[0m \x1b[33mIdentity'), true);
@@ -308,17 +348,21 @@ assert.equal(normalizeDisplayTerms('authority_locus: narada_proper and authority
 assert.equal(normalizeDisplayTerms('authority_locus: `narada_proper`'), 'authority locus: `narada_proper`');
 assert.equal(renderMarkdownForTerminal('  ```powershell\n    narada\n  ```').includes('```'), false);
 assert.equal(renderMarkdownForTerminal('  ```powershell\n    narada\n  ```').includes('narada'), true);
-const originalConsoleLog = console.log;
+const originalStdoutWrite = process.stdout.write;
 const printedAgentMessages = [];
-console.log = (value = '') => { printedAgentMessages.push(String(value)); };
+process.stdout.write = (value = '') => { printedAgentMessages.push(String(value)); return true; };
 try {
   assert.equal(printAgentMessage('   \x1b[0m   '), false);
   assert.deepEqual(printedAgentMessages, []);
   assert.equal(printAgentMessage('hello'), true);
   assert.equal(printedAgentMessages.length, 1);
-  assert.equal(stripAnsiForTest(printedAgentMessages[0]).includes('narada.architect:\n  hello'), true);
+  assert.equal(printedAgentMessages[0].startsWith('\r\x1b[K\n'), true);
+  const printedAgentMessage = stripAnsiForTest(printedAgentMessages[0]).replace(/\r/g, '');
+  assert.equal(printedAgentMessage.includes('narada.architect:\n  hello'), true);
+  assert.equal(/\n\s+\d{4}-\d{2}-\d{2}Z\d{2}:\d{2}\s*$/.test(printedAgentMessage), false);
+  assert.match(printedAgentMessage, /hello \d{4}-\d{2}-\d{2}Z\d{2}:\d{2}\n\n$/);
 } finally {
-  console.log = originalConsoleLog;
+  process.stdout.write = originalStdoutWrite;
 }
 assert.equal(stripAnsiForTest(toolDirectionLabel('invoke')), 'narada.architect -> agent-cli');
 assert.equal(stripAnsiForTest(toolDirectionLabel('result')), 'agent-cli -> narada.architect');
@@ -326,10 +370,10 @@ assert.equal(shouldSuppressMcpStderr('(node:1) ExperimentalWarning: SQLite is an
 assert.equal(shouldSuppressMcpStderr('(Use `node --trace-warnings ...` to show where the warning was created)'), true);
 assert.equal(shouldSuppressMcpStderr('real MCP server error'), false);
 const fixedTimestamp = new Date('2026-05-28T16:37:21Z');
-assert.equal(stripAnsiForTest(rewriteSubmittedPromptForTest('operator -> narada.architect', 'short', 120, fixedTimestamp)).replace(/\r/g, ''), '\noperator -> narada.architect: short\n  2026-05-28Z16:37\n');
+assert.equal(stripAnsiForTest(rewriteSubmittedPromptForTest('operator -> narada.architect', 'short', 120, fixedTimestamp)).replace(/\r/g, ''), '\noperator -> narada.architect: short 2026-05-28Z16:37\n');
 assert.equal(
   stripAnsiForTest(rewriteSubmittedPromptForTest('operator -> narada.architect', 'review what has been going on in commits since checkpoint', 64, fixedTimestamp)).replace(/\r/g, ''),
-  '\noperator -> narada.architect: review what has been going on in\n  commits since checkpoint\n  2026-05-28Z16:37\n'
+  '\noperator -> narada.architect: review what has been going on in\n  commits since checkpoint 2026-05-28Z16:37\n'
 );
 rmSync(tempDir, { recursive: true, force: true });
 
@@ -446,6 +490,15 @@ const codexMcpRequest = buildCodexMcpRequest([
   model: 'gpt-5.5',
   thinking: 'high',
   siteRoot: 'C:/Users/Andrey/Narada',
+  nativeMcpTools: true,
+  mcpServers: {
+    'local-filesystem': {
+      config: {
+        command: 'node',
+        args: ['D:/code/mcp-surfaces/packages/local-filesystem-mcp/dist/src/main.js'],
+      },
+    },
+  },
 });
 assert.equal(codexMcpRequest.tool, 'codex');
 assert.equal(codexMcpRequest.arguments.prompt, 'Say ok.');
@@ -453,19 +506,43 @@ assert.equal(codexMcpRequest.arguments.model, 'gpt-5.5');
 assert.equal(codexMcpRequest.arguments['reasoning-effort'], 'high');
 assert.equal(codexMcpRequest.arguments['developer-instructions'].startsWith('You are a test agent.'), true);
 assert.equal(codexMcpRequest.arguments['developer-instructions'].includes('narada_tool_call'), true);
+assert.equal(codexMcpRequest.arguments['developer-instructions'].includes('registered with nested Codex as native MCP tools'), true);
 assert.equal(codexMcpRequest.arguments['developer-instructions'].includes('fs_read_file'), true);
+assert.equal(codexMcpRequest.arguments['developer-instructions'].includes('input_schema:'), true);
+assert.equal(codexMcpRequest.arguments['developer-instructions'].includes('"path":{"type":"string"}'), true);
+assert.equal(codexMcpRequest.arguments.native_mcp_tools, true);
+assert.equal(codexMcpRequest.arguments.mcpServers['local-filesystem'].config.command, 'node');
 if (process.platform === 'win32') {
   assert.equal(codexMcpRequest.arguments.sandbox, 'danger-full-access');
 } else {
   assert.equal(codexMcpRequest.arguments.sandbox, 'workspace-write');
 }
+const codexJsonFallbackRequest = buildCodexMcpRequest([
+  { role: 'user', content: 'Say ok.' },
+], tools, {
+  model: 'gpt-5.5',
+  thinking: 'medium',
+  siteRoot: 'C:/Users/Andrey/Narada',
+  nativeMcpTools: false,
+});
+assert.equal(codexJsonFallbackRequest.arguments.native_mcp_tools, false);
+assert.equal(codexJsonFallbackRequest.arguments.mcpServers, undefined);
+assert.equal(codexJsonFallbackRequest.arguments['developer-instructions'].includes('not through native Codex tool discovery'), true);
+const codexDefaultDiscoveryRequest = buildCodexMcpRequest([
+  { role: 'user', content: 'Say ok.' },
+], tools, {
+  model: 'gpt-5.5',
+  thinking: 'medium',
+  siteRoot: 'C:/Users/Andrey/Narada',
+});
+assert.equal(codexDefaultDiscoveryRequest.arguments.native_mcp_tools, true);
+assert.equal(codexDefaultDiscoveryRequest.arguments['developer-instructions'].includes('registered with nested Codex as native MCP tools'), true);
 
 const parsedCodex = parseCodexMcpResponse({ threadId: 'thread_123', content: 'ok' });
 assert.equal(parsedCodex.choices[0].message.content, 'ok');
-assert.equal(parsedCodex.choices[0].finish_reason, 'stop');
-assert.deepEqual(parseNaradaToolCall('{"narada_tool_call":{"name":"agent_context_startup_sequence","arguments":{}}}'), {
-  name: 'agent_context_startup_sequence',
-  arguments: {},
+assert.deepEqual(parseNaradaToolCall(JSON.stringify(naradaToolCallEnvelope.example)), {
+  name: 'mcp_output_show',
+  arguments: { output_ref: 'mcp_output:o_6cd77433e384445e976c7fdf' },
 });
 assert.equal(isPotentialNaradaToolCallText('{"narada_tool_call":{"name":"mcp_payload_create"'), true);
 assert.equal(isPotentialNaradaToolCallText('```json\n{"narada_tool_call":{"name":"mcp_payload_create"'), true);
@@ -517,6 +594,8 @@ assert.equal(codexExecArgs.includes('model_reasoning_effort="high"'), true);
 assert.equal(codexExecArgs.includes('-C'), true);
 assert.equal(codexExecArgs.at(-1), '-');
 assert.equal(codexExecArgs.join(' ').includes('Say ok.'), false);
+assert.equal(codexExecArgs.some((arg) => arg.includes('mcp_servers."local-filesystem".command=')), true);
+assert.equal(codexExecArgs.some((arg) => arg.includes('local-filesystem-mcp/dist/src/main.js')), true);
 const codexExecReplyArgs = buildCodexExecArgs(codexMcpReplyRequest, { model: 'gpt-5.5-mini', thinking: 'low', siteRoot: 'D:/code/narada' });
 assert.deepEqual(codexExecReplyArgs.slice(0, 3), ['exec', 'resume', '--json']);
 assert.equal(codexExecReplyArgs.includes('thread_123'), true);
@@ -546,12 +625,68 @@ assert.equal(codexMcpConfigArgs.some((arg) => arg.includes('mcp_servers."narada-
 assert.equal(codexMcpConfigArgs.some((arg) => arg.includes('default_tools_approval_mode="approve"')), true);
 const event = parseCodexExecJsonLine('\u001b[32m{"type":"item.completed","item":{"type":"agent_message","text":"hello"}}\u001b[0m');
 assert.equal(codexExecEventText(event), 'hello');
+const nativeMcpStartedEvent = parseCodexExecJsonLine(JSON.stringify({
+  type: 'item.started',
+  item: {
+    id: 'item_tool_1',
+    type: 'mcp_tool_call',
+    server: 'local-filesystem',
+    tool: 'fs_read_file',
+    arguments: { path: 'README.md' },
+    status: 'in_progress',
+  },
+}));
+assert.deepEqual(codexExecMcpToolEventSummary(nativeMcpStartedEvent), {
+  id: 'item_tool_1',
+  server: 'local-filesystem',
+  tool: 'fs_read_file',
+  name: 'local-filesystem.fs_read_file',
+  arguments: { path: 'README.md' },
+  status: 'in_progress',
+  result: null,
+  error: null,
+});
+assert.equal(codexExecEventText(nativeMcpStartedEvent), '');
+const nativeMcpCompletedEvent = parseCodexExecJsonLine(JSON.stringify({
+  type: 'item.completed',
+  item: {
+    id: 'item_tool_1',
+    type: 'mcp_tool_call',
+    server: 'local-filesystem',
+    tool: 'fs_read_file',
+    arguments: { path: 'README.md' },
+    result: { content: [{ type: 'text', text: 'ok' }] },
+    status: 'completed',
+  },
+}));
+assert.equal(codexExecMcpToolEventSummary(nativeMcpCompletedEvent).status, 'completed');
+assert.equal(codexExecEventText(nativeMcpCompletedEvent), '');
 
+assert.deepEqual(commandTokens(), [
+  '/help',
+  '/status',
+  '/stats',
+  '/model',
+  '/thinking',
+  '/tool-output',
+  '/tool-outputs',
+  '/tools',
+  '/tool',
+  '/queue',
+  '/queue clear',
+  '/queue drop <index>',
+  '/clear',
+  '/exit',
+  '/quit',
+  'exit',
+]);
 assert.equal(await handleSlashCommand('/help', { mcpServers: {}, allTools: [] }), 'handled');
 assert.equal(await handleSlashCommand('/bad', { mcpServers: {}, allTools: [] }), 'handled');
 assert.equal(await handleSlashCommand('plain message', { mcpServers: {}, allTools: [] }), 'none');
+const originalConsoleLog = console.log;
+const originalSlashStdoutWrite = process.stdout.write;
 const printedStatsMessages = [];
-console.log = (value = '') => { printedStatsMessages.push(stripAnsiForTest(String(value))); };
+process.stdout.write = (value = '') => { printedStatsMessages.push(stripAnsiForTest(String(value))); return true; };
 try {
   assert.equal(await handleSlashCommand('/stats --date 2026-06-01 --top 3', {
     mcpServers: {},
@@ -560,8 +695,68 @@ try {
   }), 'handled');
 } finally {
   console.log = originalConsoleLog;
+  process.stdout.write = originalSlashStdoutWrite;
 }
 assert.equal(printedStatsMessages.some((message) => message.includes('stats args: --date 2026-06-01 --top 3')), true);
+const printedToolsMessages = [];
+const toolsFixtureServers = {
+  'local-filesystem': {
+    tools: [{
+      name: 'fs_read_file',
+      description: 'Read a file',
+      inputSchema: {
+        type: 'object',
+        properties: { path: { type: 'string' } },
+        required: ['path'],
+      },
+    }],
+  },
+};
+process.stdout.write = (value = '') => { printedToolsMessages.push(stripAnsiForTest(String(value))); return true; };
+try {
+  assert.equal(await handleSlashCommand('/tools fs_', { mcpServers: toolsFixtureServers, allTools: tools }), 'handled');
+} finally {
+  process.stdout.write = originalSlashStdoutWrite;
+}
+assert.equal(printedToolsMessages.some((message) => message.includes('Discovered MCP tools (1)')), true);
+assert.equal(printedToolsMessages.some((message) => message.includes('fs_read_file (local-filesystem)')), true);
+assert.equal(printedToolsMessages.some((message) => message.includes('input_schema:')), true);
+assert.equal(printedToolsMessages.some((message) => message.includes('"path":{"type":"string"}')), true);
+assert.equal(printedToolsMessages.some((message) => message.includes('"required":["path"]')), true);
+const toolStatus = serverStatus({
+  requestId: 'status-tools',
+  state: { activeTurn: null },
+  allTools: tools,
+  mcpServers: toolsFixtureServers,
+});
+assert.equal(toolStatus.request_id, 'status-tools');
+assert.equal(toolStatus.tool_count, 1);
+assert.deepEqual(toolStatus.mcp_tools, [{
+  server_name: 'local-filesystem',
+  tool_name: 'fs_read_file',
+  description: 'Read a file',
+  input_schema: toolsFixtureServers['local-filesystem'].tools[0].inputSchema,
+  registry_source: null,
+  registry_metadata_authoritative: false,
+}]);
+const displaySettings = { toolOutputs: true };
+const printedToolOutputMessages = [];
+process.stdout.write = (value = '') => { printedToolOutputMessages.push(stripAnsiForTest(String(value))); return true; };
+try {
+  assert.equal(await handleSlashCommand('/tool-output', { mcpServers: {}, allTools: [], displaySettings }), 'handled');
+  assert.equal(displaySettings.toolOutputs, false);
+  assert.equal(await handleSlashCommand('/tool-outputs on', { mcpServers: {}, allTools: [], displaySettings }), 'handled');
+  assert.equal(displaySettings.toolOutputs, true);
+  assert.deepEqual(handleToolOutputDisplayCommand('off', displaySettings), {
+    state: false,
+    message: 'Tool call outputs are hidden in the displayed transcript.',
+  });
+  assert.equal(shouldDisplayToolOutputs(displaySettings), false);
+} finally {
+  console.log = originalConsoleLog;
+  process.stdout.write = originalSlashStdoutWrite;
+}
+assert.equal(printedToolOutputMessages.some((message) => message.includes('Tool call outputs are hidden')), true);
 assert.equal(await handleSlashCommand('/exit', { mcpServers: {}, allTools: [] }), 'exit');
 const slashQueue = createInputQueue({ drain: async () => ({ terminal_state: 'completed' }) });
 await slashQueue.enqueue(normalizeInputEvent({ content: 'first steering', source: 'operator_steering' }, { transport: 'terminal' }));
@@ -1094,6 +1289,7 @@ const serverEvents = stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => 
 assert.equal(serverEvents[0].event, 'session_started');
 assert.equal(serverEvents.some((event) => event.event === 'error' && event.code === 'invalid_json'), true);
 assert.equal(serverEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-1'), true);
+assert.deepEqual(serverEvents.find((event) => event.event === 'session_status' && event.request_id === 'status-1')?.mcp_tools, []);
 assert.equal(serverEvents.at(-1).event, 'session_closed');
 const serverHeartbeat = JSON.parse(readFileSync(join(serverSite, '.narada', 'crew', 'nars-sessions', 'server-test', 'heartbeat.json'), 'utf8'));
 assert.equal(serverHeartbeat.schema, 'narada.carrier_heartbeat.v1');

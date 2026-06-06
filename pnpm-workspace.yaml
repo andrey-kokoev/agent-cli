@@ -3,3 +3,5 @@ packages:
   - '../narada/packages/carrier-action-admission'
   - '../narada/packages/carrier-protocol'
   - '../narada/packages/mcp-fabric'
+  - '../narada/packages/carrier-provider-contract'
+  - '../narada/packages/carrier-command-contract'
