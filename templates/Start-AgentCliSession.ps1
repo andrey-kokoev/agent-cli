@@ -14,7 +14,7 @@ param(
     [string]$SessionName = ($IdentityName -replace '\.', '-'),
 
     [ValidateSet('openai-api', 'kimi-api', 'anthropic-api', 'codex-subscription')]
-    [string]$IntelligenceProvider = 'codex-subscription',
+    [string]$IntelligenceProvider = 'kimi-api',
 
     [switch]$AutoApprove
 )
