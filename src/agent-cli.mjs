@@ -18,6 +18,8 @@ import {
 import {
   createPayloadRef,
   createSessionEvent as createCarrierSessionEvent,
+  createToolCallPayload,
+  createToolResultPayload,
   createTurnTerminalPayload,
   classifyCarrierObserverInput,
   classifyCarrierInputAdmission,
@@ -1712,20 +1714,11 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
   const startedAt = Date.now();
   const argSummary = argumentSummary(args);
   const argSummaryText = stringifySummary(argSummary);
-  appendSession(SESSION_PATH, carrierSessionEventEntry('tool_call_requested', {
+  appendSession(SESSION_PATH, carrierSessionEventEntry('tool_call_requested', createToolCallPayload({
     tool_name: name || '<missing>',
     arguments_summary: argSummaryText,
     requesting_agent_id: IDENTITY,
-  }));
-  const recordToolResult = (status, contentOrSummary, extra = {}) => {
-    appendSession(SESSION_PATH, carrierSessionEventEntry('tool_result_received', {
-      tool_name: name || '<missing>',
-      status,
-      duration_ms: Date.now() - startedAt,
-      result_summary: summarizeToolResult(contentOrSummary),
-      ...extra,
-    }));
-  };
+  })));
   const admissionClassification = serverMode
     ? classifyCarrierActionRequest(name, args, { toolAvailable: !!server, toolMetadata })
     : null;
@@ -1733,6 +1726,16 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
     ? (admissionClassification.decision === 'read_only_admitted' ? 'auto' : 'prompt')
     : classifyTool(name, args);
   const admissionRequired = serverMode && admissionClassification.decision !== 'read_only_admitted';
+  const recordToolResult = (status, contentOrSummary, extra = {}) => {
+    appendSession(SESSION_PATH, carrierSessionEventEntry('tool_result_received', createToolResultPayload({
+      tool_name: name || '<missing>',
+      status,
+      duration_ms: Date.now() - startedAt,
+      result_summary: summarizeToolResult(contentOrSummary),
+      ...mcpToolEffectAdmissionEvidence({ serverMode, admissionClassification, status, category }),
+      ...extra,
+    })));
+  };
 
   if (emit) {
     if (serverMode) {
@@ -1769,7 +1772,7 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
       if (shouldDisplayToolOutputs()) printToolResultLine(`blocked ${name} in ${formatDuration(Date.now() - startedAt)} · blocklist`, { level: 'warn' });
     }
     emit?.('tool_result', { turn_id: turnId, tool: name, status: 'blocked' });
-    recordToolResult('blocked', `Tool ${name} is blocked by policy.`);
+    recordToolResult('denied', `Tool ${name} is blocked by policy.`);
     return {
       role: 'tool',
       tool_call_id: toolCall.id,
@@ -1802,7 +1805,7 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
         candidate_ref: decision.candidate_ref,
         carrier_mutation_admitted: decision.carrier_mutation_admitted,
       });
-      recordToolResult('admission_required', 'action_admission_required');
+      recordToolResult('denied', 'action_admission_required');
       return {
         role: 'tool',
         tool_call_id: toolCall.id,
@@ -1822,7 +1825,7 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
       };
     }
     emit?.('tool_result', { turn_id: turnId, tool: name, status: 'error', error: `Tool ${name} not found in any MCP server.` });
-    recordToolResult('error', `Tool ${name} not found in any MCP server.`);
+    recordToolResult(serverMode ? 'denied' : 'failed', `Tool ${name} not found in any MCP server.`);
     if (!serverMode) {
       turn?.clearStatus?.();
       if (shouldDisplayToolOutputs()) printToolResultLine(`failed ${name} in ${formatDuration(Date.now() - startedAt)} · tool not found`, { level: 'error' });
@@ -1858,7 +1861,7 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
       candidate_ref: decision.candidate_ref,
       carrier_mutation_admitted: decision.carrier_mutation_admitted,
     });
-    recordToolResult('admission_required', 'action_admission_required');
+    recordToolResult('denied', 'action_admission_required');
     return {
       role: 'tool',
       tool_call_id: toolCall.id,
@@ -1938,13 +1941,45 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
       if (shouldDisplayToolOutputs()) printToolResultLine(`failed ${name} in ${formatDuration(Date.now() - startedAt)} · ${err.message}${recovery ? `\n${recovery}` : ''}`, { level: 'error' });
     }
     emit?.('tool_result', { turn_id: turnId, tool: name, status: 'error', error: err.message, recovery });
-    recordToolResult('error', err.message, recovery ? { recovery } : {});
+    recordToolResult('failed', err.message, recovery ? { recovery } : {});
     return {
       role: 'tool',
       tool_call_id: toolCall.id,
       content: JSON.stringify({ error: err.message, ...(recovery ? { recovery } : {}) }),
     };
   }
+}
+
+function mcpToolEffectAdmissionEvidence({ serverMode, admissionClassification, status, category }) {
+  if (category === 'block') {
+    return {
+      admission_action: 'deny',
+      admission_reason: 'unsupported_tool_effect',
+    };
+  }
+  if (!serverMode || !admissionClassification) return {};
+  if (admissionClassification.decision === 'read_only_admitted') {
+    return {
+      admission_action: 'admit',
+      admission_reason: 'read_only_tool_effect_admitted',
+      authority_ref: admissionClassification.authority_owner ?? undefined,
+    };
+  }
+  if (admissionClassification.decision === 'routed') {
+    return {
+      admission_action: 'deny',
+      admission_reason: 'tool_effect_admission_required',
+      authority_ref: admissionClassification.authority_owner ?? undefined,
+    };
+  }
+  if (status === 'denied') {
+    return {
+      admission_action: 'deny',
+      admission_reason: 'unsupported_tool_effect',
+      authority_ref: admissionClassification.authority_owner ?? undefined,
+    };
+  }
+  return {};
 }
 
 function toolFailureRecovery(message) {
@@ -3724,13 +3759,11 @@ function handleCodexExecMcpToolEvent(event, settings = {}, state = {}) {
   if (event.type === 'item.started') {
     state.startedAtById?.set?.(summary.id, Date.now());
     const argSummary = argumentSummary(summary.arguments);
-    appendSession(SESSION_PATH, carrierSessionEventEntry('tool_call_requested', {
+    appendSession(SESSION_PATH, carrierSessionEventEntry('tool_call_requested', createToolCallPayload({
       tool_name: summary.name,
       arguments_summary: stringifySummary(argSummary),
       requesting_agent_id: IDENTITY,
-      provider: 'codex-subscription',
-      native_mcp_tool_call: true,
-    }));
+    })));
     settings.emit?.('tool_call', {
       turn_id: turnId,
       tool: summary.name,
@@ -3749,21 +3782,20 @@ function handleCodexExecMcpToolEvent(event, settings = {}, state = {}) {
     const startedAt = state.startedAtById?.get?.(summary.id) ?? Date.now();
     state.startedAtById?.delete?.(summary.id);
     const durationMs = Math.max(0, Date.now() - startedAt);
-    const status = summary.error ? 'failed' : 'completed';
+    const legacyStatus = summary.error ? 'failed' : 'completed';
+    const status = summary.error ? 'failed' : 'ok';
     const resultSummary = summary.error?.message ?? summary.result ?? '';
-    appendSession(SESSION_PATH, carrierSessionEventEntry('tool_result_received', {
+    appendSession(SESSION_PATH, carrierSessionEventEntry('tool_result_received', createToolResultPayload({
       tool_name: summary.name,
       status,
       duration_ms: durationMs,
       result_summary: summarizeToolResult(resultSummary),
-      provider: 'codex-subscription',
-      native_mcp_tool_call: true,
-    }));
+    })));
     settings.emit?.('tool_result', {
       turn_id: turnId,
       tool: summary.name,
       server: summary.server,
-      status,
+      status: legacyStatus,
       duration_ms: durationMs,
       result: summary.result,
       error: summary.error,
@@ -4532,6 +4564,7 @@ export {
   handleInteractiveControlLine,
   handleSlashCommand,
   messagesWithCarrierGoal,
+  mcpToolEffectAdmissionEvidence,
   runCodexTranscriptStats,
   createInputQueue,
   normalizeInputEvent,

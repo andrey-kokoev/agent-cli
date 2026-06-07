@@ -9,6 +9,8 @@ import { commandTokens } from '@narada2/carrier-command-contract';
 import {
   classifyCarrierInputHold,
   classifyCarrierInputQueueAdmission,
+  createSessionEvent,
+  createToolResultPayload,
   validateSessionEvent,
 } from '@narada2/carrier-protocol';
 import {
@@ -47,6 +49,7 @@ import {
   handleObserverCommand,
   handleSlashCommand,
   messagesWithCarrierGoal,
+  mcpToolEffectAdmissionEvidence,
   handleToolOutputDisplayCommand,
   runCodexTranscriptStats,
   inputRecordDisplayLabel,
@@ -117,6 +120,51 @@ for (const entry of inputPipelineCases.cases) {
     promptState: { active: true },
   }), entry.expected.should_defer, entry.name);
 }
+
+for (const entry of [
+  {
+    name: 'agent_cli_read_only_mcp_tool_result_admitted',
+    status: 'ok',
+    classification: { decision: 'read_only_admitted', authority_owner: 'filesystem_service' },
+    expected: { admission_action: 'admit', admission_reason: 'read_only_tool_effect_admitted' },
+  },
+  {
+    name: 'agent_cli_mutating_mcp_tool_result_requires_admission',
+    status: 'denied',
+    classification: { decision: 'routed', authority_owner: 'task_governance_service' },
+    expected: { admission_action: 'deny', admission_reason: 'tool_effect_admission_required' },
+  },
+  {
+    name: 'agent_cli_refused_mcp_tool_result_denied',
+    status: 'denied',
+    classification: { decision: 'refused', authority_owner: null },
+    expected: { admission_action: 'deny', admission_reason: 'unsupported_tool_effect' },
+  },
+]) {
+  const payload = createToolResultPayload({
+    tool_name: 'fixture_tool',
+    status: entry.status,
+    duration_ms: 1,
+    result_summary: entry.name,
+    ...mcpToolEffectAdmissionEvidence({
+      serverMode: true,
+      admissionClassification: entry.classification,
+      status: entry.status,
+      category: 'prompt',
+    }),
+  });
+  assert.equal(payload.admission_action, entry.expected.admission_action, entry.name);
+  assert.equal(payload.admission_reason, entry.expected.admission_reason, entry.name);
+  assert.deepEqual(validateSessionEvent(createSessionEvent({
+    event_kind: 'tool_result_received',
+    carrier_session_id: 'carrier_session_agent_cli_fixture',
+    agent_id: 'narada.test',
+    site_id: 'site_fixture',
+    site_root: 'file:///fixture',
+    payload,
+  })), [], entry.name);
+}
+
 const tempDir = resolve('.ai/tmp-agent-cli-programmatic-test');
 mkdirSync(tempDir, { recursive: true });
 const messageFile = resolve(tempDir, 'message.txt');
