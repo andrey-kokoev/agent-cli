@@ -110,6 +110,7 @@ for (const entry of inputPipelineCases.cases) {
   assert.equal(queueAdmission.creates_turn, entry.expected.creates_turn, entry.name);
   assert.equal(queueAdmission.complete_without_provider, entry.expected.complete_without_provider, entry.name);
   assert.equal(queueAdmission.dispatch_to_provider, entry.expected.dispatch_to_provider, entry.name);
+  if (Object.hasOwn(entry.expected, 'directive_visibility')) assert.equal(queueAdmission.directive_visibility, entry.expected.directive_visibility, entry.name);
   assert.deepEqual(queueAdmission.queue_events.map((event) => event.event_kind), entry.expected.queue_event_kinds, entry.name);
   assert.deepEqual(queueAdmission.admission_events.map((event) => event.event_kind), entry.expected.admission_event_kinds, entry.name);
   assert.deepEqual(queueAdmission.visible_events.map((event) => event.event_kind), entry.expected.visible_event_kinds ?? [], entry.name);
@@ -1703,6 +1704,46 @@ try {
   assert.equal(directiveEvents.some((event) => event.event === 'directive_receipt_recorded' && event.directive_id === 'dir_test' && event.receipt_id?.startsWith('dirrcpt_')), true);
   assert.equal(directiveEvents.some((event) => event.event === 'directive_carrier_accepted_recorded' && event.directive_id === 'dir_test' && event.acceptance_id?.startsWith('diraccept_')), true);
   assert.equal(directiveEvents.some((event) => event.event === 'turn_complete' && event.directive_id === 'dir_test'), true);
+
+  const heartbeatInput = new PassThrough();
+  const heartbeatOutput = new PassThrough();
+  let heartbeatStdout = '';
+  let heartbeatChatCalls = 0;
+  heartbeatOutput.setEncoding('utf8');
+  heartbeatOutput.on('data', (chunk) => { heartbeatStdout += chunk; });
+  const heartbeatServerDone = runServerMode({
+    input: heartbeatInput,
+    output: heartbeatOutput,
+    callChatApiFn: async () => {
+      heartbeatChatCalls += 1;
+      return { choices: [{ message: { role: 'assistant', content: 'unexpected heartbeat turn' } }] };
+    },
+  });
+  heartbeatInput.write(`${JSON.stringify({
+    id: 'heartbeat-1',
+    method: 'system_directive.deliver',
+    params: {
+      directive_id: 'dir_heartbeat',
+      authority_ref: 'auth_operation_heartbeat',
+      directive: {
+        directive_id: 'dir_heartbeat',
+        kind: 'operation_heartbeat',
+        visibility: 'record_only',
+        cadence: 'PT1M',
+        operation_id: 'operation_test',
+        reason: 'operation_continuity_heartbeat',
+      },
+    },
+  })}\n`);
+  heartbeatInput.end();
+  await heartbeatServerDone;
+  const heartbeatEvents = heartbeatStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+  assert.equal(heartbeatChatCalls, 0);
+  assert.equal(heartbeatEvents.some((event) => event.event === 'directive_received' && event.directive_id === 'dir_heartbeat'), true);
+  assert.equal(heartbeatEvents.some((event) => event.event === 'directive_receipt_recorded' && event.directive_id === 'dir_heartbeat'), true);
+  assert.equal(heartbeatEvents.some((event) => event.event === 'directive_carrier_accepted_recorded' && event.directive_id === 'dir_heartbeat'), true);
+  assert.equal(heartbeatEvents.some((event) => event.event === 'directive_complete' && event.directive_id === 'dir_heartbeat' && event.terminal_state === 'completed_without_provider'), true);
+  assert.equal(heartbeatEvents.some((event) => event.event === 'turn_started' && event.directive_id === 'dir_heartbeat'), false);
 } finally {
   if (previousSiteRoot === undefined) delete process.env.NARADA_SITE_ROOT;
   else process.env.NARADA_SITE_ROOT = previousSiteRoot;

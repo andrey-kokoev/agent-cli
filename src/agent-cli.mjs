@@ -413,7 +413,10 @@ function normalizeAgentCliControlRecord(request) {
   }
   const directive = request?.params?.directive ?? null;
   const message = String(request?.params?.message ?? directive?.content?.text ?? '');
-  if (!message.trim()) throw new Error('empty_system_directive_control_frame');
+  const directiveKind = directive?.kind ?? directive?.content?.kind ?? request?.params?.directive_kind ?? request?.params?.kind ?? null;
+  const directiveVisibility = request?.params?.visibility ?? directive?.visibility ?? directive?.content?.visibility ?? null;
+  const allowEmptyRecordOnlyDirective = directiveKind === 'operation_heartbeat' && directiveVisibility === 'record_only';
+  if (!message.trim() && !allowEmptyRecordOnlyDirective) throw new Error('empty_system_directive_control_frame');
   return normalizeControlInputRecord({
     content: message,
     source: 'system_directive',
@@ -421,6 +424,16 @@ function normalizeAgentCliControlRecord(request) {
     authority_ref: request?.params?.authority_ref ?? directive?.directive_id ?? request?.params?.directive_id ?? null,
     directive_id: directive?.directive_id ?? request?.params?.directive_id ?? null,
     transport: 'control_jsonl',
+    metadata: {
+      directive_provenance: { kind: 'system_directive' },
+      directive: {
+        ...(directiveKind ? { kind: directiveKind } : {}),
+        ...(directiveVisibility ? { visibility: directiveVisibility } : {}),
+        ...(request?.params?.cadence ?? directive?.cadence ?? directive?.content?.cadence ? { cadence: request?.params?.cadence ?? directive?.cadence ?? directive?.content?.cadence } : {}),
+        ...(request?.params?.operation_id ?? directive?.operation_id ?? directive?.content?.operation_id ? { operation_id: request?.params?.operation_id ?? directive?.operation_id ?? directive?.content?.operation_id } : {}),
+        ...(request?.params?.reason ?? directive?.reason ?? directive?.content?.reason ? { reason: request?.params?.reason ?? directive?.reason ?? directive?.content?.reason } : {}),
+      },
+    },
   }, { transport: 'control_jsonl' });
 }
 
@@ -1547,6 +1560,10 @@ async function submitUserInput({
   const record = normalizeInputRecord(input);
   if (isObserverInputEvent(input, record)) {
     return submitObserverInput({ input, record, messages, tools, mcpServers, rl, turn, emit, callChatApiFn, displaySettings });
+  }
+  const runtimeAdmission = classifyInputRuntimeAdmission(input, displaySettings);
+  if (runtimeAdmission.is_directive && runtimeAdmission.complete_without_provider) {
+    return { terminal_state: 'completed_without_provider' };
   }
   messages.push({ role: 'user', content: record.content });
   appendSession(SESSION_PATH, sessionLogEntry({
@@ -2876,7 +2893,10 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
       const directive = request?.params?.directive ?? null;
       const message = String(request?.params?.message ?? directive?.content?.text ?? '');
       const directiveId = directive?.directive_id ?? request?.params?.directive_id ?? null;
-      if (!message.trim()) {
+      const directiveKind = directive?.kind ?? directive?.content?.kind ?? request?.params?.directive_kind ?? request?.params?.kind ?? null;
+      const directiveVisibility = request?.params?.visibility ?? directive?.visibility ?? directive?.content?.visibility ?? null;
+      const allowEmptyRecordOnlyDirective = directiveKind === 'operation_heartbeat' && directiveVisibility === 'record_only';
+      if (!message.trim() && !allowEmptyRecordOnlyDirective) {
         emit('error', {
           request_id: requestId,
           directive_id: directiveId,
@@ -2891,6 +2911,16 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
         authority_ref: request?.params?.authority_ref ?? directiveId,
         directive_id: directiveId,
         request_id: requestId,
+        metadata: {
+          directive_provenance: { kind: 'system_directive' },
+          directive: {
+            ...(directiveKind ? { kind: directiveKind } : {}),
+            ...(directiveVisibility ? { visibility: directiveVisibility } : {}),
+            ...(request?.params?.cadence ?? directive?.cadence ?? directive?.content?.cadence ? { cadence: request?.params?.cadence ?? directive?.cadence ?? directive?.content?.cadence } : {}),
+            ...(request?.params?.operation_id ?? directive?.operation_id ?? directive?.content?.operation_id ? { operation_id: request?.params?.operation_id ?? directive?.operation_id ?? directive?.content?.operation_id } : {}),
+            ...(request?.params?.reason ?? directive?.reason ?? directive?.content?.reason ? { reason: request?.params?.reason ?? directive?.reason ?? directive?.content?.reason } : {}),
+          },
+        },
       }, { transport: 'jsonl_stdio' }), { drain: true });
       return;
     }
@@ -2952,6 +2982,37 @@ async function runServerInputEvent({ requestId, state, messages, allTools, mcpSe
       terminal_state: result?.terminal_state ?? 'completed_without_provider',
     });
     return result;
+  }
+  if (runtimeAdmission.is_directive && runtimeAdmission.complete_without_provider) {
+    if (directiveId) {
+      emit('directive_received', {
+        request_id: requestId,
+        directive_id: directiveId,
+        terminal_state: 'accepted',
+        source: 'system_directive',
+      });
+      emit('directive_receipt_recorded', {
+        request_id: requestId,
+        ...directiveReceiptEvidence(input, {
+          agentId: IDENTITY,
+          carrierSessionId: SESSION,
+        }),
+      });
+      emit('directive_carrier_accepted_recorded', {
+        request_id: requestId,
+        ...directiveAcceptedEvidence(input, {
+          agentId: IDENTITY,
+          carrierSessionId: SESSION,
+        }),
+      });
+    }
+    emit('directive_complete', {
+      request_id: requestId,
+      input_event_id: input.event_id,
+      terminal_state: 'completed_without_provider',
+      ...(directiveId ? { directive_id: directiveId, source: 'system_directive' } : {}),
+    });
+    return { terminal_state: 'completed_without_provider' };
   }
   return runServerConversationTurn({
     requestId,
