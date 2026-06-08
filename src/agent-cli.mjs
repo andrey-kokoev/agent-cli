@@ -17,6 +17,10 @@ import {
 } from '@narada2/carrier-action-admission';
 import {
   createPayloadRef,
+  createDirectiveEmissionAuthorization,
+  createDirectiveEmissionRule,
+  createOperationHeartbeatDirectiveInput,
+  directiveEmissionPayload,
   createSessionEvent as createCarrierSessionEvent,
   createToolCallPayload,
   createToolResultPayload,
@@ -197,10 +201,14 @@ const CARRIER_SESSION_DIR = join(SITE_ROOT, '.narada', 'crew', 'nars-sessions', 
 if (!existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
 const HEARTBEAT_PATH = join(CARRIER_SESSION_DIR, 'heartbeat.json');
 const HEARTBEAT_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_HEARTBEAT_ENABLE, true);
+const OPERATION_HEARTBEAT_DIRECTIVE_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_OPERATION_HEARTBEAT_DIRECTIVE_ENABLE, SERVER_MODE);
+const OPERATION_HEARTBEAT_DIRECTIVE_INTERVAL_MS = Number(process.env.NARADA_AGENT_CLI_OPERATION_HEARTBEAT_DIRECTIVE_INTERVAL_MS ?? 60000);
+const OPERATION_HEARTBEAT_DIRECTIVE_INITIAL_DELAY_MS = Number(process.env.NARADA_AGENT_CLI_OPERATION_HEARTBEAT_DIRECTIVE_INITIAL_DELAY_MS ?? OPERATION_HEARTBEAT_DIRECTIVE_INTERVAL_MS);
 const HOST_COMMANDS_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_HOST_COMMANDS, true);
 const HOST_COMMAND_OUTPUT_INLINE_LIMIT = 8000;
 const HOST_COMMAND_OUTPUT_CAPTURE_LIMIT = 128000;
 let activeHeartbeat = null;
+let activeOperationHeartbeatDirectiveEmitter = null;
 
 // ---------------------------------------------------------------------------
 // Main
@@ -2424,6 +2432,115 @@ function startCarrierHeartbeat({ path, session, identity, runtime, mode, session
   return { stop };
 }
 
+function createOperationHeartbeatDirectiveEmitter({
+  inputQueue,
+  appendSessionFn = (entry) => appendSession(SESSION_PATH, entry),
+  carrierSessionEventEntryFn = carrierSessionEventEntry,
+  session = SESSION,
+  identity = IDENTITY,
+  siteId = SITE_ID,
+  operationId = process.env.NARADA_OPERATION_ID ?? process.env.NARADA_CARRIER_OPERATION_ID ?? null,
+  sourceId = 'narada-proper.system.directive_emitter',
+  cadence = 'PT1M',
+  intervalMs = 60000,
+  initialDelayMs = intervalMs,
+  now = () => new Date().toISOString(),
+} = {}) {
+  if (!inputQueue || typeof inputQueue.enqueue !== 'function') throw new Error('operation_heartbeat_directive_emitter_requires_input_queue');
+  let timer = null;
+  let initialTimer = null;
+  let stopped = false;
+  let sequence = 0;
+  const authorization = createDirectiveEmissionAuthorization({
+    authorization_id: `auth_operation_heartbeat_${session}`,
+    directive_kind: 'operation_heartbeat',
+    cadence,
+    authorized_by: { kind: 'principal', id: 'principal:service' },
+    authorized_emitter: { kind: 'system', id: sourceId },
+    authority: { locus: 'narada_proper', basis: 'operator_authorized_system_directive' },
+    target: { kind: 'carrier_session', id: session },
+    status: 'authorized',
+    created_at: now(),
+  });
+  const rule = createDirectiveEmissionRule({
+    rule_id: `directive_emission_rule_operation_heartbeat_${session}`,
+    authorization_id: authorization.authorization_id,
+    directive_kind: 'operation_heartbeat',
+    cadence,
+    visibility: 'record_only',
+    target: { kind: 'carrier_session', id: session },
+    status: 'active',
+    created_at: now(),
+  });
+  let ruleRecorded = false;
+
+  function ensureRuleRecorded() {
+    if (ruleRecorded) return [];
+    ruleRecorded = true;
+    const events = [
+      carrierSessionEventEntryFn('directive_emission_authorized', authorization),
+      carrierSessionEventEntryFn('directive_emission_rule_recorded', rule),
+    ];
+    for (const event of events) appendSessionFn(event);
+    return events;
+  }
+
+  async function emitOnce({ reason = 'operation_continuity_heartbeat' } = {}) {
+    if (stopped) return { ok: false, code: 'operation_heartbeat_directive_emitter_stopped' };
+    const recordedEvents = ensureRuleRecorded();
+    sequence += 1;
+    const emittedAt = now();
+    const input = createOperationHeartbeatDirectiveInput({
+      event_id: `input_operation_heartbeat_${session}_${sequence}`,
+      directive_id: `dir_operation_heartbeat_${session}_${sequence}`,
+      authorization_id: authorization.authorization_id,
+      rule_id: rule.rule_id,
+      operation_id: operationId,
+      carrier_session_id: session,
+      created_at: emittedAt,
+      source_id: sourceId,
+      cadence,
+      reason,
+    });
+    const emitted = carrierSessionEventEntryFn('directive_emitted', directiveEmissionPayload({ authorization, rule, input, emitted_at: emittedAt }));
+    appendSessionFn(emitted);
+    const queued = await inputQueue.enqueue(input, { drain: true });
+    return {
+      ok: true,
+      authorization,
+      rule,
+      input: queued,
+      events: [...recordedEvents, emitted],
+    };
+  }
+
+  function start() {
+    if (timer || initialTimer || stopped) return { stop, emitOnce };
+    const boundedInterval = Number.isFinite(intervalMs) && intervalMs > 0 ? intervalMs : 60000;
+    const boundedInitialDelay = Number.isFinite(initialDelayMs) && initialDelayMs >= 0 ? initialDelayMs : boundedInterval;
+    initialTimer = setTimeout(() => {
+      initialTimer = null;
+      emitOnce().catch((error) => recordCarrierDiagnostic('error', `operation heartbeat directive emission failed: ${error instanceof Error ? error.message : String(error)}`));
+      timer = setInterval(() => {
+        emitOnce().catch((error) => recordCarrierDiagnostic('error', `operation heartbeat directive emission failed: ${error instanceof Error ? error.message : String(error)}`));
+      }, boundedInterval);
+      timer.unref?.();
+    }, boundedInitialDelay);
+    initialTimer.unref?.();
+    return { stop, emitOnce };
+  }
+
+  function stop() {
+    stopped = true;
+    if (initialTimer) clearTimeout(initialTimer);
+    if (timer) clearInterval(timer);
+    initialTimer = null;
+    timer = null;
+  }
+
+  return { start, stop, emitOnce, authorization, rule };
+}
+
 function sessionLogEntry({ role, content, source, authorityRef, toolCallId, eventId, transport, directiveId }) {
   const entry = { role, content, timestamp: new Date().toISOString() };
   if (toolCallId) entry.tool_call_id = toolCallId;
@@ -2763,6 +2880,14 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
     events_path: EVENTS_PATH,
   });
 
+  if (OPERATION_HEARTBEAT_DIRECTIVE_ENABLED) {
+    activeOperationHeartbeatDirectiveEmitter = createOperationHeartbeatDirectiveEmitter({
+      inputQueue: state.inputQueue,
+      intervalMs: OPERATION_HEARTBEAT_DIRECTIVE_INTERVAL_MS,
+      initialDelayMs: OPERATION_HEARTBEAT_DIRECTIVE_INITIAL_DELAY_MS,
+    }).start();
+  }
+
   input.setEncoding('utf8');
   let buffer = '';
   let orderedServerRequests = Promise.resolve();
@@ -2799,6 +2924,8 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
     dispatchRequestLine(buffer);
   }
   await Promise.allSettled([...state.pendingRequests]);
+  activeOperationHeartbeatDirectiveEmitter?.stop?.();
+  activeOperationHeartbeatDirectiveEmitter = null;
   closeMcpServers(mcpServers);
 }
 
@@ -4662,6 +4789,7 @@ export {
   observerVisibility,
   shouldDisplayToolOutputs,
   normalizeDisplayTerms,
+  createOperationHeartbeatDirectiveEmitter,
   printAgentMessage,
   printHostCommandResult,
   printCliMessage,
@@ -4696,6 +4824,7 @@ if (isEntrypoint) {
 
   main().catch((err) => {
     activeHeartbeat?.stop();
+    activeOperationHeartbeatDirectiveEmitter?.stop?.();
     console.error(`[agent-cli] Fatal error: ${err.message}`);
     process.exit(1);
   });

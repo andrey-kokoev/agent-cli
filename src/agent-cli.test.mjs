@@ -29,6 +29,7 @@ import {
   codexExecEventText,
   consumeOperatorDirectiveInputText,
   createInputQueue,
+  createOperationHeartbeatDirectiveEmitter,
   createTerminalStyle,
   environmentBlockLength,
   directiveReceiptEvidence,
@@ -121,6 +122,49 @@ for (const entry of inputPipelineCases.cases) {
     promptState: { active: true },
   }), entry.expected.should_defer, entry.name);
 }
+
+const heartbeatEmitterEvents = [];
+const heartbeatEmitterDrained = [];
+const heartbeatEmitterQueue = createInputQueue({
+  drain: async (event) => {
+    heartbeatEmitterDrained.push(event);
+    return { terminal_state: 'completed_without_provider' };
+  },
+});
+const heartbeatEmitter = createOperationHeartbeatDirectiveEmitter({
+  inputQueue: heartbeatEmitterQueue,
+  appendSessionFn: (event) => heartbeatEmitterEvents.push(event),
+  carrierSessionEventEntryFn: (eventKind, payload) => createSessionEvent({
+    event_kind: eventKind,
+    carrier_session_id: 'carrier_session_heartbeat_test',
+    agent_id: 'narada.test',
+    site_id: 'site_test',
+    site_root: 'test://site',
+    payload,
+  }),
+  session: 'carrier_session_heartbeat_test',
+  identity: 'narada.test',
+  siteId: 'site_test',
+  operationId: 'operation_heartbeat_test',
+  now: () => '2026-05-30T00:01:00.000Z',
+});
+const firstHeartbeat = await heartbeatEmitter.emitOnce();
+assert.equal(firstHeartbeat.ok, true);
+assert.deepEqual(heartbeatEmitterEvents.map((event) => event.event_kind), [
+  'directive_emission_authorized',
+  'directive_emission_rule_recorded',
+  'directive_emitted',
+]);
+for (const event of heartbeatEmitterEvents) assert.deepEqual(validateSessionEvent(event), [], event.event_kind);
+assert.equal(heartbeatEmitterDrained.length, 1);
+assert.equal(heartbeatEmitterDrained[0].metadata.directive.kind, 'operation_heartbeat');
+assert.equal(heartbeatEmitterDrained[0].metadata.directive.visibility, 'record_only');
+assert.equal(heartbeatEmitterDrained[0].metadata.directive.operation_id, 'operation_heartbeat_test');
+const secondHeartbeat = await heartbeatEmitter.emitOnce();
+assert.equal(secondHeartbeat.ok, true);
+assert.equal(heartbeatEmitterEvents.at(-1).event_kind, 'directive_emitted');
+assert.equal(heartbeatEmitterEvents.filter((event) => event.event_kind === 'directive_emission_authorized').length, 1);
+assert.equal(heartbeatEmitterDrained.length, 2);
 
 for (const entry of [
   {
