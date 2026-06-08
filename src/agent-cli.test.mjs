@@ -28,6 +28,7 @@ import {
   buildOpenAiChatRequest,
   codexExecEventText,
   consumeOperatorDirectiveInputText,
+  createCarrierDirectiveEmitter,
   createInputQueue,
   createOperationHeartbeatDirectiveEmitter,
   createTerminalStyle,
@@ -95,6 +96,7 @@ const metadata = JSON.parse(readFileSync(new URL('./intelligence-providers.json'
 const naradaToolCallEnvelope = JSON.parse(readFileSync(new URL('../../narada/packages/carrier-provider-contract/contracts/narada-tool-call-envelope.json', import.meta.url), 'utf8'));
 const transcriptProjectionCases = JSON.parse(readFileSync(new URL('../../narada/packages/carrier-protocol/fixtures/transcript-projection-cases.json', import.meta.url), 'utf8'));
 const inputPipelineCases = JSON.parse(readFileSync(new URL('../../narada/packages/carrier-protocol/fixtures/carrier-input-pipeline-cases.json', import.meta.url), 'utf8'));
+const directiveEmitterRegistryCases = JSON.parse(readFileSync(new URL('../../narada/packages/carrier-protocol/fixtures/carrier-directive-emitter-registry-cases.json', import.meta.url), 'utf8'));
 assert.equal(transcriptProjectionCases.schema, 'narada.carrier.transcript_projection_cases.v1');
 for (const entry of transcriptProjectionCases.cases) {
   const sessionEvent = JSON.parse(readFileSync(new URL(`../../narada/packages/carrier-protocol/fixtures/${entry.fixture}`, import.meta.url), 'utf8'));
@@ -165,6 +167,56 @@ assert.equal(secondHeartbeat.ok, true);
 assert.equal(heartbeatEmitterEvents.at(-1).event_kind, 'directive_emitted');
 assert.equal(heartbeatEmitterEvents.filter((event) => event.event_kind === 'directive_emission_authorized').length, 1);
 assert.equal(heartbeatEmitterDrained.length, 2);
+
+assert.equal(directiveEmitterRegistryCases.schema, 'narada.carrier.directive_emitter_registry_cases.v1');
+const attentionFixture = directiveEmitterRegistryCases.cases.find((entry) => entry.name === 'operation_attention_runtime_trigger_operator_visible_operation_target');
+const attentionEmitterEvents = [];
+const attentionEmitterDrained = [];
+const attentionEmitterQueue = createInputQueue({
+  drain: async (event) => {
+    attentionEmitterDrained.push(event);
+    return { terminal_state: 'completed_without_provider' };
+  },
+});
+const attentionEmitter = createCarrierDirectiveEmitter({
+  inputQueue: attentionEmitterQueue,
+  directiveKind: attentionFixture.directive_kind,
+  appendSessionFn: (event) => attentionEmitterEvents.push(event),
+  carrierSessionEventEntryFn: (eventKind, payload) => createSessionEvent({
+    event_kind: eventKind,
+    carrier_session_id: 'carrier_session_attention_test',
+    agent_id: 'narada.test',
+    site_id: 'site_test',
+    site_root: 'test://site',
+    payload,
+  }),
+  session: 'carrier_session_attention_test',
+  identity: 'narada.test',
+  siteId: 'site_test',
+  operationId: attentionFixture.operation_id,
+  target: attentionFixture.target,
+  now: () => '2026-05-30T00:02:00.000Z',
+});
+const attention = await attentionEmitter.emitOnce();
+assert.equal(attention.ok, true);
+assert.equal(attention.directive_kind, attentionFixture.directive_kind);
+assert.deepEqual(attentionEmitterEvents.map((event) => event.event_kind), [
+  'directive_emission_authorized',
+  'directive_emission_rule_recorded',
+  'directive_emitted',
+]);
+for (const event of attentionEmitterEvents) assert.deepEqual(validateSessionEvent(event), [], event.event_kind);
+assert.equal(attentionEmitterDrained.length, 1);
+assert.equal(attentionEmitterDrained[0].metadata.directive.kind, attentionFixture.directive_kind);
+assert.equal(attentionEmitterDrained[0].metadata.directive.visibility, attentionFixture.expected.default_visibility);
+assert.equal(attentionEmitterDrained[0].metadata.directive.trigger_kind, attentionFixture.expected.trigger_kind);
+assert.deepEqual(attentionEmitterDrained[0].metadata.directive.target, attentionFixture.target);
+const suppressedAttention = await attentionEmitter.emitOnce({ enabled: false });
+assert.deepEqual(suppressedAttention, {
+  ok: false,
+  code: 'directive_emission_disabled',
+  directive_kind: attentionFixture.directive_kind,
+});
 
 for (const entry of [
   {

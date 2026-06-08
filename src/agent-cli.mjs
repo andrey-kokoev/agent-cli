@@ -17,9 +17,11 @@ import {
 } from '@narada2/carrier-action-admission';
 import {
   createPayloadRef,
+  carrierDirectiveEmitterSpec,
+  classifyDirectiveEmissionRequest,
+  createCarrierDirectiveInput,
   createDirectiveEmissionAuthorization,
   createDirectiveEmissionRule,
-  createOperationHeartbeatDirectiveInput,
   directiveEmissionPayload,
   createSessionEvent as createCarrierSessionEvent,
   createToolCallPayload,
@@ -2432,43 +2434,50 @@ function startCarrierHeartbeat({ path, session, identity, runtime, mode, session
   return { stop };
 }
 
-function createOperationHeartbeatDirectiveEmitter({
+function createCarrierDirectiveEmitter({
   inputQueue,
+  directiveKind = 'operation_heartbeat',
   appendSessionFn = (entry) => appendSession(SESSION_PATH, entry),
   carrierSessionEventEntryFn = carrierSessionEventEntry,
   session = SESSION,
   identity = IDENTITY,
   siteId = SITE_ID,
   operationId = process.env.NARADA_OPERATION_ID ?? process.env.NARADA_CARRIER_OPERATION_ID ?? null,
-  sourceId = 'narada-proper.system.directive_emitter',
-  cadence = 'PT1M',
+  sourceId,
+  cadence,
+  visibility,
+  target,
   intervalMs = 60000,
   initialDelayMs = intervalMs,
   now = () => new Date().toISOString(),
 } = {}) {
-  if (!inputQueue || typeof inputQueue.enqueue !== 'function') throw new Error('operation_heartbeat_directive_emitter_requires_input_queue');
+  const spec = carrierDirectiveEmitterSpec(directiveKind);
+  if (!inputQueue || typeof inputQueue.enqueue !== 'function') throw new Error(`${spec.directive_kind}_directive_emitter_requires_input_queue`);
   let timer = null;
   let initialTimer = null;
   let stopped = false;
   let sequence = 0;
+  const targetRef = target ?? (spec.target_kind === 'operation'
+    ? { kind: 'operation', id: operationId }
+    : { kind: 'carrier_session', id: session });
   const authorization = createDirectiveEmissionAuthorization({
-    authorization_id: `auth_operation_heartbeat_${session}`,
-    directive_kind: 'operation_heartbeat',
-    cadence,
+    authorization_id: `auth_${spec.directive_kind}_${session}`,
+    directive_kind: spec.directive_kind,
+    cadence: cadence ?? spec.default_cadence,
     authorized_by: { kind: 'principal', id: 'principal:service' },
-    authorized_emitter: { kind: 'system', id: sourceId },
-    authority: { locus: 'narada_proper', basis: 'operator_authorized_system_directive' },
-    target: { kind: 'carrier_session', id: session },
+    authorized_emitter: { kind: 'system', id: sourceId ?? spec.default_source_id },
+    authority: spec.default_authority,
+    target: targetRef,
     status: 'authorized',
     created_at: now(),
   });
   const rule = createDirectiveEmissionRule({
-    rule_id: `directive_emission_rule_operation_heartbeat_${session}`,
+    rule_id: `directive_emission_rule_${spec.directive_kind}_${session}`,
     authorization_id: authorization.authorization_id,
-    directive_kind: 'operation_heartbeat',
-    cadence,
-    visibility: 'record_only',
-    target: { kind: 'carrier_session', id: session },
+    directive_kind: spec.directive_kind,
+    cadence: cadence ?? authorization.cadence ?? spec.default_cadence,
+    visibility: visibility ?? spec.default_visibility,
+    target: targetRef,
     status: 'active',
     created_at: now(),
   });
@@ -2485,28 +2494,41 @@ function createOperationHeartbeatDirectiveEmitter({
     return events;
   }
 
-  async function emitOnce({ reason = 'operation_continuity_heartbeat' } = {}) {
-    if (stopped) return { ok: false, code: 'operation_heartbeat_directive_emitter_stopped' };
+  async function emitOnce({ reason = spec.default_reason, enabled = true, content = spec.content } = {}) {
+    if (stopped) return { ok: false, code: `${spec.directive_kind}_directive_emitter_stopped` };
+    const decision = classifyDirectiveEmissionRequest({
+      directive_kind: spec.directive_kind,
+      enabled,
+      rule,
+      target: targetRef,
+    });
+    if (decision.action !== 'emit') return { ok: false, code: decision.reason, directive_kind: spec.directive_kind };
     const recordedEvents = ensureRuleRecorded();
     sequence += 1;
     const emittedAt = now();
-    const input = createOperationHeartbeatDirectiveInput({
-      event_id: `input_operation_heartbeat_${session}_${sequence}`,
-      directive_id: `dir_operation_heartbeat_${session}_${sequence}`,
+    const input = createCarrierDirectiveInput({
+      directive_kind: spec.directive_kind,
+      event_id: `input_${spec.directive_kind}_${session}_${sequence}`,
+      directive_id: `dir_${spec.directive_kind}_${session}_${sequence}`,
       authorization_id: authorization.authorization_id,
       rule_id: rule.rule_id,
       operation_id: operationId,
       carrier_session_id: session,
+      site_id: siteId,
       created_at: emittedAt,
-      source_id: sourceId,
-      cadence,
+      source_id: authorization.authorized_emitter?.id ?? spec.default_source_id,
+      cadence: rule.cadence,
+      visibility: rule.visibility,
       reason,
+      content,
+      target: targetRef,
     });
     const emitted = carrierSessionEventEntryFn('directive_emitted', directiveEmissionPayload({ authorization, rule, input, emitted_at: emittedAt }));
     appendSessionFn(emitted);
     const queued = await inputQueue.enqueue(input, { drain: true });
     return {
       ok: true,
+      directive_kind: spec.directive_kind,
       authorization,
       rule,
       input: queued,
@@ -2520,9 +2542,9 @@ function createOperationHeartbeatDirectiveEmitter({
     const boundedInitialDelay = Number.isFinite(initialDelayMs) && initialDelayMs >= 0 ? initialDelayMs : boundedInterval;
     initialTimer = setTimeout(() => {
       initialTimer = null;
-      emitOnce().catch((error) => recordCarrierDiagnostic('error', `operation heartbeat directive emission failed: ${error instanceof Error ? error.message : String(error)}`));
+      emitOnce().catch((error) => recordCarrierDiagnostic('error', `${spec.directive_kind} directive emission failed: ${error instanceof Error ? error.message : String(error)}`));
       timer = setInterval(() => {
-        emitOnce().catch((error) => recordCarrierDiagnostic('error', `operation heartbeat directive emission failed: ${error instanceof Error ? error.message : String(error)}`));
+        emitOnce().catch((error) => recordCarrierDiagnostic('error', `${spec.directive_kind} directive emission failed: ${error instanceof Error ? error.message : String(error)}`));
       }, boundedInterval);
       timer.unref?.();
     }, boundedInitialDelay);
@@ -2539,6 +2561,10 @@ function createOperationHeartbeatDirectiveEmitter({
   }
 
   return { start, stop, emitOnce, authorization, rule };
+}
+
+function createOperationHeartbeatDirectiveEmitter(options = {}) {
+  return createCarrierDirectiveEmitter({ ...options, directiveKind: 'operation_heartbeat' });
 }
 
 function sessionLogEntry({ role, content, source, authorityRef, toolCallId, eventId, transport, directiveId }) {
@@ -4789,6 +4815,7 @@ export {
   observerVisibility,
   shouldDisplayToolOutputs,
   normalizeDisplayTerms,
+  createCarrierDirectiveEmitter,
   createOperationHeartbeatDirectiveEmitter,
   printAgentMessage,
   printHostCommandResult,
