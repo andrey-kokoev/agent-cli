@@ -3674,6 +3674,19 @@ assert.equal(serverHeartbeat.schema, 'narada.carrier_heartbeat.v1');
 assert.equal(serverHeartbeat.carrier_session_id, 'server-test');
 assert.equal(serverHeartbeat.agent_id, 'narada.test');
 assert.equal(serverHeartbeat.runtime, 'agent-cli');
+const persistedServerEvents = readPersistedSessionEvents({ session: 'server-test', naradaDir: join(serverSite, '.narada') });
+assert.deepEqual(
+  persistedServerEvents.filter((entry) => [
+    'session_status_requested',
+    'session_recovery_requested',
+    'preflight_recovery_requested',
+  ].includes(entry.event)).map((entry) => ({ event: entry.event, request_id: entry.request_id, method: entry.method })),
+  [
+    { event: 'session_status_requested', request_id: 'status-1', method: 'session.status' },
+    { event: 'session_recovery_requested', request_id: 'recovery-1', method: 'session.recovery' },
+    { event: 'preflight_recovery_requested', request_id: 'preflight-1', method: 'preflight.recovery' },
+  ],
+);
 assert.equal(stdout.includes('[agent-cli]'), false);
 assert.equal(stderr.includes('Fatal error'), false);
 rmSync(serverSite, { recursive: true, force: true });

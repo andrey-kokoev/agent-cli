@@ -3049,6 +3049,14 @@ function recordCarrierDiagnostic(level, message, extra = {}) {
   }));
 }
 
+function recordServerWorkflowRequest(event, { requestId = null, method = null, transport = 'jsonl_stdio' } = {}) {
+  appendSession(SESSION_PATH, sessionEventEntry(event, {
+    request_id: requestId,
+    method,
+    transport,
+  }));
+}
+
 function recordMcpStartupFailures(mcpServers, { emit = null } = {}) {
   const failures = getMcpStartupFailures(mcpServers);
   for (const failure of failures) {
@@ -5813,12 +5821,14 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
   if (request?.method === 'session.recovery') {
     const requestId = request?.id ?? null;
     noteSessionActivity(state, 'session_recovery_requested');
+    recordServerWorkflowRequest('session_recovery_requested', { requestId, method: 'session.recovery' });
     emit('session_recovery', serverRecovery({ requestId, state, mcpServers, mcpPreflightArtifact }));
     return;
   }
   if (request?.method === 'preflight.recovery') {
     const requestId = request?.id ?? null;
     noteSessionActivity(state, 'preflight_recovery_requested');
+    recordServerWorkflowRequest('preflight_recovery_requested', { requestId, method: 'preflight.recovery' });
     emit('preflight_recovery', serverPreflightRecovery({ requestId, mcpPreflightArtifact }));
     return;
   }
@@ -5843,6 +5853,7 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
     }
     if (controlRequest.method_kind === 'session_status') {
       noteSessionActivity(state, 'session_status_requested');
+      recordServerWorkflowRequest('session_status_requested', { requestId, method: request?.method ?? 'session.status' });
       emit('session_status', serverStatus({ requestId, state, allTools, mcpServers }));
       return;
     }
