@@ -1355,6 +1355,10 @@ assert.equal(sessionReadRun.stdout.includes('Recovery kind'), true);
 assert.equal(sessionReadRun.stdout.includes('diagnostic review'), true);
 assert.equal(sessionReadRun.stdout.includes('Recovery primary'), true);
 assert.equal(sessionReadRun.stdout.includes('Recovery followup'), true);
+assert.equal(sessionReadRun.stdout.includes('Event count'), true);
+assert.equal(sessionReadRun.stdout.includes('Event kinds'), true);
+assert.equal(sessionReadRun.stdout.includes('Issue codes'), true);
+assert.equal(sessionReadRun.stdout.includes('Terminal states'), true);
 assert.equal(sessionReadRun.stdout.includes('review runtime diagnostics'), true);
 assert.equal(sessionReadRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20'), true);
 assert.equal(sessionReadRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-recovery'), true);
@@ -1423,6 +1427,25 @@ assert.equal(sessionReadJson.record.session, 'healthy-session');
 assert.equal(sessionReadJson.recovery.recovery_kind, 'no_recovery');
 assert.equal(sessionReadJson.recovery.recovery_primary_command, 'narada-agent-cli --identity narada.test --session healthy-session --session-read');
 assert.equal(sessionReadJson.recovery.recovery_followup_command, null);
+assert.equal(sessionReadJson.event_summary.event_count, 3);
+assert.deepEqual(sessionReadJson.event_summary.event_kind_counts, {
+  input_completed: 1,
+  mcp_preflight_artifact_linked: 1,
+  session_closed: 1,
+});
+assert.equal(sessionReadJson.event_summary.event_kind_summary, '1 (input_completed), 1 (mcp_preflight_artifact_linked), 1 (session_closed)');
+assert.deepEqual(sessionReadJson.event_summary.issue_code_counts, {});
+assert.equal(sessionReadJson.event_summary.issue_code_summary, '0');
+assert.deepEqual(sessionReadJson.event_summary.terminal_state_counts, { completed: 1, closed: 1 });
+assert.equal(sessionReadJson.event_summary.terminal_state_summary, '1 (closed), 1 (completed)');
+assert.deepEqual(sessionReadJson.event_summary.recommended_action_counts, { review_session_summary: 1 });
+assert.equal(sessionReadJson.event_summary.recommended_action_summary, '1 (review_session_summary)');
+assert.deepEqual(sessionReadJson.event_summary.recommended_command_counts, {
+  'narada-agent-cli --identity narada.test --session healthy-session --session-read': 1,
+});
+assert.equal(sessionReadJson.event_summary.recommended_command_summary, '1 (narada-agent-cli --identity narada.test --session healthy-session --session-read)');
+assert.equal(sessionReadJson.event_summary.groups.event_kind.session_closed[0].session, 'healthy-session');
+assert.equal(sessionReadJson.event_summary.workflow_groups.review_session_summary.display, 'review session summary');
 assert.equal(sessionReadJson.record.operational_posture, 'healthy');
 assert.equal(sessionReadJson.record.last_lifecycle_state, 'closed');
 assert.equal(sessionReadJson.record.request_posture, 'clean');
