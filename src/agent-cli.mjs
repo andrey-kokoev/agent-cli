@@ -1280,7 +1280,16 @@ async function runSessionInventoryEvents({ siteRoot = SITE_ROOT, naradaDir = NAR
       issue_code_summary: inventoryEventSummary.issue_code_summary,
       terminal_state_counts: inventoryEventSummary.terminal_state_counts,
       terminal_state_summary: inventoryEventSummary.terminal_state_summary,
+      recommended_action_counts: inventoryEventSummary.recommended_action_counts,
+      recommended_action_summary: inventoryEventSummary.recommended_action_summary,
+      recommended_command_counts: inventoryEventSummary.recommended_command_counts,
+      recommended_command_summary: inventoryEventSummary.recommended_command_summary,
+      recovery_primary_counts: inventoryEventSummary.recovery_primary_counts,
+      recovery_primary_summary: inventoryEventSummary.recovery_primary_summary,
+      recovery_followup_counts: inventoryEventSummary.recovery_followup_counts,
+      recovery_followup_summary: inventoryEventSummary.recovery_followup_summary,
       groups: inventoryEventSummary.groups,
+      workflow_groups: inventoryEventSummary.workflow_groups,
       sessions: inventoryEventSummary.sessions,
       recent_events: inventoryEventSummary.recent_events,
     }, null, 2)}\n`);
@@ -1295,6 +1304,10 @@ async function runSessionInventoryEvents({ siteRoot = SITE_ROOT, naradaDir = NAR
     'Event kinds': inventoryEventSummary.event_kind_summary,
     'Issue codes': inventoryEventSummary.issue_code_summary,
     'Terminal states': inventoryEventSummary.terminal_state_summary,
+    'Recommended actions': inventoryEventSummary.recommended_action_summary,
+    'Recommended commands': inventoryEventSummary.recommended_command_summary,
+    'Recovery primary commands': inventoryEventSummary.recovery_primary_summary,
+    'Recovery followups': inventoryEventSummary.recovery_followup_summary,
   };
   if (inventoryEventSummary.event_count === 0) {
     summary.Status = 'no persisted carrier session events';
@@ -1319,6 +1332,7 @@ async function runSessionInventoryEvents({ siteRoot = SITE_ROOT, naradaDir = NAR
   if (inventoryEventSummary.recent_events.length > 0) {
     blocks.push(['Recent events:', ...inventoryEventSummary.recent_events.map((entry) => formatPersistedSessionInventoryEventLine(entry))].join('\n'));
   }
+  blocks.push(renderSessionInventoryWorkflowGroups(inventoryEventSummary.workflow_groups, { heading: 'Event action groups' }));
   blocks.push(renderSessionInventoryEventGroups(inventoryEventSummary.groups));
   console.log(blocks.join('\n\n'));
   return 0;
@@ -1634,11 +1648,16 @@ function summarizeSessionInventoryEvents(inventory = [], { naradaDir = NARADA_DI
       recommended_action: item?.recommended_action,
       recommended_action_display: item?.recommended_action_display,
       recommended_command: item?.recommended_command ?? null,
+      recovery_kind: item?.recovery_kind ?? null,
+      recovery_kind_display: item?.recovery_kind_display ?? null,
+      recovery_primary_command: item?.recovery_primary_command ?? null,
+      recovery_followup_command: item?.recovery_followup_command ?? null,
       handoffs: item?.handoffs ?? buildPersistedSessionHandoffs({ session, identity: item?.agent_id ?? IDENTITY, eventCount: recentCount }),
     });
   }
   sessions.sort((left, right) => right.event_count - left.event_count || String(right.last_event_at ?? '').localeCompare(String(left.last_event_at ?? '')) || left.session.localeCompare(right.session));
   recentEvents.sort((left, right) => String(right.timestamp ?? '').localeCompare(String(left.timestamp ?? '')) || left.session.localeCompare(right.session) || left.event_kind.localeCompare(right.event_kind));
+  const workflowGroups = summarizeActionWorkflowGroups(sessions);
   return {
     event_filter: normalizedEventFilter,
     event_count: recentEvents.length,
@@ -1648,7 +1667,16 @@ function summarizeSessionInventoryEvents(inventory = [], { naradaDir = NARADA_DI
     issue_code_summary: formatInventoryCounts(issueCodeCounts),
     terminal_state_counts: terminalStateCounts,
     terminal_state_summary: formatInventoryCounts(terminalStateCounts),
+    recommended_action_counts: workflowGroups ? Object.fromEntries(Object.entries(workflowGroups).map(([key, group]) => [key, Array.isArray(group?.sessions) ? group.sessions.length : 0])) : {},
+    recommended_action_summary: formatInventoryCounts(workflowGroups ? Object.fromEntries(Object.entries(workflowGroups).map(([key, group]) => [key, Array.isArray(group?.sessions) ? group.sessions.length : 0])) : {}),
+    recommended_command_counts: sessions.reduce((counts, item) => (incrementInventoryCounter(counts, item?.recommended_command ?? 'none'), counts), {}),
+    recommended_command_summary: formatInventoryCounts(sessions.reduce((counts, item) => (incrementInventoryCounter(counts, item?.recommended_command ?? 'none'), counts), {})),
+    recovery_primary_counts: sessions.reduce((counts, item) => (incrementInventoryCounter(counts, item?.recovery_primary_command ?? 'none'), counts), {}),
+    recovery_primary_summary: formatInventoryCounts(sessions.reduce((counts, item) => (incrementInventoryCounter(counts, item?.recovery_primary_command ?? 'none'), counts), {})),
+    recovery_followup_counts: sessions.reduce((counts, item) => (incrementInventoryCounter(counts, item?.recovery_followup_command ?? 'none'), counts), {}),
+    recovery_followup_summary: formatInventoryCounts(sessions.reduce((counts, item) => (incrementInventoryCounter(counts, item?.recovery_followup_command ?? 'none'), counts), {})),
     groups: summarizeSessionInventoryEventGroups(recentEvents),
+    workflow_groups: workflowGroups,
     sessions,
     recent_events: recentEvents.slice(0, recentCount),
   };
