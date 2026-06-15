@@ -103,6 +103,8 @@ const MCP_PREFLIGHT_FILTER_VALUE = normalizeMcpPreflightFilterValue(options.mcpP
 const MCP_PREFLIGHT_DIAGNOSTICS_FILTER = normalizeMcpPreflightDiagnosticsFilter(options.mcpPreflightDiagnosticsFilter);
 const SESSION_INVENTORY_MODE = options.sessionInventory === true;
 const SESSION_INVENTORY_JSON_MODE = options.sessionInventoryJson === true;
+const SESSION_INVENTORY_HOST_COMMANDS_MODE = options.sessionInventoryHostCommands === true;
+const SESSION_INVENTORY_HOST_COMMANDS_JSON_MODE = options.sessionInventoryHostCommandsJson === true;
 const SESSION_INVENTORY_ACTIONS_MODE = options.sessionInventoryActions === true;
 const SESSION_INVENTORY_ACTIONS_JSON_MODE = options.sessionInventoryActionsJson === true;
 const SESSION_INVENTORY_RECOVERY_MODE = options.sessionInventoryRecovery === true;
@@ -207,6 +209,56 @@ function buildChildProcessEnv(extra = {}, baseEnv = process.env) {
     if (baseEnv[key] !== undefined) env[key] = baseEnv[key];
   }
   return { ...env, ...extra, FORCE_COLOR: '0', NO_COLOR: '1' };
+}
+
+function summarizeSessionInventoryHostCommands(inventory = []) {
+  const hostCommandSessions = inventory.filter((item) => Number(item?.host_command_event_count ?? 0) > 0);
+  const hostCommandEventCounts = {};
+  const hostCommandTerminalStateCounts = {};
+  let outputRefCount = 0;
+  for (const item of hostCommandSessions) {
+    mergeInventoryCounts(hostCommandEventCounts, item?.host_command_event_counts ?? null);
+    mergeInventoryCounts(hostCommandTerminalStateCounts, item?.host_command_terminal_state_counts ?? null);
+    if (item?.last_host_command_output_ref) outputRefCount += 1;
+  }
+  return {
+    host_command_session_count: hostCommandSessions.length,
+    host_command_event_counts: hostCommandEventCounts,
+    host_command_event_summary: formatInventoryCounts(hostCommandEventCounts),
+    host_command_terminal_state_counts: hostCommandTerminalStateCounts,
+    host_command_terminal_state_summary: formatInventoryCounts(hostCommandTerminalStateCounts),
+    host_command_output_ref_count: outputRefCount,
+    host_command_output_ref_summary: `${outputRefCount} with persisted output`,
+    groups: {
+      terminal_state: summarizeSessionInventoryGroupBy(hostCommandSessions, 'last_host_command_terminal_state', 'last_host_command_terminal_state'),
+      recommended_action: summarizeSessionInventoryGroupBy(hostCommandSessions, 'recommended_action', 'recommended_action_display'),
+    },
+    workflow_groups: summarizeActionWorkflowGroups(hostCommandSessions),
+    sessions: hostCommandSessions
+      .slice()
+      .sort((left, right) => Number(right?.host_command_event_count ?? 0) - Number(left?.host_command_event_count ?? 0)
+        || String(right?.last_host_command_at ?? '').localeCompare(String(left?.last_host_command_at ?? ''))
+        || String(left?.session ?? '').localeCompare(String(right?.session ?? ''))),
+  };
+}
+
+function renderSessionInventoryHostCommands(sessions = []) {
+  return sessions.map((item) => formatKeyValueRows({
+    Session: item.session,
+    Heartbeat: item.heartbeat_display,
+    'Host command events': item.host_command_event_summary,
+    'Host command states': item.host_command_terminal_state_summary,
+    'Last host command': item.last_host_command_summary ?? 'none',
+    'Last host command state': item.last_host_command_terminal_state ?? 'none',
+    'Last host command at': item.last_host_command_at ?? 'unknown',
+    'Host command output': item.last_host_command_output_ref ?? 'none',
+    'Host command output review': item?.handoffs?.host_command_output_read ?? 'none',
+    'Recommended action': item.recommended_action_display,
+    'Recommended command': item.recommended_command ?? 'none',
+    'Session read': item?.handoffs?.session_read ?? 'none',
+    'Session recovery': item?.handoffs?.session_recovery ?? 'none',
+    'Session diagnostics': item?.handoffs?.session_events_diagnostics ?? 'none',
+  }));
 }
 
 function formatPersistedSessionEventLine(entry) {
@@ -1112,11 +1164,11 @@ const NARADA_DIR = basename(SITE_ROOT) === '.narada' ? SITE_ROOT : join(SITE_ROO
 const SESSION_DIR = SERVER_MODE
   ? join(NARADA_DIR, 'crew', 'nars-sessions', SESSION)
   : (existsSync(PC_RUNTIME) ? join(PC_RUNTIME, 'agent-sessions') : resolve(SITE_ROOT, '.ai', 'runtime', 'agent-sessions'));
-if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !HOST_COMMAND_OUTPUT_READ_MODE && !HOST_COMMAND_OUTPUT_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_HOST_COMMANDS_MODE && !SESSION_INVENTORY_HOST_COMMANDS_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !HOST_COMMAND_OUTPUT_READ_MODE && !HOST_COMMAND_OUTPUT_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
 const SESSION_PATH = SERVER_MODE ? join(SESSION_DIR, 'session.jsonl') : join(SESSION_DIR, `${SESSION}.jsonl`);
 const EVENTS_PATH = join(SESSION_DIR, 'events.jsonl');
 const CARRIER_SESSION_DIR = join(NARADA_DIR, 'crew', 'nars-sessions', SESSION);
-if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !HOST_COMMAND_OUTPUT_READ_MODE && !HOST_COMMAND_OUTPUT_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_HOST_COMMANDS_MODE && !SESSION_INVENTORY_HOST_COMMANDS_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !HOST_COMMAND_OUTPUT_READ_MODE && !HOST_COMMAND_OUTPUT_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
 const HEARTBEAT_PATH = join(CARRIER_SESSION_DIR, 'heartbeat.json');
 const MCP_PREFLIGHT_ARTIFACT_DIR = join(NARADA_DIR, 'runtime', 'agent-cli', 'mcp-preflight');
 const HEARTBEAT_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_HEARTBEAT_ENABLE, true);
@@ -1186,6 +1238,14 @@ async function main() {
   }
   if (SESSION_INVENTORY_JSON_MODE) {
     process.exitCode = await runSessionInventory({ jsonOutput: true, filterKey: SESSION_INVENTORY_FILTER_KEY, filterValue: SESSION_INVENTORY_FILTER_VALUE });
+    return;
+  }
+  if (SESSION_INVENTORY_HOST_COMMANDS_MODE) {
+    process.exitCode = await runSessionInventoryHostCommands({ filterKey: SESSION_INVENTORY_FILTER_KEY, filterValue: SESSION_INVENTORY_FILTER_VALUE });
+    return;
+  }
+  if (SESSION_INVENTORY_HOST_COMMANDS_JSON_MODE) {
+    process.exitCode = await runSessionInventoryHostCommands({ jsonOutput: true, filterKey: SESSION_INVENTORY_FILTER_KEY, filterValue: SESSION_INVENTORY_FILTER_VALUE });
     return;
   }
   if (SESSION_INVENTORY_ACTIONS_MODE) {
@@ -1957,6 +2017,51 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
   }
   blocks.push(renderSessionInventoryWorkflowGroups(actionQueue.workflow_groups, { heading: 'Inventory action groups' }));
   blocks.push(renderSessionInventoryGroups(inventoryGroups));
+  console.log(blocks.join('\n\n'));
+  return 0;
+}
+
+async function runSessionInventoryHostCommands({ siteRoot = SITE_ROOT, naradaDir = NARADA_DIR, jsonOutput = false, filterKey = null, filterValue = null } = {}) {
+  const inventory = readSessionInventory({ siteRoot, naradaDir });
+  const normalizedFilterKey = normalizeSessionInventoryFilterKey(filterKey);
+  const normalizedFilterValue = normalizeSessionInventoryFilterValue(filterValue);
+  const filteredInventory = filterSessionInventory(inventory, { filterKey: normalizedFilterKey, filterValue: normalizedFilterValue });
+  const hostCommandQueue = summarizeSessionInventoryHostCommands(filteredInventory);
+  const filterLabel = normalizedFilterKey && normalizedFilterValue ? `${normalizedFilterKey}:${normalizedFilterValue}` : 'all';
+  if (jsonOutput) {
+    console.log(`${JSON.stringify({
+      schema: 'narada.agent_cli.session_inventory_host_commands.v1',
+      site_root: siteRoot,
+      inventory_filter: filterLabel,
+      carrier_session_count: hostCommandQueue.host_command_session_count,
+      total_carrier_session_count: inventory.length,
+      host_command_event_counts: hostCommandQueue.host_command_event_counts,
+      host_command_event_summary: hostCommandQueue.host_command_event_summary,
+      host_command_terminal_state_counts: hostCommandQueue.host_command_terminal_state_counts,
+      host_command_terminal_state_summary: hostCommandQueue.host_command_terminal_state_summary,
+      host_command_output_ref_count: hostCommandQueue.host_command_output_ref_count,
+      host_command_output_ref_summary: hostCommandQueue.host_command_output_ref_summary,
+      groups: hostCommandQueue.groups,
+      workflow_groups: hostCommandQueue.workflow_groups,
+      sessions: hostCommandQueue.sessions,
+    }, null, 2)}\n`);
+    return 0;
+  }
+  const summary = {
+    SiteRoot: siteRoot,
+    ...(filterLabel !== 'all' ? { 'Inventory filter': filterLabel, 'Matched sessions': hostCommandQueue.host_command_session_count, 'Total sessions': inventory.length } : { 'Carrier sessions': hostCommandQueue.host_command_session_count }),
+    'Host command events': hostCommandQueue.host_command_event_summary,
+    'Host command states': hostCommandQueue.host_command_terminal_state_summary,
+    'Persisted outputs': hostCommandQueue.host_command_output_ref_summary,
+  };
+  if (hostCommandQueue.host_command_session_count === 0) {
+    summary.Status = 'no persisted host command activity';
+    console.log(formatKeyValueRows(summary));
+    return 0;
+  }
+  const blocks = [formatKeyValueRows(summary), ...renderSessionInventoryHostCommands(hostCommandQueue.sessions)];
+  blocks.push(renderSessionInventoryWorkflowGroups(hostCommandQueue.workflow_groups, { heading: 'Host command action groups' }));
+  blocks.push(renderSessionInventoryGroups(hostCommandQueue.groups));
   console.log(blocks.join('\n\n'));
   return 0;
 }
@@ -7896,6 +8001,10 @@ function parseArgs(argv) {
       opts.sessionInventory = true;
     } else if (argv[i] === '--session-inventory-json') {
       opts.sessionInventoryJson = true;
+    } else if (argv[i] === '--session-inventory-host-commands') {
+      opts.sessionInventoryHostCommands = true;
+    } else if (argv[i] === '--session-inventory-host-commands-json') {
+      opts.sessionInventoryHostCommandsJson = true;
     } else if (argv[i] === '--session-inventory-actions') {
       opts.sessionInventoryActions = true;
     } else if (argv[i] === '--session-inventory-actions-json') {

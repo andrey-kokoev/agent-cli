@@ -585,6 +585,8 @@ assert.deepEqual(parseArgs(['--mcp-preflight-filter', 'mcp_state', '--mcp-prefli
 assert.deepEqual(parseArgs(['--mcp-preflight-diagnostics-filter', 'runtime']), { mcpPreflightDiagnosticsFilter: 'runtime' });
 assert.deepEqual(parseArgs(['--session-inventory']), { sessionInventory: true });
 assert.deepEqual(parseArgs(['--session-inventory-json']), { sessionInventoryJson: true });
+assert.deepEqual(parseArgs(['--session-inventory-host-commands']), { sessionInventoryHostCommands: true });
+assert.deepEqual(parseArgs(['--session-inventory-host-commands-json']), { sessionInventoryHostCommandsJson: true });
 assert.deepEqual(parseArgs(['--session-inventory-actions']), { sessionInventoryActions: true });
 assert.deepEqual(parseArgs(['--session-inventory-actions-json']), { sessionInventoryActionsJson: true });
 assert.deepEqual(parseArgs(['--session-inventory-recovery']), { sessionInventoryRecovery: true });
@@ -593,6 +595,9 @@ assert.deepEqual(parseArgs(['--session-inventory-events']), { sessionInventoryEv
 assert.deepEqual(parseArgs(['--session-inventory-events-json']), { sessionInventoryEventsJson: true });
 assert.deepEqual(parseArgs(['--session-recovery']), { sessionRecovery: true });
 assert.deepEqual(parseArgs(['--session-recovery-json']), { sessionRecoveryJson: true });
+assert.deepEqual(parseArgs(['--host-command-output-read']), { hostCommandOutputRead: true });
+assert.deepEqual(parseArgs(['--host-command-output-read-json']), { hostCommandOutputReadJson: true });
+assert.deepEqual(parseArgs(['--host-command-output-ref', 'mcp_payload:carrier_host_command_output:test@v1']), { hostCommandOutputRef: 'mcp_payload:carrier_host_command_output:test@v1' });
 assert.equal(parseColorEnv('off', true), false);
 const heartbeatRoot = mkdtempSync(join(tmpdir(), 'narada-agent-cli-heartbeat-'));
 const heartbeatSession = 'carrier_session_heartbeat_test';
@@ -826,6 +831,7 @@ assert.equal(sessionInventoryRun.stdout.includes('Request posture'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Request outcomes'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Request issues'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Host command states'), true);
+assert.equal(sessionInventoryRun.stdout.includes('Host command output review'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Recommended actions'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Recommended commands'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Recovery primary commands'), true);
@@ -1669,6 +1675,30 @@ assert.equal(sessionEventsJson.preflight.operational_state, 'healthy');
 assert.equal(sessionEventsJson.preflight.recommended_action, 'start_session');
 assert.equal(sessionEventsJson.preflight.handoffs.mcp_preflight_diagnostics, 'narada-agent-cli --identity narada.test --session healthy-session --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all');
 assert.equal(sessionEventsJson.record.last_lifecycle_state, 'closed');
+const sessionInventoryHostCommandsJsonRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-inventory-host-commands-json',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'inventory-scan-test',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(sessionInventoryHostCommandsJsonRun.status, 0);
+const sessionInventoryHostCommandsJson = JSON.parse(sessionInventoryHostCommandsJsonRun.stdout);
+assert.equal(sessionInventoryHostCommandsJson.schema, 'narada.agent_cli.session_inventory_host_commands.v1');
+assert.equal(sessionInventoryHostCommandsJson.site_root, inventoryRoot);
+assert.equal(sessionInventoryHostCommandsJson.carrier_session_count, 1);
+assert.equal(sessionInventoryHostCommandsJson.total_carrier_session_count, 2);
+assert.deepEqual(sessionInventoryHostCommandsJson.host_command_terminal_state_counts, { completed: 1 });
+assert.equal(sessionInventoryHostCommandsJson.host_command_terminal_state_summary, '1 (completed)');
+assert.equal(sessionInventoryHostCommandsJson.host_command_output_ref_count, 1);
+assert.equal(sessionInventoryHostCommandsJson.sessions[0].session, 'healthy-session');
+assert.equal(sessionInventoryHostCommandsJson.sessions[0].last_host_command_summary, 'git status');
+assert.equal(sessionInventoryHostCommandsJson.sessions[0].handoffs.host_command_output_read, 'narada-agent-cli --identity narada.test --session healthy-session --host-command-output-read --host-command-output-ref mcp_payload:carrier_host_command_output:host_command_inventory_1@v1');
 const hostCommandOutputReadJsonRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
   '--host-command-output-read-json',
@@ -2383,6 +2413,8 @@ assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-co
 assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_MODEL"), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventory'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventoryJson'), true);
+assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventoryHostCommands'), true);
+assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventoryHostCommandsJson'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventoryEvents'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventoryEventsJson'), true);
 assert.equal(windowsWrapperTemplate.includes("[ValidateSet('operational_posture', 'request_posture', 'mcp_state', 'heartbeat_status', 'recommended_action', 'recovery_kind')]"), true);
@@ -2417,6 +2449,8 @@ assert.equal(windowsWrapperTemplate.includes('[switch]$McpPreflightDiagnostics')
 assert.equal(windowsWrapperTemplate.includes('[switch]$McpPreflightDiagnosticsJson'), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-json'"), true);
+assert.equal(windowsWrapperTemplate.includes("'--session-inventory-host-commands'"), true);
+assert.equal(windowsWrapperTemplate.includes("'--session-inventory-host-commands-json'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-actions'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-actions-json'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-recovery'"), true);

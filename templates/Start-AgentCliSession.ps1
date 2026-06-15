@@ -20,6 +20,10 @@ param(
 
     [switch]$SessionInventoryJson,
 
+    [switch]$SessionInventoryHostCommands,
+
+    [switch]$SessionInventoryHostCommandsJson,
+
     [switch]$SessionInventoryActions,
 
     [switch]$SessionInventoryActionsJson,
@@ -306,6 +310,27 @@ if ($SessionInventoryJson) {
         $inventoryJsonArgs += @('--session-inventory-filter', $SessionInventoryFilter, '--session-inventory-match', $SessionInventoryMatch)
     }
     & node $AgentCliPath @inventoryJsonArgs
+    exit $LASTEXITCODE
+}
+
+if ($SessionInventoryHostCommands) {
+    Write-Host "Session host commands..." -ForegroundColor Cyan
+    Set-Location $WorkDir
+    $inventoryHostCommandArgs = @('--identity', $IdentityName, '--session', $SessionName, '--session-inventory-host-commands')
+    if ($SessionInventoryFilter -and $SessionInventoryMatch) {
+        $inventoryHostCommandArgs += @('--session-inventory-filter', $SessionInventoryFilter, '--session-inventory-match', $SessionInventoryMatch)
+    }
+    & node $AgentCliPath @inventoryHostCommandArgs
+    exit $LASTEXITCODE
+}
+
+if ($SessionInventoryHostCommandsJson) {
+    Set-Location $WorkDir
+    $inventoryHostCommandJsonArgs = @('--identity', $IdentityName, '--session', $SessionName, '--session-inventory-host-commands-json')
+    if ($SessionInventoryFilter -and $SessionInventoryMatch) {
+        $inventoryHostCommandJsonArgs += @('--session-inventory-filter', $SessionInventoryFilter, '--session-inventory-match', $SessionInventoryMatch)
+    }
+    & node $AgentCliPath @inventoryHostCommandJsonArgs
     exit $LASTEXITCODE
 }
 
