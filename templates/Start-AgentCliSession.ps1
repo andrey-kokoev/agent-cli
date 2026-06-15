@@ -79,7 +79,7 @@ param(
 
     [switch]$SessionEventsJson,
 
-    [ValidateSet('all', 'lifecycle', 'issues', 'diagnostics')]
+    [ValidateSet('all', 'lifecycle', 'issues', 'diagnostics', 'operations')]
     [string]$SessionEventsFilter = 'all',
 
     [int]$SessionEventsCount = 20,

@@ -1570,6 +1570,13 @@ assert.equal(persistedEvents.at(-1).event_kind, 'input_completed');
 assert.equal(filterPersistedSessionEvents(persistedEvents, { eventFilter: 'lifecycle' }).length, 1);
 assert.equal(filterPersistedSessionEvents(persistedEvents, { eventFilter: 'issues' }).length, 4);
 assert.equal(filterPersistedSessionEvents(persistedEvents, { eventFilter: 'diagnostics' }).length, 2);
+const persistedEventsWithOperations = [
+  { event_kind: 'directive_emission_authorized', timestamp: '2026-06-14T12:00:10.000Z', payload: { directive_kind: 'operation_heartbeat', visibility: 'record_only', operation_id: 'op-1' } },
+  { event_kind: 'directive_emission_rule_recorded', timestamp: '2026-06-14T12:00:11.000Z', payload: { directive_kind: 'operation_heartbeat', visibility: 'record_only', operation_id: 'op-1' } },
+  { event_kind: 'directive_emitted', timestamp: '2026-06-14T12:00:12.000Z', payload: { directive_kind: 'operation_heartbeat', visibility: 'record_only', operation_id: 'op-1' } },
+  ...persistedEvents,
+];
+assert.equal(filterPersistedSessionEvents(persistedEventsWithOperations, { eventFilter: 'operations' }).length, 3);
 const sessionEventsRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
   '--session-events',
@@ -2532,7 +2539,7 @@ assert.equal(windowsWrapperTemplate.includes('[switch]$HostCommandOutputReadJson
 assert.equal(windowsWrapperTemplate.includes('[string]$HostCommandOutputRef'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionEvents'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionEventsJson'), true);
-assert.equal(windowsWrapperTemplate.includes("[ValidateSet('all', 'lifecycle', 'issues', 'diagnostics')]"), true);
+assert.equal(windowsWrapperTemplate.includes("[ValidateSet('all', 'lifecycle', 'issues', 'diagnostics', 'operations')]"), true);
 assert.equal(windowsWrapperTemplate.includes('[string]$SessionEventsFilter = \'all\''), true);
 assert.equal(windowsWrapperTemplate.includes('[int]$SessionEventsCount = 20'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$McpPreflightJson'), true);
