@@ -20,6 +20,10 @@ param(
 
     [switch]$SessionInventoryJson,
 
+    [switch]$SessionRead,
+
+    [switch]$SessionReadJson,
+
     [switch]$McpPreflightJson,
 
     [switch]$AutoApprove
@@ -227,6 +231,19 @@ if ($SessionInventory) {
 if ($SessionInventoryJson) {
     Set-Location $WorkDir
     & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-inventory-json'
+    exit $LASTEXITCODE
+}
+
+if ($SessionRead) {
+    Write-Host "Session read..." -ForegroundColor Cyan
+    Set-Location $WorkDir
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-read'
+    exit $LASTEXITCODE
+}
+
+if ($SessionReadJson) {
+    Set-Location $WorkDir
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-read-json'
     exit $LASTEXITCODE
 }
 
