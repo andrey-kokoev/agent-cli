@@ -33,6 +33,7 @@ import {
   createCarrierDirectiveEmitter,
   createInteractiveHeaderRows,
   createMcpPreflightArtifactSnapshot,
+  createSessionActivitySnapshot,
   createInputQueue,
   createMcpStatusSnapshot,
   createOperationHeartbeatDirectiveEmitter,
@@ -814,6 +815,22 @@ assert.deepEqual(createMcpPreflightArtifactSnapshot({
   mcp_preflight_operational_state: 'startup_degraded',
   mcp_preflight_startup_failure_summary: '1 (degraded:mcp_stdout_pollution)',
   mcp_preflight_runtime_fault_summary: '0',
+});
+assert.deepEqual(createSessionActivitySnapshot({
+  startedAt: '2026-06-14T00:00:00.000Z',
+  sessionEventCount: 3,
+  lastEventKind: 'input_completed',
+  lastEventAt: '2026-06-14T00:01:00.000Z',
+  lastTerminalState: 'completed',
+}), {
+  agent_id: 'narada.architect',
+  runtime: 'agent-cli',
+  mode: 'interactive',
+  started_at: '2026-06-14T00:00:00.000Z',
+  session_event_count: 3,
+  last_event_kind: 'input_completed',
+  last_event_at: '2026-06-14T00:01:00.000Z',
+  last_terminal_state: 'completed',
 });
 assert.deepEqual(wrapTerminalLine('alpha beta gamma', 10), ['alpha beta', 'gamma']);
 assert.equal(renderMarkdownForTerminal('- `code`').includes('• '), true);
@@ -2159,9 +2176,17 @@ assert.equal(serverEvents[0].mcp_startup_failure_summary, '0');
 assert.equal(serverEvents[0].mcp_runtime_fault_summary, '0');
 assert.deepEqual(serverEvents[0].mcp_startup_failures, []);
 assert.deepEqual(serverEvents[0].mcp_runtime_faults, []);
+assert.equal(serverEvents[0].agent_id, 'narada.test');
+assert.equal(serverEvents[0].runtime, 'agent-cli');
+assert.equal(serverEvents[0].mode, 'server');
+assert.equal(serverEvents[0].session_event_count, 1);
+assert.equal(serverEvents[0].last_event_kind, 'session_started');
+assert.equal(serverEvents[0].last_terminal_state, null);
 assert.equal(serverEvents.some((event) => event.event === 'error' && event.code === 'invalid_json'), true);
 assert.equal(serverEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-1'), true);
 assert.deepEqual(serverEvents.find((event) => event.event === 'session_status' && event.request_id === 'status-1')?.mcp_tools, []);
+assert.equal(serverEvents.find((event) => event.event === 'session_status' && event.request_id === 'status-1')?.session_event_count >= 2, true);
+assert.equal(serverEvents.find((event) => event.event === 'session_status' && event.request_id === 'status-1')?.last_event_kind, 'session_status_requested');
 assert.equal(serverEvents.at(-1).event, 'session_closed');
 const serverHeartbeat = JSON.parse(readFileSync(join(serverSite, '.narada', 'crew', 'nars-sessions', 'server-test', 'heartbeat.json'), 'utf8'));
 assert.equal(serverHeartbeat.schema, 'narada.carrier_heartbeat.v1');
@@ -2231,6 +2256,8 @@ assert.equal(degradedEvents[0].mcp_startup_failures[0].message, 'MCP server degr
 assert.deepEqual(degradedEvents[0].mcp_startup_failures[0].stdout_pollution, ['startup banner']);
 assert.equal(degradedEvents[0].mcp_runtime_fault_summary, '0');
 assert.deepEqual(degradedEvents[0].mcp_runtime_faults, []);
+assert.equal(degradedEvents[0].session_event_count, 1);
+assert.equal(degradedEvents[0].last_event_kind, 'session_started');
 assert.equal(degradedEvents.some((event) => event.event === 'carrier_diagnostic_recorded' && event.server_name === 'degraded' && event.diagnostic_code === 'mcp_stdout_pollution'), true);
 assert.equal(degradedEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-degraded-1' && event.mcp_startup_failure_count === 1 && event.mcp_startup_failure_summary === '1 (degraded:mcp_stdout_pollution)'), true);
 const degradedSessionEntries = readFileSync(join(degradedServerSite, '.narada', 'crew', 'nars-sessions', 'degraded-server-test', 'session.jsonl'), 'utf8')

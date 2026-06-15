@@ -255,6 +255,27 @@ function createMcpStatusSnapshot(mcpServers) {
   };
 }
 
+function noteSessionActivity(state, eventKind, occurredAt = new Date().toISOString(), terminalState = null) {
+  if (!state) return;
+  state.sessionEventCount = (state.sessionEventCount ?? 0) + 1;
+  state.lastEventKind = eventKind;
+  state.lastEventAt = occurredAt;
+  if (terminalState) state.lastTerminalState = terminalState;
+}
+
+function createSessionActivitySnapshot(state = {}) {
+  return {
+    agent_id: IDENTITY,
+    runtime: 'agent-cli',
+    mode: SERVER_MODE ? 'server' : 'interactive',
+    started_at: state.startedAt ?? null,
+    session_event_count: state.sessionEventCount ?? 0,
+    last_event_kind: state.lastEventKind ?? null,
+    last_event_at: state.lastEventAt ?? null,
+    last_terminal_state: state.lastTerminalState ?? null,
+  };
+}
+
 function createMcpPreflightArtifactSnapshot(preflightArtifact) {
   if (!preflightArtifact) {
     return {
@@ -1789,6 +1810,7 @@ function createInputQueue({ drain, shouldDefer = () => false, onDeferred = null 
     enqueue: async (event, options = {}) => {
       const normalized = normalizeInputEvent(event);
       pending.push(normalized);
+      noteSessionActivity(options.state, 'input_event_queued', normalized.created_at ?? normalized.received_at ?? new Date().toISOString());
       appendSession(SESSION_PATH, sessionEventEntry('input_event_queued', {
         event_id: normalized.event_id,
         source: normalized.source,
@@ -3416,6 +3438,11 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
     closed: false,
     displaySettings: { ...transcriptDisplaySettings },
     pendingRequests: new Set(),
+    startedAt: new Date().toISOString(),
+    sessionEventCount: 0,
+    lastEventKind: null,
+    lastEventAt: null,
+    lastTerminalState: null,
   };
   let messages = loadSession(SESSION_PATH);
   if (messages.length === 0 && rolePrompt) {
@@ -3425,6 +3452,7 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
     drain: (event) => {
       const requestId = event.request_id ?? event.event_id;
       if (state.closed) {
+        noteSessionActivity(state, 'input_rejected_closed');
         emit('error', {
           request_id: requestId,
           code: 'session_closed',
@@ -3454,6 +3482,8 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
     ...payload,
   });
 
+  noteSessionActivity(state, 'session_started', state.startedAt);
+
   emit('session_started', {
     transport: 'jsonl_stdio',
     site_root: SITE_ROOT,
@@ -3463,6 +3493,7 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
     mcp_server_count: Object.keys(mcpServers).length,
     ...mcpStatus,
     ...mcpPreflightSnapshot,
+    ...createSessionActivitySnapshot(state),
     tool_count: allTools.length,
     session_path: SESSION_PATH,
     events_path: EVENTS_PATH,
@@ -3532,6 +3563,7 @@ async function handleServerRequestLine(line, context) {
   try {
     request = JSON.parse(line);
   } catch (error) {
+    noteSessionActivity(context.state, 'invalid_json');
     context.emit('error', {
       request_id: null,
       code: 'invalid_json',
@@ -3563,6 +3595,7 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
       return;
     }
     if (controlRequest.method_kind === 'session_status') {
+      noteSessionActivity(state, 'session_status_requested');
       emit('session_status', serverStatus({ requestId, state, allTools, mcpServers }));
       return;
     }
@@ -3638,7 +3671,7 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
             ...(request?.params?.reason ?? directive?.reason ?? directive?.content?.reason ? { reason: request?.params?.reason ?? directive?.reason ?? directive?.content?.reason } : {}),
           },
         },
-      }, { transport: 'jsonl_stdio' }), { drain: true });
+      }, { transport: 'jsonl_stdio' }), { drain: true, state });
       return;
     }
     const message = String(request?.params?.message ?? '');
@@ -3655,7 +3688,7 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
       source: 'automation_jsonl',
       authority_ref: request?.params?.authority_ref ?? null,
       request_id: requestId,
-    }, { transport: 'jsonl_stdio' }), { drain: true });
+    }, { transport: 'jsonl_stdio' }), { drain: true, state });
   } catch (error) {
     emit('error', {
       request_id: requestId,
@@ -3692,6 +3725,7 @@ async function runServerInputEvent({ requestId, state, messages, allTools, mcpSe
       displaySettings: state.displaySettings,
     });
     emitVisibleObserverInput({ requestId, input, emit, admission: runtimeAdmission });
+    noteSessionActivity(state, 'observer_input_complete', new Date().toISOString(), result?.terminal_state ?? 'completed_without_provider');
     emit('observer_input_complete', {
       request_id: requestId,
       input_event_id: input.event_id,
@@ -3723,6 +3757,7 @@ async function runServerInputEvent({ requestId, state, messages, allTools, mcpSe
         }),
       });
     }
+    noteSessionActivity(state, 'directive_complete', new Date().toISOString(), 'completed_without_provider');
     emit('directive_complete', {
       request_id: requestId,
       input_event_id: input.event_id,
@@ -3839,6 +3874,7 @@ function serverStatus({ requestId, state, allTools, mcpServers, mcpPreflightArti
   const goal = normalizeCarrierGoalState(sessionSettings.goal);
   const mcpStatus = createMcpStatusSnapshot(mcpServers);
   const mcpPreflightSnapshot = createMcpPreflightArtifactSnapshot(mcpPreflightArtifact);
+  const sessionActivity = createSessionActivitySnapshot(state);
   return {
     request_id: requestId,
     transport: 'jsonl_stdio',
@@ -3854,6 +3890,7 @@ function serverStatus({ requestId, state, allTools, mcpServers, mcpPreflightArti
     mcp_server_count: Object.keys(mcpServers).length,
     ...mcpStatus,
     ...mcpPreflightSnapshot,
+    ...sessionActivity,
     tool_count: allTools.length,
     mcp_tools: mcpToolCatalogEntries(mcpServers),
     observer_muted: (state?.displaySettings ?? transcriptDisplaySettings).observerMuted === true,
@@ -5415,6 +5452,7 @@ export {
   consumeOperatorDirectiveInputText,
   createInteractiveHeaderRows,
   createMcpPreflightArtifactSnapshot,
+  createSessionActivitySnapshot,
   codexExecEventText,
   discoverAndStartMcpServers,
   environmentBlockLength,
