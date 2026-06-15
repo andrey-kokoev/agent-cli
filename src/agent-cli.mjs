@@ -632,6 +632,7 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
     'Terminal states': inventoryRollup.last_terminal_state_summary,
     'Lifecycle states': inventoryRollup.last_lifecycle_state_summary,
     'Lifecycle outcomes': inventoryRollup.lifecycle_outcome_summary,
+    'Request outcomes': inventoryRollup.request_outcome_summary,
     'Request issues': inventoryRollup.request_issue_summary,
   };
   if (inventory.length === 0) {
@@ -717,6 +718,7 @@ function summarizeSessionInventoryRollup(inventory = []) {
   const terminalStateCounts = {};
   const lifecycleStateCounts = {};
   const lifecycleOutcomeCounts = {};
+  const requestOutcomeCounts = {};
   const requestIssueCounts = {};
   for (const item of inventory) {
     incrementInventoryCounter(heartbeatCounts, item?.heartbeat_status ?? 'unknown');
@@ -724,6 +726,7 @@ function summarizeSessionInventoryRollup(inventory = []) {
     incrementInventoryCounter(terminalStateCounts, item?.last_terminal_state ?? 'unknown');
     incrementInventoryCounter(lifecycleStateCounts, item?.last_lifecycle_state ?? 'unknown');
     mergeInventoryCounts(lifecycleOutcomeCounts, item?.lifecycle_state_counts ?? null);
+    mergeInventoryCounts(requestOutcomeCounts, item?.request_outcome_counts ?? null);
     mergeInventoryCounts(requestIssueCounts, item?.request_issue_counts ?? null);
   }
   return {
@@ -737,6 +740,8 @@ function summarizeSessionInventoryRollup(inventory = []) {
     last_lifecycle_state_summary: formatInventoryCounts(lifecycleStateCounts),
     lifecycle_outcome_counts: lifecycleOutcomeCounts,
     lifecycle_outcome_summary: formatInventoryCounts(lifecycleOutcomeCounts),
+    request_outcome_counts: requestOutcomeCounts,
+    request_outcome_summary: formatInventoryCounts(requestOutcomeCounts),
     request_issue_counts: requestIssueCounts,
     request_issue_summary: formatInventoryCounts(requestIssueCounts),
   };
@@ -780,6 +785,28 @@ function classifyPersistedSessionIssueCode(entry) {
   return null;
 }
 
+function classifyPersistedSessionIssueOutcome(entry) {
+  const issueCode = classifyPersistedSessionIssueCode(entry);
+  if (!issueCode) return null;
+  const normalizedCode = String(issueCode);
+  if (normalizedCode === 'session_closed') return 'rejected_closed';
+  if (normalizedCode === 'request_dispatch_failed') return 'dispatch_failure';
+  if (normalizedCode === 'request_failed') return 'request_runtime_failure';
+  if (normalizedCode === 'interactive_loop_error') return 'interactive_runtime_failure';
+  if (
+    normalizedCode === 'invalid_json'
+    || normalizedCode === 'message_required'
+    || normalizedCode === 'directive_message_required'
+    || normalizedCode.startsWith('invalid_')
+    || normalizedCode.startsWith('unsupported_')
+    || normalizedCode.startsWith('unknown_')
+    || normalizedCode.endsWith('_required')
+  ) {
+    return 'invalid_request';
+  }
+  return 'request_error';
+}
+
 function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, naradaDir = NARADA_DIR } = {}) {
   const heartbeat = readJsonFile(join(sessionDir, 'heartbeat.json'));
   const entries = readJsonlFile(join(sessionDir, 'session.jsonl'));
@@ -787,6 +814,7 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
   const runtimeDiagnostics = [];
   let linkedPreflight = null;
   const lifecycleStateCounts = {};
+  const requestOutcomeCounts = {};
   const requestIssueCounts = {};
   let lastEventKind = null;
   let lastEventAt = null;
@@ -809,6 +837,8 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     }
     const issueCode = classifyPersistedSessionIssueCode(entry);
     if (issueCode) incrementInventoryCounter(requestIssueCounts, issueCode);
+    const issueOutcome = classifyPersistedSessionIssueOutcome(entry);
+    if (issueOutcome) incrementInventoryCounter(requestOutcomeCounts, issueOutcome);
     if (entry?.event_kind === 'input_completed' || entry?.event === 'input_event_completed') {
       lastTerminalState = entry?.payload?.terminal_state ?? entry?.terminal_state ?? lastTerminalState;
     }
@@ -853,6 +883,8 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     last_lifecycle_state: lastLifecycleState,
     lifecycle_state_counts: lifecycleStateCounts,
     lifecycle_state_summary: formatInventoryCounts(lifecycleStateCounts),
+    request_outcome_counts: requestOutcomeCounts,
+    request_outcome_summary: formatInventoryCounts(requestOutcomeCounts),
     request_issue_counts: requestIssueCounts,
     request_issue_summary: formatInventoryCounts(requestIssueCounts),
     mcp_operational_state: mcpOperationalState,

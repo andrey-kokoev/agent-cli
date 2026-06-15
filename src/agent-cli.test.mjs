@@ -642,6 +642,27 @@ writeFileSync(join(inventorySessionsDir, 'faulted-session', 'session.jsonl'), [
     message: 'Unexpected token',
   }),
   JSON.stringify({
+    event: 'error',
+    timestamp: '2026-06-14T11:59:41.000Z',
+    request_id: 'closed-1',
+    code: 'session_closed',
+    message: 'Session is closed.',
+  }),
+  JSON.stringify({
+    event: 'error',
+    timestamp: '2026-06-14T11:59:42.000Z',
+    request_id: null,
+    code: 'request_dispatch_failed',
+    message: 'dispatch failed',
+  }),
+  JSON.stringify({
+    event: 'error',
+    timestamp: '2026-06-14T11:59:43.000Z',
+    request_id: 'failed-1',
+    code: 'request_failed',
+    message: 'request failed',
+  }),
+  JSON.stringify({
     event_kind: 'input_completed',
     timestamp: '2026-06-14T11:59:45.000Z',
     payload: { terminal_state: 'failed' },
@@ -679,7 +700,7 @@ assert.equal(inventoryEntries[1].session, 'faulted-session');
 assert.equal(inventoryEntries[1].agent_id, 'narada.test');
 assert.equal(inventoryEntries[1].started_at, '2026-06-14T11:40:00.000Z');
 assert.equal(inventoryEntries[1].mcp_operational_state, 'runtime_faulted');
-assert.equal(inventoryEntries[1].session_event_count, 4);
+assert.equal(inventoryEntries[1].session_event_count, 7);
 assert.equal(inventoryEntries[1].last_event_kind, 'input_completed');
 assert.equal(inventoryEntries[1].last_event_at, '2026-06-14T11:59:45.000Z');
 assert.equal(inventoryEntries[1].last_terminal_state, 'failed');
@@ -688,8 +709,20 @@ assert.equal(inventoryEntries[1].last_lifecycle_at, '2026-06-14T11:59:45.000Z');
 assert.equal(inventoryEntries[1].last_lifecycle_state, 'failed');
 assert.deepEqual(inventoryEntries[1].lifecycle_state_counts, { failed: 1 });
 assert.equal(inventoryEntries[1].lifecycle_state_summary, '1 (failed)');
-assert.deepEqual(inventoryEntries[1].request_issue_counts, { invalid_json: 1 });
-assert.equal(inventoryEntries[1].request_issue_summary, '1 (invalid_json)');
+assert.deepEqual(inventoryEntries[1].request_outcome_counts, {
+  dispatch_failure: 1,
+  invalid_request: 1,
+  rejected_closed: 1,
+  request_runtime_failure: 1,
+});
+assert.equal(inventoryEntries[1].request_outcome_summary, '1 (dispatch_failure), 1 (invalid_request), 1 (rejected_closed), 1 (request_runtime_failure)');
+assert.deepEqual(inventoryEntries[1].request_issue_counts, {
+  invalid_json: 1,
+  request_dispatch_failed: 1,
+  request_failed: 1,
+  session_closed: 1,
+});
+assert.equal(inventoryEntries[1].request_issue_summary, '1 (invalid_json), 1 (request_dispatch_failed), 1 (request_failed), 1 (session_closed)');
 assert.equal(inventoryEntries[1].mcp_startup_failure_summary, '1 (degraded:mcp_stdout_pollution)');
 assert.equal(inventoryEntries[1].mcp_runtime_fault_summary, '1 (runtime:fs_read_file)');
 const sessionInventoryRun = spawnSync(process.execPath, [
@@ -711,6 +744,7 @@ assert.equal(sessionInventoryRun.stdout.includes('MCP states'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Terminal states'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Lifecycle states'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Lifecycle outcomes'), true);
+assert.equal(sessionInventoryRun.stdout.includes('Request outcomes'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Request issues'), true);
 assert.equal(sessionInventoryRun.stdout.includes('healthy-session'), true);
 assert.equal(sessionInventoryRun.stdout.includes('healthy'), true);
@@ -747,8 +781,20 @@ assert.deepEqual(sessionInventoryJson.summary, {
   last_lifecycle_state_summary: '1 (closed), 1 (failed)',
   lifecycle_outcome_counts: { closed: 1, completed: 1, failed: 1 },
   lifecycle_outcome_summary: '1 (closed), 1 (completed), 1 (failed)',
-  request_issue_counts: { invalid_json: 1 },
-  request_issue_summary: '1 (invalid_json)',
+  request_outcome_counts: {
+    dispatch_failure: 1,
+    invalid_request: 1,
+    rejected_closed: 1,
+    request_runtime_failure: 1,
+  },
+  request_outcome_summary: '1 (dispatch_failure), 1 (invalid_request), 1 (rejected_closed), 1 (request_runtime_failure)',
+  request_issue_counts: {
+    invalid_json: 1,
+    request_dispatch_failed: 1,
+    request_failed: 1,
+    session_closed: 1,
+  },
+  request_issue_summary: '1 (invalid_json), 1 (request_dispatch_failed), 1 (request_failed), 1 (session_closed)',
 });
 assert.equal(Array.isArray(sessionInventoryJson.sessions), true);
 assert.equal(sessionInventoryJson.sessions[0].session, 'healthy-session');
