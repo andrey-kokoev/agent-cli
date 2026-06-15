@@ -90,6 +90,8 @@ const MCP_PREFLIGHT_MODE = options.mcpPreflight === true;
 const MCP_PREFLIGHT_JSON_MODE = options.mcpPreflightJson === true;
 const SESSION_INVENTORY_MODE = options.sessionInventory === true;
 const SESSION_INVENTORY_JSON_MODE = options.sessionInventoryJson === true;
+const SESSION_INVENTORY_ACTIONS_MODE = options.sessionInventoryActions === true;
+const SESSION_INVENTORY_ACTIONS_JSON_MODE = options.sessionInventoryActionsJson === true;
 const SESSION_INVENTORY_FILTER_KEY = normalizeSessionInventoryFilterKey(options.sessionInventoryFilter);
 const SESSION_INVENTORY_FILTER_VALUE = normalizeSessionInventoryFilterValue(options.sessionInventoryMatch);
 const SESSION_INVENTORY_EVENTS_MODE = options.sessionInventoryEvents === true;
@@ -277,6 +279,37 @@ function summarizePersistedSessionRecommendedAction({
     recommended_action_display: 'review session summary',
     recommended_command: handoffs.session_read ?? null,
   };
+}
+
+function summarizeSessionInventoryActions(inventory = []) {
+  const recommendedActionCounts = {};
+  const actions = [];
+  for (const item of inventory) {
+    const recommendedAction = item?.recommended_action ?? 'review_session_summary';
+    incrementInventoryCounter(recommendedActionCounts, recommendedAction);
+    actions.push(item);
+  }
+  return {
+    recommended_action_counts: recommendedActionCounts,
+    recommended_action_summary: formatInventoryCounts(recommendedActionCounts),
+    action_count: actions.length,
+    actions,
+  };
+}
+
+function renderSessionInventoryActions(actions = []) {
+  return actions.map((item) => formatKeyValueRows({
+    Session: item.session,
+    Heartbeat: item.heartbeat_display,
+    'Operational posture': item.operational_posture_display,
+    'MCP state': item.mcp_operational_state,
+    'Request posture': item.request_posture_display,
+    'Recommended action': item.recommended_action_display,
+    'Recommended command': item.recommended_command ?? 'none',
+    'Session read': item?.handoffs?.session_read ?? 'none',
+    'Session issues': item?.handoffs?.session_events_issues ?? 'none',
+    'Session diagnostics': item?.handoffs?.session_events_diagnostics ?? 'none',
+  }));
 }
 
 function renderSessionInventoryEventGroups(groups = {}) {
@@ -590,11 +623,11 @@ const NARADA_DIR = basename(SITE_ROOT) === '.narada' ? SITE_ROOT : join(SITE_ROO
 const SESSION_DIR = SERVER_MODE
   ? join(NARADA_DIR, 'crew', 'nars-sessions', SESSION)
   : (existsSync(PC_RUNTIME) ? join(PC_RUNTIME, 'agent-sessions') : resolve(SITE_ROOT, '.ai', 'runtime', 'agent-sessions'));
-if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
 const SESSION_PATH = SERVER_MODE ? join(SESSION_DIR, 'session.jsonl') : join(SESSION_DIR, `${SESSION}.jsonl`);
 const EVENTS_PATH = join(SESSION_DIR, 'events.jsonl');
 const CARRIER_SESSION_DIR = join(NARADA_DIR, 'crew', 'nars-sessions', SESSION);
-if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
 const HEARTBEAT_PATH = join(CARRIER_SESSION_DIR, 'heartbeat.json');
 const MCP_PREFLIGHT_ARTIFACT_DIR = join(NARADA_DIR, 'runtime', 'agent-cli', 'mcp-preflight');
 const HEARTBEAT_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_HEARTBEAT_ENABLE, true);
@@ -624,6 +657,14 @@ async function main() {
   }
   if (SESSION_INVENTORY_JSON_MODE) {
     process.exitCode = await runSessionInventory({ jsonOutput: true, filterKey: SESSION_INVENTORY_FILTER_KEY, filterValue: SESSION_INVENTORY_FILTER_VALUE });
+    return;
+  }
+  if (SESSION_INVENTORY_ACTIONS_MODE) {
+    process.exitCode = await runSessionInventoryActions({ filterKey: SESSION_INVENTORY_FILTER_KEY, filterValue: SESSION_INVENTORY_FILTER_VALUE });
+    return;
+  }
+  if (SESSION_INVENTORY_ACTIONS_JSON_MODE) {
+    process.exitCode = await runSessionInventoryActions({ jsonOutput: true, filterKey: SESSION_INVENTORY_FILTER_KEY, filterValue: SESSION_INVENTORY_FILTER_VALUE });
     return;
   }
   if (SESSION_INVENTORY_EVENTS_MODE) {
@@ -925,6 +966,44 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
     }));
   }
   blocks.push(renderSessionInventoryGroups(inventoryGroups));
+  console.log(blocks.join('\n\n'));
+  return 0;
+}
+
+async function runSessionInventoryActions({ siteRoot = SITE_ROOT, naradaDir = NARADA_DIR, jsonOutput = false, filterKey = null, filterValue = null } = {}) {
+  const inventory = readSessionInventory({ siteRoot, naradaDir });
+  const normalizedFilterKey = normalizeSessionInventoryFilterKey(filterKey);
+  const normalizedFilterValue = normalizeSessionInventoryFilterValue(filterValue);
+  const filteredInventory = filterSessionInventory(inventory, { filterKey: normalizedFilterKey, filterValue: normalizedFilterValue });
+  const actionQueue = summarizeSessionInventoryActions(filteredInventory);
+  const filterLabel = normalizedFilterKey && normalizedFilterValue ? `${normalizedFilterKey}:${normalizedFilterValue}` : 'all';
+  if (jsonOutput) {
+    console.log(`${JSON.stringify({
+      schema: 'narada.agent_cli.session_inventory_actions.v1',
+      site_root: siteRoot,
+      carrier_session_count: filteredInventory.length,
+      total_carrier_session_count: inventory.length,
+      inventory_filter: filterLabel,
+      summary: {
+        recommended_action_counts: actionQueue.recommended_action_counts,
+        recommended_action_summary: actionQueue.recommended_action_summary,
+      },
+      actions: actionQueue.actions,
+    }, null, 2)}\n`);
+    return 0;
+  }
+  const summary = {
+    SiteRoot: siteRoot,
+    ...(filterLabel !== 'all' ? { 'Inventory filter': filterLabel, 'Matched sessions': filteredInventory.length, 'Total sessions': inventory.length } : { 'Carrier sessions': filteredInventory.length }),
+    'Action queue': actionQueue.action_count,
+    'Recommended actions': actionQueue.recommended_action_summary,
+  };
+  if (actionQueue.action_count === 0) {
+    summary.Status = 'no persisted carrier session actions';
+    console.log(formatKeyValueRows(summary));
+    return 0;
+  }
+  const blocks = [formatKeyValueRows(summary), ...renderSessionInventoryActions(actionQueue.actions)];
   console.log(blocks.join('\n\n'));
   return 0;
 }
@@ -6203,6 +6282,10 @@ function parseArgs(argv) {
       opts.sessionInventory = true;
     } else if (argv[i] === '--session-inventory-json') {
       opts.sessionInventoryJson = true;
+    } else if (argv[i] === '--session-inventory-actions') {
+      opts.sessionInventoryActions = true;
+    } else if (argv[i] === '--session-inventory-actions-json') {
+      opts.sessionInventoryActionsJson = true;
     } else if (argv[i] === '--session-inventory-events') {
       opts.sessionInventoryEvents = true;
     } else if (argv[i] === '--session-inventory-events-json') {
@@ -6382,6 +6465,7 @@ export {
   runSessionEventsRead,
   runSessionRead,
   runSessionInventory,
+  runSessionInventoryActions,
   runServerMode,
   readPersistedSessionEvents,
   filterPersistedSessionEvents,
@@ -6401,7 +6485,7 @@ export {
 
 if (isEntrypoint) {
   if (options.help) {
-    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--session-inventory] [--session-inventory-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics>] [--session-inventory-events-count <n>] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics>] [--session-events-count <n>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
+    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--session-inventory] [--session-inventory-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics>] [--session-inventory-events-count <n>] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics>] [--session-events-count <n>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
     console.log('Programmatic input: --message and --message-file are explicit control inputs; do not use raw stdin piping as the control API.');
     console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, ANTHROPIC_API_KEY, NARADA_AI_API_KEY, NARADA_AI_BASE_URL, NARADA_AI_MODEL, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_ENABLE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_DELAY_MS, NARADA_SITE_ROOT`);
     process.exit(0);
