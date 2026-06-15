@@ -75,6 +75,10 @@ param(
 
     [switch]$McpPreflightInventoryJson,
 
+    [switch]$McpPreflightActions,
+
+    [switch]$McpPreflightActionsJson,
+
     [switch]$McpPreflightRecovery,
 
     [switch]$McpPreflightRecoveryJson,
@@ -397,10 +401,6 @@ if ($SessionEventsJson) {
 }
 
 if ($McpPreflightJson) {
-    Set-Location $WorkDir
-    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-json'
-    exit $LASTEXITCODE
-}
 if ($McpPreflightRead) {
     Write-Host "MCP preflight review..." -ForegroundColor Cyan
     Set-Location $WorkDir
@@ -435,6 +435,27 @@ if ($McpPreflightInventoryJson) {
     exit $LASTEXITCODE
 }
 
+if ($McpPreflightActions) {
+    Write-Host "MCP preflight actions..." -ForegroundColor Cyan
+    Set-Location $WorkDir
+    $preflightActionArgs = @('--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-actions')
+    if ($McpPreflightFilter -and $McpPreflightMatch) {
+        $preflightActionArgs += @('--mcp-preflight-filter', $McpPreflightFilter, '--mcp-preflight-match', $McpPreflightMatch)
+    }
+    & node $AgentCliPath @preflightActionArgs
+    exit $LASTEXITCODE
+}
+
+if ($McpPreflightActionsJson) {
+    Set-Location $WorkDir
+    $preflightActionsJsonArgs = @('--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-actions-json')
+    if ($McpPreflightFilter -and $McpPreflightMatch) {
+        $preflightActionsJsonArgs += @('--mcp-preflight-filter', $McpPreflightFilter, '--mcp-preflight-match', $McpPreflightMatch)
+    }
+    & node $AgentCliPath @preflightActionsJsonArgs
+    exit $LASTEXITCODE
+}
+
 if ($McpPreflightRecovery) {
     Write-Host "MCP preflight recovery..." -ForegroundColor Cyan
     Set-Location $WorkDir
@@ -454,8 +475,6 @@ if ($McpPreflightRecoveryJson) {
     }
     & node $AgentCliPath @preflightRecoveryJsonArgs
     exit $LASTEXITCODE
-}
-
 }
 
 $argList = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName)
@@ -501,6 +520,7 @@ if ($preflight) {
     if ($preflight.artifact_path) {
         Write-Host ("  Preflight artifact:  {0}" -f $preflight.artifact_path) -ForegroundColor DarkGray
     }
+}
 }
 if ($preflightExitCode -eq 1) {
     Write-Error "MCP preflight failed."
