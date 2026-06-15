@@ -895,6 +895,9 @@ assert.equal(windowsWrapperTemplate.includes("[ValidateSet('openai-api', 'kimi-a
 assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_API_BASE_URL"), true);
 assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_MODEL"), true);
 assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and -not $env:NARADA_AI_API_KEY -and $env:KIMI_CODE_API_KEY"), true);
+assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventory'), true);
+assert.equal(windowsWrapperTemplate.includes("'--session-inventory'"), true);
+assert.equal(windowsWrapperTemplate.includes('Session inventory...'), true);
 assert.equal(windowsWrapperTemplate.includes("'--mcp-preflight'"), true);
 assert.equal(windowsWrapperTemplate.includes('MCP preflight reported degraded startup posture; continuing interactive attach.'), true);
 for (const [providerId, adapterId] of Object.entries(expectedAdapters)) {

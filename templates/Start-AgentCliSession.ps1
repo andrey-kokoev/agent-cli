@@ -16,6 +16,8 @@ param(
     [ValidateSet('openai-api', 'kimi-api', 'kimi-code-api', 'anthropic-api', 'codex-subscription')]
     [string]$IntelligenceProvider = 'kimi-api',
 
+    [switch]$SessionInventory,
+
     [switch]$AutoApprove
 )
 
@@ -209,6 +211,13 @@ No AI API key configured for provider '$IntelligenceProvider'. Set one of:
   - Config file: $ConfigPath  (add `"api_key`": `"sk-...`" )
 "@
     exit 1
+}
+
+if ($SessionInventory) {
+    Write-Host "Session inventory..." -ForegroundColor Cyan
+    Set-Location $WorkDir
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-inventory'
+    exit $LASTEXITCODE
 }
 
 $argList = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName)
