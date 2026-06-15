@@ -686,18 +686,48 @@ function createRequestPostureSnapshot(state = {}) {
   };
 }
 
-function createOperationalPostureSnapshot({ state = {}, mcpOperationalState = 'unknown' } = {}) {
+function createLiveWorkflowSnapshot({
+  state = {},
+  mcpOperationalState = 'unknown',
+  session = SESSION,
+  identity = IDENTITY,
+} = {}) {
   const requestPosture = createRequestPostureSnapshot(state);
   const operationalPosture = summarizeOperationalPosture({
     mcpOperationalState,
     requestPosture: requestPosture.request_posture,
     lastLifecycleState: state.lastTerminalState ?? null,
   });
+  const handoffs = buildPersistedSessionHandoffs({ session, identity });
+  const recommendedAction = summarizePersistedSessionRecommendedAction({
+    operationalPosture: operationalPosture.operational_posture,
+    mcpOperationalState,
+    requestPosture: requestPosture.request_posture,
+    handoffs,
+  });
+  const recoveryPlan = summarizePersistedSessionRecoveryPlan({
+    operationalPosture: operationalPosture.operational_posture,
+    mcpOperationalState,
+    requestPosture: requestPosture.request_posture,
+    handoffs,
+  });
   return {
     operational_posture: operationalPosture.operational_posture,
     operational_posture_display: operationalPosture.operational_posture_display,
     ...requestPosture,
+    recommended_action: recommendedAction.recommended_action,
+    recommended_action_display: recommendedAction.recommended_action_display,
+    recommended_command: recommendedAction.recommended_command,
+    recovery_kind: recoveryPlan.recovery_kind,
+    recovery_kind_display: recoveryPlan.recovery_kind_display,
+    recovery_primary_command: recoveryPlan.recovery_primary_command,
+    recovery_followup_command: recoveryPlan.recovery_followup_command,
+    handoffs,
   };
+}
+
+function createOperationalPostureSnapshot({ state = {}, mcpOperationalState = 'unknown' } = {}) {
+  return createLiveWorkflowSnapshot({ state, mcpOperationalState });
 }
 
 function createSessionActivitySnapshot(state = {}) {

@@ -1705,6 +1705,17 @@ assert.deepEqual(
     request_posture_display: 'clean',
     operational_posture: 'healthy',
     operational_posture_display: 'healthy',
+    recommended_action: 'review_session_summary',
+    recommended_action_display: 'review session summary',
+    recommended_command: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-read',
+    recovery_kind: 'no_recovery',
+    recovery_kind_display: 'no recovery',
+    recovery_primary_command: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-read',
+    recovery_followup_command: null,
+    handoffs: {
+      session_read: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-read',
+      session_recovery: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-recovery',
+    },
     session_event_count: 1,
     last_event_kind: 'session_started',
     last_event_at: '2026-06-15T14:19:00.000Z',
@@ -1732,6 +1743,17 @@ assert.deepEqual(
     request_posture_display: 'clean',
     operational_posture: 'healthy',
     operational_posture_display: 'healthy',
+    recommended_action: 'review_session_summary',
+    recommended_action_display: 'review session summary',
+    recommended_command: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-read',
+    recovery_kind: 'no_recovery',
+    recovery_kind_display: 'no recovery',
+    recovery_primary_command: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-read',
+    recovery_followup_command: null,
+    handoffs: {
+      session_read: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-read',
+      session_recovery: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-recovery',
+    },
     session_event_count: 1,
     last_event_kind: 'session_started',
     last_event_at: '2026-06-15T14:19:00.000Z',
@@ -1759,6 +1781,17 @@ assert.deepEqual(
     request_posture_display: 'clean',
     operational_posture: 'healthy',
     operational_posture_display: 'healthy',
+    recommended_action: 'review_session_summary',
+    recommended_action_display: 'review session summary',
+    recommended_command: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-read',
+    recovery_kind: 'no_recovery',
+    recovery_kind_display: 'no recovery',
+    recovery_primary_command: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-read',
+    recovery_followup_command: null,
+    handoffs: {
+      session_read: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-read',
+      session_recovery: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-recovery',
+    },
     session_event_count: 3,
     last_event_kind: 'session_closed',
     last_event_at: '2026-06-15T14:19:05.000Z',
@@ -1786,6 +1819,17 @@ assert.deepEqual(
     request_posture_display: 'clean',
     operational_posture: 'healthy',
     operational_posture_display: 'healthy',
+    recommended_action: 'review_session_summary',
+    recommended_action_display: 'review session summary',
+    recommended_command: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-read',
+    recovery_kind: 'no_recovery',
+    recovery_kind_display: 'no recovery',
+    recovery_primary_command: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-read',
+    recovery_followup_command: null,
+    handoffs: {
+      session_read: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-read',
+      session_recovery: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-recovery',
+    },
     session_event_count: 3,
     last_event_kind: 'session_closed',
     last_event_at: '2026-06-15T14:19:05.000Z',
@@ -3682,12 +3726,12 @@ assert.equal(runtimeServerEvents[0].event, 'session_started');
 assert.equal(runtimeServerEvents[0].mcp_operational_state, 'startup_degraded');
 assert.equal(runtimeServerStderr.includes('[agent-runtime-server] MCP state=startup_degraded | startup=1 (degraded:mcp_stdout_pollution)'), true);
 const runtimeServerStderrEvents = runtimeServerStderr.split(/\r?\n/).filter((line) => line.trim().startsWith('{')).map((line) => JSON.parse(line));
-assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'session_status_snapshot' && event.source_event === 'session_started' && event.mcp_operational_state === 'startup_degraded' && event.last_event_kind === 'session_started'), true);
-assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'session_status_snapshot' && event.source_event === 'session_status' && event.request_id === 'status-runtime-wrapper-1' && event.mcp_operational_state === 'startup_degraded'), true);
+assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'session_status_snapshot' && event.source_event === 'session_started' && event.mcp_operational_state === 'startup_degraded' && event.last_event_kind === 'session_started' && event.recommended_action === 'review_startup_diagnostics' && event.recovery_kind === 'startup_diagnostic_review' && event.handoffs?.session_recovery), true);
+assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'session_status_snapshot' && event.source_event === 'session_status' && event.request_id === 'status-runtime-wrapper-1' && event.mcp_operational_state === 'startup_degraded' && event.recommended_action === 'review_startup_diagnostics'), true);
 assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'mcp_startup_status' && event.mcp_operational_state === 'startup_degraded' && event.mcp_startup_failure_summary === '1 (degraded:mcp_stdout_pollution)'), true);
-assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'session_status_snapshot' && event.source_event === 'session_closed' && event.request_id === 'close-runtime-wrapper-1' && event.terminal_state === 'closed' && event.last_event_kind === 'session_closed' && event.last_terminal_state === 'closed'), true);
-assert.equal(runtimeServerEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-runtime-wrapper-1' && event.mcp_startup_failure_summary === '1 (degraded:mcp_stdout_pollution)'), true);
-assert.equal(runtimeServerEvents.some((event) => event.event === 'session_closed' && event.request_id === 'close-runtime-wrapper-1' && event.terminal_state === 'closed' && event.last_event_kind === 'session_closed' && event.last_terminal_state === 'closed'), true);
+assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'session_status_snapshot' && event.source_event === 'session_closed' && event.request_id === 'close-runtime-wrapper-1' && event.terminal_state === 'closed' && event.last_event_kind === 'session_closed' && event.last_terminal_state === 'closed' && event.recommended_action === 'review_startup_diagnostics'), true);
+assert.equal(runtimeServerEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-runtime-wrapper-1' && event.mcp_startup_failure_summary === '1 (degraded:mcp_stdout_pollution)' && event.recommended_action === 'review_startup_diagnostics' && event.recovery_kind === 'startup_diagnostic_review' && event.handoffs?.session_recovery), true);
+assert.equal(runtimeServerEvents.some((event) => event.event === 'session_closed' && event.request_id === 'close-runtime-wrapper-1' && event.terminal_state === 'closed' && event.last_event_kind === 'session_closed' && event.last_terminal_state === 'closed' && event.recommended_action === 'review_startup_diagnostics'), true);
 rmSync(runtimeServerSite, { recursive: true, force: true });
 
 const directiveServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-directive-server-'));
