@@ -1449,6 +1449,9 @@ const sessionEventsRun = spawnSync(process.execPath, [
 });
 assert.equal(sessionEventsRun.status, 0);
 assert.equal(sessionEventsRun.stdout.includes('Event count'), true);
+assert.equal(sessionEventsRun.stdout.includes('Event kinds'), true);
+assert.equal(sessionEventsRun.stdout.includes('Issue codes'), true);
+assert.equal(sessionEventsRun.stdout.includes('Terminal states'), true);
 assert.equal(sessionEventsRun.stdout.includes('Recovery kind'), true);
 assert.equal(sessionEventsRun.stdout.includes('Recovery primary'), true);
 assert.equal(sessionEventsRun.stdout.includes('Recovery followup'), true);
@@ -1478,6 +1481,33 @@ const sessionEventsLifecycleJson = JSON.parse(sessionEventsLifecycleJsonRun.stdo
 assert.equal(sessionEventsLifecycleJson.event_filter, 'lifecycle');
 assert.equal(sessionEventsLifecycleJson.event_count, 1);
 assert.equal(sessionEventsLifecycleJson.total_event_count, 7);
+assert.deepEqual(sessionEventsLifecycleJson.event_kind_counts, { input_completed: 1 });
+assert.equal(sessionEventsLifecycleJson.event_kind_summary, '1 (input_completed)');
+assert.deepEqual(sessionEventsLifecycleJson.issue_code_counts, {});
+assert.equal(sessionEventsLifecycleJson.issue_code_summary, '0');
+assert.deepEqual(sessionEventsLifecycleJson.terminal_state_counts, { failed: 1 });
+assert.equal(sessionEventsLifecycleJson.terminal_state_summary, '1 (failed)');
+assert.deepEqual(sessionEventsLifecycleJson.recommended_action_counts, { review_runtime_diagnostics: 1 });
+assert.equal(sessionEventsLifecycleJson.recommended_action_summary, '1 (review_runtime_diagnostics)');
+assert.deepEqual(sessionEventsLifecycleJson.recommended_command_counts, {
+  'narada-agent-cli --identity narada.test --session faulted-session --session-recovery': 1,
+});
+assert.equal(sessionEventsLifecycleJson.recommended_command_summary, '1 (narada-agent-cli --identity narada.test --session faulted-session --session-recovery)');
+assert.deepEqual(sessionEventsLifecycleJson.recovery_primary_counts, {
+  'narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20': 1,
+});
+assert.equal(sessionEventsLifecycleJson.recovery_primary_summary, '1 (narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20)');
+assert.deepEqual(sessionEventsLifecycleJson.recovery_followup_counts, {
+  'narada-agent-cli --identity narada.test --session faulted-session --session-read': 1,
+});
+assert.equal(sessionEventsLifecycleJson.recovery_followup_summary, '1 (narada-agent-cli --identity narada.test --session faulted-session --session-read)');
+assert.equal(sessionEventsLifecycleJson.groups.event_kind.input_completed[0].session, 'faulted-session');
+assert.deepEqual(sessionEventsLifecycleJson.groups.issue_code, {});
+assert.equal(sessionEventsLifecycleJson.groups.terminal_state.failed[0].terminal_state, 'failed');
+assert.equal(sessionEventsLifecycleJson.workflow_groups.review_runtime_diagnostics.display, 'review runtime diagnostics');
+assert.deepEqual(sessionEventsLifecycleJson.workflow_groups.review_runtime_diagnostics.recommended_command_counts, {
+  'narada-agent-cli --identity narada.test --session faulted-session --session-recovery': 1,
+});
 assert.equal(sessionEventsLifecycleJson.recovery.recovery_kind, 'diagnostic_review');
 assert.equal(sessionEventsLifecycleJson.recovery.recovery_primary_command, 'narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20');
 assert.equal(sessionEventsLifecycleJson.recovery.recovery_followup_command, 'narada-agent-cli --identity narada.test --session faulted-session --session-read');

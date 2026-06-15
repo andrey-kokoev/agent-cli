@@ -1445,6 +1445,7 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
     return 0;
   }
   const recentEvents = filteredEvents.slice(-recentCount);
+  const sessionEventSummary = summarizeSessionInventoryEvents([sessionRecord], { naradaDir, eventFilter: normalizedEventFilter, recentCount });
   if (jsonOutput) {
     console.log(`${JSON.stringify({
       schema: 'narada.agent_cli.session_events_read.v1',
@@ -1454,6 +1455,22 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
       event_filter: normalizedEventFilter,
       event_count: filteredEvents.length,
       total_event_count: events.length,
+      event_kind_counts: sessionEventSummary.event_kind_counts,
+      event_kind_summary: sessionEventSummary.event_kind_summary,
+      issue_code_counts: sessionEventSummary.issue_code_counts,
+      issue_code_summary: sessionEventSummary.issue_code_summary,
+      terminal_state_counts: sessionEventSummary.terminal_state_counts,
+      terminal_state_summary: sessionEventSummary.terminal_state_summary,
+      recommended_action_counts: sessionEventSummary.recommended_action_counts,
+      recommended_action_summary: sessionEventSummary.recommended_action_summary,
+      recommended_command_counts: sessionEventSummary.recommended_command_counts,
+      recommended_command_summary: sessionEventSummary.recommended_command_summary,
+      recovery_primary_counts: sessionEventSummary.recovery_primary_counts,
+      recovery_primary_summary: sessionEventSummary.recovery_primary_summary,
+      recovery_followup_counts: sessionEventSummary.recovery_followup_counts,
+      recovery_followup_summary: sessionEventSummary.recovery_followup_summary,
+      groups: sessionEventSummary.groups,
+      workflow_groups: sessionEventSummary.workflow_groups,
       recent_events: recentEvents,
       recovery: createSessionRecoveryPayload(sessionRecord),
       record: sessionRecord,
@@ -1466,6 +1483,9 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
     'Event filter': normalizedEventFilter,
     'Event count': filteredEvents.length,
     'Total event count': events.length,
+    'Event kinds': sessionEventSummary.event_kind_summary,
+    'Issue codes': sessionEventSummary.issue_code_summary,
+    'Terminal states': sessionEventSummary.terminal_state_summary,
     'Last event': sessionRecord.last_event_kind ?? 'none',
     'Last event at': sessionRecord.last_event_at ?? 'unknown',
     'Operational posture': sessionRecord.operational_posture_display,
