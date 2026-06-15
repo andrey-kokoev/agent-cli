@@ -1207,6 +1207,27 @@ assert.deepEqual(toolStatus.mcp_tools, [{
 }]);
 assert.equal(toolStatus.observer_muted, false);
 assert.deepEqual(toolStatus.observer_visibilities, ['record_only', 'operator_visible', 'agent_visible', 'conversation_visible']);
+Object.defineProperty(toolsFixtureServers, '__mcp_startup_failures', {
+  value: [{ server_name: 'polluted', code: 'mcp_stdout_pollution', message: 'startup banner' }],
+  enumerable: false,
+  configurable: true,
+});
+const toolStatusWithStartupFailure = serverStatus({
+  requestId: 'status-tools-failed-startup',
+  state: { activeTurn: null },
+  allTools: tools,
+  mcpServers: toolsFixtureServers,
+});
+assert.equal(toolStatusWithStartupFailure.mcp_startup_failure_count, 1);
+assert.equal(toolStatusWithStartupFailure.mcp_startup_failures[0].server_name, 'polluted');
+const printedStatusMessages = [];
+process.stdout.write = (value = '') => { printedStatusMessages.push(stripAnsiForTest(String(value))); return true; };
+try {
+  assert.equal(await handleSlashCommand('/status', { mcpServers: toolsFixtureServers, allTools: tools }), 'handled');
+} finally {
+  process.stdout.write = originalSlashStdoutWrite;
+}
+assert.equal(printedStatusMessages.some((message) => message.includes('polluted:mcp_stdout_pollution')), true);
 const displaySettings = { toolOutputs: true };
 const printedToolOutputMessages = [];
 process.stdout.write = (value = '') => { printedToolOutputMessages.push(stripAnsiForTest(String(value))); return true; };
@@ -1606,6 +1627,16 @@ try {
       return true;
     },
   );
+  const optionalPollutedServers = await discoverAndStartMcpServers(pollutedFabricSite);
+  assert.equal(Object.keys(optionalPollutedServers).length, 0);
+  const optionalPollutedStatus = serverStatus({
+    requestId: 'status-optional-polluted',
+    state: { activeTurn: null },
+    allTools: [],
+    mcpServers: optionalPollutedServers,
+  });
+  assert.equal(optionalPollutedStatus.mcp_startup_failure_count, 1);
+  assert.equal(optionalPollutedStatus.mcp_startup_failures[0].code, 'mcp_stdout_pollution');
 } finally {
   rmSync(pollutedFabricSite, { recursive: true, force: true });
 }

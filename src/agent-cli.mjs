@@ -156,6 +156,7 @@ const CHILD_PROCESS_ENV_ALLOWLIST = Object.freeze([
   'NARADA_KIMI_CODE_API_BASE_URL',
   'NARADA_KIMI_CODE_MODEL',
 ]);
+const MCP_STARTUP_FAILURES_KEY = '__mcp_startup_failures';
 
 function buildChildProcessEnv(extra = {}, baseEnv = process.env) {
   const env = {};
@@ -163,6 +164,30 @@ function buildChildProcessEnv(extra = {}, baseEnv = process.env) {
     if (baseEnv[key] !== undefined) env[key] = baseEnv[key];
   }
   return { ...env, ...extra, FORCE_COLOR: '0', NO_COLOR: '1' };
+}
+
+function attachMcpStartupFailures(mcpServers, failures = []) {
+  Object.defineProperty(mcpServers, MCP_STARTUP_FAILURES_KEY, {
+    value: Array.isArray(failures) ? failures.slice() : [],
+    enumerable: false,
+    configurable: true,
+  });
+  return mcpServers;
+}
+
+function getMcpStartupFailures(mcpServers) {
+  const failures = mcpServers?.[MCP_STARTUP_FAILURES_KEY];
+  return Array.isArray(failures) ? failures : [];
+}
+
+function formatMcpStartupFailureSummary(failures) {
+  const normalized = Array.isArray(failures) ? failures : [];
+  if (normalized.length === 0) return '0';
+  const details = normalized
+    .slice(0, 3)
+    .map((failure) => `${failure.server_name ?? 'unknown'}:${failure.code ?? 'error'}`)
+    .join(', ');
+  return normalized.length > 3 ? `${normalized.length} (${details}, ...)` : `${normalized.length} (${details})`;
 }
 
 function environmentBlockLength(env) {
@@ -866,6 +891,7 @@ async function handleSlashCommand(input, {
     return 'handled';
   }
   if (command === '/status') {
+    const startupFailures = getMcpStartupFailures(mcpServers);
     printCliMessage(formatKeyValueRows({
       Identity: IDENTITY,
       Session: SESSION,
@@ -875,6 +901,7 @@ async function handleSlashCommand(input, {
       Stream: (carrierSessionSettings.stream ?? sessionSettings.stream) ? 'on' : 'off',
       Goal: carrierGoalStatusLabel(carrierSessionSettings.goal),
       'MCP servers': Object.keys(mcpServers).length,
+      ...(startupFailures.length > 0 ? { 'MCP startup failures': formatMcpStartupFailureSummary(startupFailures) } : {}),
       Tools: allTools.length,
       'Tool outputs': displaySettings.toolOutputs ? 'shown' : 'hidden',
       Observers: displaySettings.observerMuted === true ? 'muted' : 'shown',
@@ -2347,6 +2374,7 @@ async function discoverAndStartMcpServers(siteRoot) {
     });
   }
 
+  attachMcpStartupFailures(servers, failures);
   return servers;
 }
 
@@ -3400,6 +3428,7 @@ async function runServerConversationTurn({ requestId, state, messages, allTools,
 
 function serverStatus({ requestId, state, allTools, mcpServers }) {
   const goal = normalizeCarrierGoalState(sessionSettings.goal);
+  const startupFailures = getMcpStartupFailures(mcpServers);
   return {
     request_id: requestId,
     transport: 'jsonl_stdio',
@@ -3413,6 +3442,8 @@ function serverStatus({ requestId, state, allTools, mcpServers }) {
     active_turn_state: state.activeTurn ? 'running' : 'idle',
     active_turn_id: state.activeTurn?.turnId ?? null,
     mcp_server_count: Object.keys(mcpServers).length,
+    mcp_startup_failure_count: startupFailures.length,
+    mcp_startup_failures: startupFailures,
     tool_count: allTools.length,
     mcp_tools: mcpToolCatalogEntries(mcpServers),
     observer_muted: (state?.displaySettings ?? transcriptDisplaySettings).observerMuted === true,
