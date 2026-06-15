@@ -66,6 +66,69 @@ function formatRuntimeMcpFaultEvent(event) {
   };
 }
 
+function formatSessionWorkflowSummary(event) {
+  if (!event || (event.event !== 'session_started' && event.event !== 'session_status' && event.event !== 'session_closed')) return null;
+  if (!event.recommended_action || event.recommended_action === 'review_session_summary') return null;
+  if (!event.recommended_command) return null;
+  return `[agent-runtime-server] Session workflow ${event.recommended_action_display ?? event.recommended_action} | command=${event.recommended_command}`;
+}
+
+function formatSessionWorkflowEvent(event) {
+  if (!event || (event.event !== 'session_started' && event.event !== 'session_status' && event.event !== 'session_closed')) return null;
+  if (!event.recommended_action || event.recommended_action === 'review_session_summary') return null;
+  if (!event.recommended_command) return null;
+  return {
+    schema: 'narada.agent_runtime_server.wrapper_event.v1',
+    event: 'session_workflow_recommendation',
+    timestamp: event.timestamp ?? new Date().toISOString(),
+    source_event: event.event,
+    request_id: event.request_id ?? null,
+    agent_id: event.agent_id ?? null,
+    session_id: event.session_id ?? null,
+    operational_posture: event.operational_posture ?? null,
+    operational_posture_display: event.operational_posture_display ?? null,
+    recommended_action: event.recommended_action ?? null,
+    recommended_action_display: event.recommended_action_display ?? null,
+    recommended_command: event.recommended_command ?? null,
+    recovery_kind: event.recovery_kind ?? null,
+    recovery_kind_display: event.recovery_kind_display ?? null,
+    recovery_primary_command: event.recovery_primary_command ?? null,
+    recovery_followup_command: event.recovery_followup_command ?? null,
+    handoffs: event.handoffs ?? null,
+  };
+}
+
+function formatPreflightWorkflowSummary(event) {
+  if (!event || (event.event !== 'session_started' && event.event !== 'session_status' && event.event !== 'session_closed')) return null;
+  if (!event.mcp_preflight_recommended_action || event.mcp_preflight_recommended_action === 'start_session') return null;
+  if (!event.mcp_preflight_recommended_command) return null;
+  return `[agent-runtime-server] Preflight workflow ${event.mcp_preflight_recommended_action_display ?? event.mcp_preflight_recommended_action} | command=${event.mcp_preflight_recommended_command}`;
+}
+
+function formatPreflightWorkflowEvent(event) {
+  if (!event || (event.event !== 'session_started' && event.event !== 'session_status' && event.event !== 'session_closed')) return null;
+  if (!event.mcp_preflight_recommended_action || event.mcp_preflight_recommended_action === 'start_session') return null;
+  if (!event.mcp_preflight_recommended_command) return null;
+  return {
+    schema: 'narada.agent_runtime_server.wrapper_event.v1',
+    event: 'preflight_workflow_recommendation',
+    timestamp: event.timestamp ?? new Date().toISOString(),
+    source_event: event.event,
+    request_id: event.request_id ?? null,
+    agent_id: event.agent_id ?? null,
+    session_id: event.session_id ?? null,
+    mcp_preflight_operational_state: event.mcp_preflight_operational_state ?? null,
+    mcp_preflight_recommended_action: event.mcp_preflight_recommended_action ?? null,
+    mcp_preflight_recommended_action_display: event.mcp_preflight_recommended_action_display ?? null,
+    mcp_preflight_recommended_command: event.mcp_preflight_recommended_command ?? null,
+    mcp_preflight_recovery_kind: event.mcp_preflight_recovery_kind ?? null,
+    mcp_preflight_recovery_kind_display: event.mcp_preflight_recovery_kind_display ?? null,
+    mcp_preflight_recovery_primary_command: event.mcp_preflight_recovery_primary_command ?? null,
+    mcp_preflight_recovery_followup_command: event.mcp_preflight_recovery_followup_command ?? null,
+    mcp_preflight_handoffs: event.mcp_preflight_handoffs ?? null,
+  };
+}
+
 function formatWrapperStatusEvent(event) {
   if (!event || (event.event !== 'session_started' && event.event !== 'session_status' && event.event !== 'session_closed')) return null;
   return {
@@ -127,6 +190,7 @@ async function main() {
 
   let startupSummaryPrinted = false;
   const runtimeFaultSummaries = new Set();
+  const workflowSummaries = new Set();
   let stdoutBuffer = '';
 
   child.stdout.on('data', (chunk) => {
@@ -163,6 +227,15 @@ async function main() {
           }
           runtimeFaultSummaries.add(runtimeFaultSummary);
         }
+        for (const [summary, wrapperEvent] of [
+          [formatSessionWorkflowSummary(event), formatSessionWorkflowEvent(event)],
+          [formatPreflightWorkflowSummary(event), formatPreflightWorkflowEvent(event)],
+        ]) {
+          if (!summary || workflowSummaries.has(summary)) continue;
+          console.error(summary);
+          if (wrapperEventsJsonl && wrapperEvent) console.error(JSON.stringify(wrapperEvent));
+          workflowSummaries.add(summary);
+        }
       } catch {}
     }
   });
@@ -189,4 +262,4 @@ if (isEntrypoint) {
   });
 }
 
-export { formatStartupMcpEvent, formatStartupMcpSummary, formatRuntimeMcpFaultEvent, formatRuntimeMcpFaultSummary, formatWrapperStatusEvent };
+export { formatPreflightWorkflowEvent, formatPreflightWorkflowSummary, formatRuntimeMcpFaultEvent, formatRuntimeMcpFaultSummary, formatSessionWorkflowEvent, formatSessionWorkflowSummary, formatStartupMcpEvent, formatStartupMcpSummary, formatWrapperStatusEvent };
