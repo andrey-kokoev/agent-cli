@@ -995,6 +995,14 @@ function createMcpPreflightArtifactSnapshot(preflightArtifact) {
       mcp_preflight_operational_state: null,
       mcp_preflight_startup_failure_summary: null,
       mcp_preflight_runtime_fault_summary: null,
+      mcp_preflight_recommended_action: null,
+      mcp_preflight_recommended_action_display: null,
+      mcp_preflight_recommended_command: null,
+      mcp_preflight_recovery_kind: null,
+      mcp_preflight_recovery_kind_display: null,
+      mcp_preflight_recovery_primary_command: null,
+      mcp_preflight_recovery_followup_command: null,
+      mcp_preflight_handoffs: null,
     };
   }
   return {
@@ -1003,6 +1011,14 @@ function createMcpPreflightArtifactSnapshot(preflightArtifact) {
     mcp_preflight_operational_state: preflightArtifact.mcp_operational_state,
     mcp_preflight_startup_failure_summary: preflightArtifact.mcp_startup_failure_summary,
     mcp_preflight_runtime_fault_summary: preflightArtifact.mcp_runtime_fault_summary,
+    mcp_preflight_recommended_action: preflightArtifact.recommended_action ?? null,
+    mcp_preflight_recommended_action_display: preflightArtifact.recommended_action_display ?? null,
+    mcp_preflight_recommended_command: preflightArtifact.recommended_command ?? null,
+    mcp_preflight_recovery_kind: preflightArtifact.recovery_kind ?? null,
+    mcp_preflight_recovery_kind_display: preflightArtifact.recovery_kind_display ?? null,
+    mcp_preflight_recovery_primary_command: preflightArtifact.recovery_primary_command ?? null,
+    mcp_preflight_recovery_followup_command: preflightArtifact.recovery_followup_command ?? null,
+    mcp_preflight_handoffs: preflightArtifact.handoffs ?? null,
   };
 }
 
@@ -2349,20 +2365,7 @@ function readMcpPreflightArtifact({ artifactDir = MCP_PREFLIGHT_ARTIFACT_DIR, se
     if (artifact?.session !== session) return null;
     if (artifact?.identity !== identity) return null;
     if (artifact?.site_root !== siteRoot) return null;
-    return {
-      artifact_path: artifactPath,
-      generated_at: artifact.generated_at ?? null,
-      mcp_operational_state: artifact.mcp_operational_state ?? null,
-      mcp_startup_failure_count: artifact.mcp_startup_failure_count ?? 0,
-      mcp_startup_failure_summary: artifact.mcp_startup_failure_summary ?? null,
-      mcp_runtime_fault_count: artifact.mcp_runtime_fault_count ?? 0,
-      mcp_runtime_fault_summary: artifact.mcp_runtime_fault_summary ?? null,
-      mcp_server_count: artifact.mcp_server_count ?? 0,
-      tool_count: artifact.tool_count ?? 0,
-      session: artifact.session,
-      identity: artifact.identity,
-      site_root: artifact.site_root,
-    };
+    return summarizePersistedMcpPreflightArtifact({ artifact, artifactPath, siteRoot });
   } catch {
     return null;
   }
@@ -2376,6 +2379,14 @@ function recordMcpPreflightArtifactLinkage({ sessionPath = SESSION_PATH, emit, p
     mcp_operational_state: preflightArtifact.mcp_operational_state,
     mcp_startup_failure_summary: preflightArtifact.mcp_startup_failure_summary,
     mcp_runtime_fault_summary: preflightArtifact.mcp_runtime_fault_summary,
+    recommended_action: preflightArtifact.recommended_action ?? null,
+    recommended_action_display: preflightArtifact.recommended_action_display ?? null,
+    recommended_command: preflightArtifact.recommended_command ?? null,
+    recovery_kind: preflightArtifact.recovery_kind ?? null,
+    recovery_kind_display: preflightArtifact.recovery_kind_display ?? null,
+    recovery_primary_command: preflightArtifact.recovery_primary_command ?? null,
+    recovery_followup_command: preflightArtifact.recovery_followup_command ?? null,
+    handoffs: preflightArtifact.handoffs ?? null,
   };
   appendSession(sessionPath, sessionEventEntry('mcp_preflight_artifact_linked', payload));
   emit?.('mcp_preflight_artifact_linked', payload);
@@ -3390,6 +3401,8 @@ async function handleSlashCommand(input, {
   if (command === '/status') {
     const startupFailures = getMcpStartupFailures(mcpServers);
     const runtimeDiagnostics = getMcpRuntimeDiagnostics(mcpServers);
+    const mcpPreflightArtifact = readMcpPreflightArtifact();
+    const mcpPreflightSnapshot = createMcpPreflightArtifactSnapshot(mcpPreflightArtifact);
     printCliMessage(formatKeyValueRows({
       Identity: IDENTITY,
       Session: SESSION,
@@ -3402,6 +3415,10 @@ async function handleSlashCommand(input, {
       'MCP state': mcpOperationalState(mcpServers),
       ...(startupFailures.length > 0 ? { 'MCP startup failures': formatMcpStartupFailureSummary(startupFailures) } : {}),
       ...(runtimeDiagnostics.length > 0 ? { 'MCP runtime faults': formatMcpRuntimeDiagnosticSummary(runtimeDiagnostics) } : {}),
+      ...(mcpPreflightSnapshot.mcp_preflight_operational_state ? { 'Preflight state': mcpPreflightSnapshot.mcp_preflight_operational_state } : {}),
+      ...(mcpPreflightSnapshot.mcp_preflight_recommended_action_display ? { 'Preflight action': mcpPreflightSnapshot.mcp_preflight_recommended_action_display } : {}),
+      ...(mcpPreflightSnapshot.mcp_preflight_recommended_command ? { 'Preflight command': mcpPreflightSnapshot.mcp_preflight_recommended_command } : {}),
+      ...(mcpPreflightSnapshot.mcp_preflight_handoffs?.mcp_preflight_diagnostics ? { 'Preflight diagnostics': mcpPreflightSnapshot.mcp_preflight_handoffs.mcp_preflight_diagnostics } : {}),
       Tools: allTools.length,
       'Tool outputs': displaySettings.toolOutputs ? 'shown' : 'hidden',
       Observers: displaySettings.observerMuted === true ? 'muted' : 'shown',

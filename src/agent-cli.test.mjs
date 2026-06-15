@@ -1712,6 +1712,17 @@ assert.deepEqual(
     mcp_runtime_fault_count: 0,
     mcp_runtime_fault_summary: '0',
     mcp_preflight_operational_state: 'healthy',
+    mcp_preflight_recommended_action: 'start_session',
+    mcp_preflight_recommended_action_display: 'start session',
+    mcp_preflight_recommended_command: null,
+    mcp_preflight_recovery_kind: 'no_recovery',
+    mcp_preflight_recovery_kind_display: 'no recovery',
+    mcp_preflight_recovery_primary_command: null,
+    mcp_preflight_recovery_followup_command: null,
+    mcp_preflight_handoffs: {
+      mcp_preflight_read: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --mcp-preflight-read',
+      mcp_preflight_diagnostics: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all',
+    },
     request_outcome_total: 0,
     request_posture: 'clean',
     request_posture_display: 'clean',
@@ -1750,6 +1761,17 @@ assert.deepEqual(
     mcp_runtime_fault_count: 0,
     mcp_runtime_fault_summary: '0',
     mcp_preflight_operational_state: 'healthy',
+    mcp_preflight_recommended_action: 'start_session',
+    mcp_preflight_recommended_action_display: 'start session',
+    mcp_preflight_recommended_command: null,
+    mcp_preflight_recovery_kind: 'no_recovery',
+    mcp_preflight_recovery_kind_display: 'no recovery',
+    mcp_preflight_recovery_primary_command: null,
+    mcp_preflight_recovery_followup_command: null,
+    mcp_preflight_handoffs: {
+      mcp_preflight_read: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --mcp-preflight-read',
+      mcp_preflight_diagnostics: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all',
+    },
     request_outcome_total: 0,
     request_posture: 'clean',
     request_posture_display: 'clean',
@@ -1788,6 +1810,17 @@ assert.deepEqual(
     mcp_runtime_fault_count: 0,
     mcp_runtime_fault_summary: '0',
     mcp_preflight_operational_state: 'healthy',
+    mcp_preflight_recommended_action: 'start_session',
+    mcp_preflight_recommended_action_display: 'start session',
+    mcp_preflight_recommended_command: null,
+    mcp_preflight_recovery_kind: 'no_recovery',
+    mcp_preflight_recovery_kind_display: 'no recovery',
+    mcp_preflight_recovery_primary_command: null,
+    mcp_preflight_recovery_followup_command: null,
+    mcp_preflight_handoffs: {
+      mcp_preflight_read: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --mcp-preflight-read',
+      mcp_preflight_diagnostics: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all',
+    },
     request_outcome_total: 0,
     request_posture: 'clean',
     request_posture_display: 'clean',
@@ -1826,6 +1859,17 @@ assert.deepEqual(
     mcp_runtime_fault_count: 0,
     mcp_runtime_fault_summary: '0',
     mcp_preflight_operational_state: 'healthy',
+    mcp_preflight_recommended_action: 'start_session',
+    mcp_preflight_recommended_action_display: 'start session',
+    mcp_preflight_recommended_command: null,
+    mcp_preflight_recovery_kind: 'no_recovery',
+    mcp_preflight_recovery_kind_display: 'no recovery',
+    mcp_preflight_recovery_primary_command: null,
+    mcp_preflight_recovery_followup_command: null,
+    mcp_preflight_handoffs: {
+      mcp_preflight_read: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --mcp-preflight-read',
+      mcp_preflight_diagnostics: 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all',
+    },
     request_outcome_total: 0,
     request_posture: 'clean',
     request_posture_display: 'clean',
@@ -1942,6 +1986,14 @@ assert.deepEqual(createMcpPreflightArtifactSnapshot(null), {
   mcp_preflight_operational_state: null,
   mcp_preflight_startup_failure_summary: null,
   mcp_preflight_runtime_fault_summary: null,
+  mcp_preflight_recommended_action: null,
+  mcp_preflight_recommended_action_display: null,
+  mcp_preflight_recommended_command: null,
+  mcp_preflight_recovery_kind: null,
+  mcp_preflight_recovery_kind_display: null,
+  mcp_preflight_recovery_primary_command: null,
+  mcp_preflight_recovery_followup_command: null,
+  mcp_preflight_handoffs: null,
 });
 assert.deepEqual(createMcpPreflightArtifactSnapshot({
   artifact_path: '/tmp/preflight.json',
@@ -1949,12 +2001,28 @@ assert.deepEqual(createMcpPreflightArtifactSnapshot({
   mcp_operational_state: 'startup_degraded',
   mcp_startup_failure_summary: '1 (degraded:mcp_stdout_pollution)',
   mcp_runtime_fault_summary: '0',
+  recommended_action: 'review_startup_diagnostics',
+  recommended_action_display: 'review startup diagnostics',
+  recommended_command: 'narada-agent-cli --identity narada.test --session preflight-test --mcp-preflight-read',
+  recovery_kind: 'startup_diagnostic_review',
+  recovery_kind_display: 'startup diagnostic review',
+  recovery_primary_command: 'narada-agent-cli --identity narada.test --session preflight-test --mcp-preflight-read',
+  recovery_followup_command: 'narada-agent-cli --identity narada.test --session preflight-test --mcp-preflight-read-json',
+  handoffs: { mcp_preflight_diagnostics: 'narada-agent-cli --identity narada.test --session preflight-test --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all' },
 }), {
   mcp_preflight_artifact_path: '/tmp/preflight.json',
   mcp_preflight_artifact_generated_at: '2026-06-14T00:00:00.000Z',
   mcp_preflight_operational_state: 'startup_degraded',
   mcp_preflight_startup_failure_summary: '1 (degraded:mcp_stdout_pollution)',
   mcp_preflight_runtime_fault_summary: '0',
+  mcp_preflight_recommended_action: 'review_startup_diagnostics',
+  mcp_preflight_recommended_action_display: 'review startup diagnostics',
+  mcp_preflight_recommended_command: 'narada-agent-cli --identity narada.test --session preflight-test --mcp-preflight-read',
+  mcp_preflight_recovery_kind: 'startup_diagnostic_review',
+  mcp_preflight_recovery_kind_display: 'startup diagnostic review',
+  mcp_preflight_recovery_primary_command: 'narada-agent-cli --identity narada.test --session preflight-test --mcp-preflight-read',
+  mcp_preflight_recovery_followup_command: 'narada-agent-cli --identity narada.test --session preflight-test --mcp-preflight-read-json',
+  mcp_preflight_handoffs: { mcp_preflight_diagnostics: 'narada-agent-cli --identity narada.test --session preflight-test --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all' },
 });
 assert.deepEqual(createSessionActivitySnapshot({
   startedAt: '2026-06-14T00:00:00.000Z',
@@ -2680,10 +2748,23 @@ const toolStatusWithPreflight = serverStatus({
     mcp_operational_state: 'healthy',
     mcp_startup_failure_summary: '0',
     mcp_runtime_fault_summary: '0',
+    recommended_action: 'start_session',
+    recommended_action_display: 'start session',
+    recommended_command: null,
+    recovery_kind: 'no_recovery',
+    recovery_kind_display: 'no recovery',
+    recovery_primary_command: null,
+    recovery_followup_command: null,
+    handoffs: {
+      mcp_preflight_read: 'narada-agent-cli --identity narada.test --session narada.test --mcp-preflight-read',
+      mcp_preflight_diagnostics: 'narada-agent-cli --identity narada.test --session narada.test --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all',
+    },
   },
 });
 assert.equal(toolStatusWithPreflight.mcp_preflight_artifact_path, 'D:/tmp/preflight.json');
 assert.equal(toolStatusWithPreflight.mcp_preflight_operational_state, 'healthy');
+assert.equal(toolStatusWithPreflight.mcp_preflight_recommended_action, 'start_session');
+assert.equal(toolStatusWithPreflight.mcp_preflight_handoffs.mcp_preflight_diagnostics, 'narada-agent-cli --identity narada.test --session narada.test --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all');
 const printedStatusMessages = [];
 process.stdout.write = (value = '') => { printedStatusMessages.push(stripAnsiForTest(String(value))); return true; };
 try {
@@ -3584,14 +3665,29 @@ assert.deepEqual(readMcpPreflightArtifact({
   generated_at: preflightHealthyArtifactAfterJson.generated_at,
   mcp_operational_state: 'healthy',
   mcp_startup_failure_count: 0,
+  mcp_startup_failures: [],
   mcp_startup_failure_summary: '0',
   mcp_runtime_fault_count: 0,
+  mcp_runtime_faults: [],
   mcp_runtime_fault_summary: '0',
   mcp_server_count: 1,
   tool_count: 1,
   session: 'preflight-healthy-test',
   identity: 'narada.test',
   site_root: preflightHealthySite,
+  recommended_action: 'start_session',
+  recommended_action_display: 'start session',
+  recommended_command: null,
+  recovery_kind: 'no_recovery',
+  recovery_kind_display: 'no recovery',
+  recovery_primary_command: null,
+  recovery_followup_command: null,
+  handoffs: {
+    mcp_preflight_read: 'narada-agent-cli --identity narada.test --session preflight-healthy-test --mcp-preflight-read',
+    mcp_preflight_read_json: 'narada-agent-cli --identity narada.test --session preflight-healthy-test --mcp-preflight-read-json',
+    mcp_preflight_diagnostics: 'narada-agent-cli --identity narada.test --session preflight-healthy-test --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all',
+    mcp_preflight_diagnostics_json: 'narada-agent-cli --identity narada.test --session preflight-healthy-test --mcp-preflight-diagnostics-json --mcp-preflight-diagnostics-filter all',
+  },
 });
 const preflightHealthyReadJson = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
@@ -3653,8 +3749,11 @@ const preflightLinkedEvents = preflightLinkedStdout.trim().split(/\r?\n/).filter
 assert.equal(preflightLinkedEvents[0].event, 'session_started');
 assert.equal(preflightLinkedEvents[0].mcp_preflight_artifact_path, preflightHealthyArtifactPath);
 assert.equal(preflightLinkedEvents[0].mcp_preflight_operational_state, 'healthy');
+assert.equal(preflightLinkedEvents[0].mcp_preflight_recommended_action, 'start_session');
 assert.equal(preflightLinkedEvents.some((event) => event.event === 'mcp_preflight_artifact_linked' && event.artifact_path === preflightHealthyArtifactPath), true);
+assert.equal(preflightLinkedEvents.some((event) => event.event === 'mcp_preflight_artifact_linked' && event.recommended_action === 'start_session' && event.handoffs?.mcp_preflight_diagnostics), true);
 assert.equal(preflightLinkedEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-preflight-link-1' && event.mcp_preflight_artifact_path === preflightHealthyArtifactPath), true);
+assert.equal(preflightLinkedEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-preflight-link-1' && event.mcp_preflight_recommended_action === 'start_session' && event.mcp_preflight_handoffs?.mcp_preflight_diagnostics), true);
 const preflightLinkedSessionEntries = readFileSync(join(preflightHealthySite, '.narada', 'crew', 'nars-sessions', 'preflight-healthy-test', 'session.jsonl'), 'utf8')
   .trim()
   .split(/\r?\n/)
