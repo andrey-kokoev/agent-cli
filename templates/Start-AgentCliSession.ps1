@@ -20,10 +20,19 @@ param(
 
     [switch]$SessionInventoryJson,
 
+    [switch]$SessionInventoryEvents,
+
+    [switch]$SessionInventoryEventsJson,
+
     [ValidateSet('operational_posture', 'request_posture', 'mcp_state', 'heartbeat_status')]
     [string]$SessionInventoryFilter,
 
     [string]$SessionInventoryMatch,
+
+    [ValidateSet('all', 'lifecycle', 'issues', 'diagnostics')]
+    [string]$SessionInventoryEventsFilter = 'all',
+
+    [int]$SessionInventoryEventsCount = 20,
 
     [switch]$SessionRead,
 
@@ -253,6 +262,27 @@ if ($SessionInventoryJson) {
         $inventoryJsonArgs += @('--session-inventory-filter', $SessionInventoryFilter, '--session-inventory-match', $SessionInventoryMatch)
     }
     & node $AgentCliPath @inventoryJsonArgs
+    exit $LASTEXITCODE
+}
+
+if ($SessionInventoryEvents) {
+    Write-Host "Session inventory events..." -ForegroundColor Cyan
+    Set-Location $WorkDir
+    $inventoryEventArgs = @('--identity', $IdentityName, '--session', $SessionName, '--session-inventory-events', '--session-inventory-events-filter', $SessionInventoryEventsFilter, '--session-inventory-events-count', $SessionInventoryEventsCount)
+    if ($SessionInventoryFilter -and $SessionInventoryMatch) {
+        $inventoryEventArgs += @('--session-inventory-filter', $SessionInventoryFilter, '--session-inventory-match', $SessionInventoryMatch)
+    }
+    & node $AgentCliPath @inventoryEventArgs
+    exit $LASTEXITCODE
+}
+
+if ($SessionInventoryEventsJson) {
+    Set-Location $WorkDir
+    $inventoryEventsJsonArgs = @('--identity', $IdentityName, '--session', $SessionName, '--session-inventory-events-json', '--session-inventory-events-filter', $SessionInventoryEventsFilter, '--session-inventory-events-count', $SessionInventoryEventsCount)
+    if ($SessionInventoryFilter -and $SessionInventoryMatch) {
+        $inventoryEventsJsonArgs += @('--session-inventory-filter', $SessionInventoryFilter, '--session-inventory-match', $SessionInventoryMatch)
+    }
+    & node $AgentCliPath @inventoryEventsJsonArgs
     exit $LASTEXITCODE
 }
 
