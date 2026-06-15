@@ -245,6 +245,16 @@ function buildPersistedSessionHandoffs({ session, identity = IDENTITY, eventCoun
   };
 }
 
+function serverPreflightRecovery({ requestId, mcpPreflightArtifact = readMcpPreflightArtifact() }) {
+  const mcpPreflightSnapshot = createMcpPreflightArtifactSnapshot(mcpPreflightArtifact);
+  return {
+    request_id: requestId,
+    transport: 'jsonl_stdio',
+    event: 'preflight_recovery',
+    ...mcpPreflightSnapshot,
+  };
+}
+
 function buildMcpPreflightHandoffs({ session, identity = IDENTITY } = {}) {
   const normalizedSession = String(session ?? '').trim();
   const normalizedIdentity = String(identity ?? IDENTITY).trim() || IDENTITY;
@@ -5753,6 +5763,7 @@ function isConcurrentServerRequestLine(line) {
   try {
     const request = JSON.parse(line);
     if (request?.method === 'session.recovery') return false;
+    if (request?.method === 'preflight.recovery') return false;
     return classifyCarrierControlRequest(request).concurrent_allowed;
   } catch {
     return false;
@@ -5803,6 +5814,12 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
     const requestId = request?.id ?? null;
     noteSessionActivity(state, 'session_recovery_requested');
     emit('session_recovery', serverRecovery({ requestId, state, mcpServers, mcpPreflightArtifact }));
+    return;
+  }
+  if (request?.method === 'preflight.recovery') {
+    const requestId = request?.id ?? null;
+    noteSessionActivity(state, 'preflight_recovery_requested');
+    emit('preflight_recovery', serverPreflightRecovery({ requestId, mcpPreflightArtifact }));
     return;
   }
   const controlRequest = classifyCarrierControlRequest(request);
