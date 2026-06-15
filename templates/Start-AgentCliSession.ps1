@@ -32,7 +32,7 @@ param(
 
     [switch]$SessionInventoryEventsJson,
 
-    [ValidateSet('operational_posture', 'request_posture', 'mcp_state', 'heartbeat_status')]
+    [ValidateSet('operational_posture', 'request_posture', 'mcp_state', 'heartbeat_status', 'recommended_action', 'recovery_kind')]
     [string]$SessionInventoryFilter,
 
     [string]$SessionInventoryMatch,

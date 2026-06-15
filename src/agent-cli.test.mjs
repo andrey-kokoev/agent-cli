@@ -1055,6 +1055,52 @@ assert.equal(filteredInventoryMissJson.carrier_session_count, 0);
 assert.equal(filteredInventoryMissJson.total_carrier_session_count, 2);
 assert.deepEqual(filteredInventoryMissJson.groups.operational_posture, {});
 assert.deepEqual(filteredInventoryMissJson.sessions, []);
+const filteredRecoveryJsonRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-inventory-recovery-json',
+  '--session-inventory-filter',
+  'recovery_kind',
+  '--session-inventory-match',
+  'diagnostic_review',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'inventory-recovery-filter-json-test',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(filteredRecoveryJsonRun.status, 0);
+const filteredRecoveryJson = JSON.parse(filteredRecoveryJsonRun.stdout);
+assert.equal(filteredRecoveryJson.inventory_filter, 'recovery_kind:diagnostic_review');
+assert.equal(filteredRecoveryJson.carrier_session_count, 1);
+assert.equal(filteredRecoveryJson.total_carrier_session_count, 2);
+assert.equal(filteredRecoveryJson.actions.length, 1);
+assert.equal(filteredRecoveryJson.actions[0].session, 'faulted-session');
+assert.equal(filteredRecoveryJson.actions[0].recovery_kind, 'diagnostic_review');
+const filteredRecommendedActionInventoryJsonRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-inventory-json',
+  '--session-inventory-filter',
+  'recommended_action',
+  '--session-inventory-match',
+  'review_session_summary',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'inventory-recommended-filter-json-test',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(filteredRecommendedActionInventoryJsonRun.status, 0);
+const filteredRecommendedActionInventoryJson = JSON.parse(filteredRecommendedActionInventoryJsonRun.stdout);
+assert.equal(filteredRecommendedActionInventoryJson.inventory_filter, 'recommended_action:review_session_summary');
+assert.equal(filteredRecommendedActionInventoryJson.carrier_session_count, 1);
+assert.equal(filteredRecommendedActionInventoryJson.sessions[0].session, 'healthy-session');
+assert.equal(filteredRecommendedActionInventoryJson.sessions[0].recommended_action, 'review_session_summary');
 const sessionInventoryEventsRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
   '--session-inventory-events',
@@ -1792,7 +1838,7 @@ assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventory'), true)
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventoryJson'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventoryEvents'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventoryEventsJson'), true);
-assert.equal(windowsWrapperTemplate.includes("[ValidateSet('operational_posture', 'request_posture', 'mcp_state', 'heartbeat_status')]"), true);
+assert.equal(windowsWrapperTemplate.includes("[ValidateSet('operational_posture', 'request_posture', 'mcp_state', 'heartbeat_status', 'recommended_action', 'recovery_kind')]"), true);
 assert.equal(windowsWrapperTemplate.includes('[string]$SessionInventoryFilter'), true);
 assert.equal(windowsWrapperTemplate.includes('[string]$SessionInventoryMatch'), true);
 assert.equal(windowsWrapperTemplate.includes('[string]$SessionInventoryEventsFilter = \'all\''), true);
