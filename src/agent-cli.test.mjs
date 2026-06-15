@@ -792,6 +792,11 @@ assert.equal(sessionInventoryRun.stdout.includes('Lifecycle outcomes'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Request posture'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Request outcomes'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Request issues'), true);
+assert.equal(sessionInventoryRun.stdout.includes('Recommended actions'), true);
+assert.equal(sessionInventoryRun.stdout.includes('Recommended commands'), true);
+assert.equal(sessionInventoryRun.stdout.includes('Recovery primary commands'), true);
+assert.equal(sessionInventoryRun.stdout.includes('Recovery followups'), true);
+assert.equal(sessionInventoryRun.stdout.includes('Inventory action groups: review_runtime_diagnostics (1)'), true);
 assert.equal(sessionInventoryRun.stdout.includes('healthy-session'), true);
 assert.equal(sessionInventoryRun.stdout.includes('healthy'), true);
 assert.equal(sessionInventoryRun.stdout.includes('faulted-session'), true);
@@ -850,7 +855,42 @@ assert.deepEqual(sessionInventoryJson.summary, {
     session_closed: 1,
   },
   request_issue_summary: '1 (invalid_json), 1 (request_dispatch_failed), 1 (request_failed), 1 (session_closed)',
+  recommended_action_counts: {
+    review_runtime_diagnostics: 1,
+    review_session_summary: 1,
+  },
+  recommended_action_summary: '1 (review_runtime_diagnostics), 1 (review_session_summary)',
+  recommended_command_counts: {
+    'narada-agent-cli --identity narada.test --session faulted-session --session-recovery': 1,
+    'narada-agent-cli --identity narada.test --session healthy-session --session-read': 1,
+  },
+  recommended_command_summary: '1 (narada-agent-cli --identity narada.test --session faulted-session --session-recovery), 1 (narada-agent-cli --identity narada.test --session healthy-session --session-read)',
+  recovery_primary_counts: {
+    'narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20': 1,
+    'narada-agent-cli --identity narada.test --session healthy-session --session-read': 1,
+  },
+  recovery_primary_summary: '1 (narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20), 1 (narada-agent-cli --identity narada.test --session healthy-session --session-read)',
+  recovery_followup_counts: {
+    'narada-agent-cli --identity narada.test --session faulted-session --session-read': 1,
+    none: 1,
+  },
+  recovery_followup_summary: '1 (narada-agent-cli --identity narada.test --session faulted-session --session-read), 1 (none)',
 });
+assert.equal(sessionInventoryJson.workflow_groups.review_session_summary.display, 'review session summary');
+assert.deepEqual(sessionInventoryJson.workflow_groups.review_session_summary.recommended_command_counts, {
+  'narada-agent-cli --identity narada.test --session healthy-session --session-read': 1,
+});
+assert.equal(sessionInventoryJson.workflow_groups.review_runtime_diagnostics.display, 'review runtime diagnostics');
+assert.deepEqual(sessionInventoryJson.workflow_groups.review_runtime_diagnostics.recommended_command_counts, {
+  'narada-agent-cli --identity narada.test --session faulted-session --session-recovery': 1,
+});
+assert.deepEqual(sessionInventoryJson.workflow_groups.review_runtime_diagnostics.recovery_primary_counts, {
+  'narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20': 1,
+});
+assert.deepEqual(sessionInventoryJson.workflow_groups.review_runtime_diagnostics.recovery_followup_counts, {
+  'narada-agent-cli --identity narada.test --session faulted-session --session-read': 1,
+});
+assert.equal(sessionInventoryJson.workflow_groups.review_runtime_diagnostics.sessions[0].session, 'faulted-session');
 assert.equal(sessionInventoryJson.groups.operational_posture.healthy[0].session, 'healthy-session');
 assert.equal(sessionInventoryJson.groups.operational_posture.mcp_runtime_faulted[0].session, 'faulted-session');
 assert.equal(sessionInventoryJson.groups.request_posture.runtime_failures[0].session, 'faulted-session');

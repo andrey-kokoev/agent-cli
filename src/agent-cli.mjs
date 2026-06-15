@@ -1104,6 +1104,7 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
   const inventoryRollup = summarizeSessionInventoryRollup(inventory);
   const filteredInventoryRollup = summarizeSessionInventoryRollup(filteredInventory);
   const inventoryGroups = summarizeSessionInventoryGroups(filteredInventory);
+  const actionQueue = summarizeSessionInventoryActions(filteredInventory);
   const filterLabel = normalizedFilterKey && normalizedFilterValue ? `${normalizedFilterKey}:${normalizedFilterValue}` : 'all';
   if (jsonOutput) {
     console.log(`${JSON.stringify({
@@ -1112,8 +1113,19 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
       carrier_session_count: filteredInventory.length,
       total_carrier_session_count: inventory.length,
       inventory_filter: filterLabel,
-      summary: filteredInventoryRollup,
+      summary: {
+        ...filteredInventoryRollup,
+        recommended_action_counts: actionQueue.recommended_action_counts,
+        recommended_action_summary: actionQueue.recommended_action_summary,
+        recommended_command_counts: actionQueue.recommended_command_counts,
+        recommended_command_summary: actionQueue.recommended_command_summary,
+        recovery_primary_counts: actionQueue.recovery_primary_counts,
+        recovery_primary_summary: actionQueue.recovery_primary_summary,
+        recovery_followup_counts: actionQueue.recovery_followup_counts,
+        recovery_followup_summary: actionQueue.recovery_followup_summary,
+      },
       groups: inventoryGroups,
+      workflow_groups: actionQueue.workflow_groups,
       sessions: filteredInventory,
     }, null, 2)}\n`);
     return 0;
@@ -1130,6 +1142,10 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
     'Request posture': filteredInventoryRollup.request_posture_summary,
     'Request outcomes': filteredInventoryRollup.request_outcome_summary,
     'Request issues': filteredInventoryRollup.request_issue_summary,
+    'Recommended actions': actionQueue.recommended_action_summary,
+    'Recommended commands': actionQueue.recommended_command_summary,
+    'Recovery primary commands': actionQueue.recovery_primary_summary,
+    'Recovery followups': actionQueue.recovery_followup_summary,
   };
   if (filteredInventory.length === 0) {
     summary.Status = 'no persisted carrier sessions';
@@ -1155,6 +1171,7 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
       'Session path': item.session_path,
     }));
   }
+  blocks.push(renderSessionInventoryWorkflowGroups(actionQueue.workflow_groups, { heading: 'Inventory action groups' }));
   blocks.push(renderSessionInventoryGroups(inventoryGroups));
   console.log(blocks.join('\n\n'));
   return 0;
