@@ -723,6 +723,8 @@ assert.equal(inventoryEntries[0].request_posture, 'clean');
 assert.equal(inventoryEntries[0].request_posture_display, 'clean');
 assert.equal(inventoryEntries[0].mcp_preflight_artifact_path, join(inventoryNaradaDir, 'runtime', 'agent-cli', 'mcp-preflight', 'healthy-session.json'));
 assert.equal(inventoryEntries[0].handoffs.session_read, 'narada-agent-cli --identity narada.test --session healthy-session --session-read');
+assert.equal(inventoryEntries[0].handoffs.session_recovery, 'narada-agent-cli --identity narada.test --session healthy-session --session-recovery');
+assert.equal(inventoryEntries[0].handoffs.session_recovery_json, 'narada-agent-cli --identity narada.test --session healthy-session --session-recovery-json');
 assert.equal(inventoryEntries[0].recommended_action, 'review_session_summary');
 assert.equal(inventoryEntries[0].recommended_command, 'narada-agent-cli --identity narada.test --session healthy-session --session-read');
 assert.equal(inventoryEntries[0].recovery_kind, 'no_recovery');
@@ -1221,6 +1223,7 @@ assert.equal(sessionReadRun.stdout.includes('failed'), true);
 assert.equal(sessionReadRun.stdout.includes('1 (invalid_json), 1 (request_dispatch_failed), 1 (request_failed), 1 (session_closed)'), true);
 assert.equal(sessionReadRun.stdout.includes('review runtime diagnostics'), true);
 assert.equal(sessionReadRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20'), true);
+assert.equal(sessionReadRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-recovery'), true);
 assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'faulted-session')), true);
 const sessionRecoveryRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
@@ -1287,6 +1290,7 @@ assert.equal(sessionReadJson.record.operational_posture, 'healthy');
 assert.equal(sessionReadJson.record.last_lifecycle_state, 'closed');
 assert.equal(sessionReadJson.record.request_posture, 'clean');
 assert.equal(sessionReadJson.record.handoffs.session_read_json, 'narada-agent-cli --identity narada.test --session healthy-session --session-read-json');
+assert.equal(sessionReadJson.record.handoffs.session_recovery, 'narada-agent-cli --identity narada.test --session healthy-session --session-recovery');
 assert.equal(sessionReadJson.record.recommended_action, 'review_session_summary');
 const persistedEvents = readPersistedSessionEvents({ session: 'faulted-session', naradaDir: inventoryNaradaDir });
 assert.equal(persistedEvents.length, 7);

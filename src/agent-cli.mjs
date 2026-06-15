@@ -224,6 +224,8 @@ function buildPersistedSessionHandoffs({ session, identity = IDENTITY, eventCoun
   return {
     session_read: `${base} --session-read`,
     session_read_json: `${base} --session-read-json`,
+    session_recovery: `${base} --session-recovery`,
+    session_recovery_json: `${base} --session-recovery-json`,
     session_events: `${base} --session-events --session-events-filter all --session-events-count ${eventCount}`,
     session_events_issues: `${base} --session-events --session-events-filter issues --session-events-count ${eventCount}`,
     session_events_diagnostics: `${base} --session-events --session-events-filter diagnostics --session-events-count ${eventCount}`,
@@ -395,6 +397,7 @@ function renderSessionInventoryActions(actions = []) {
     'Recovery primary': item.recovery_primary_command ?? 'none',
     'Recovery followup': item.recovery_followup_command ?? 'none',
     'Session read': item?.handoffs?.session_read ?? 'none',
+    'Session recovery': item?.handoffs?.session_recovery ?? 'none',
     'Session issues': item?.handoffs?.session_events_issues ?? 'none',
     'Session diagnostics': item?.handoffs?.session_events_diagnostics ?? 'none',
   }));
@@ -1220,6 +1223,7 @@ async function runSessionInventoryEvents({ siteRoot = SITE_ROOT, naradaDir = NAR
       'Recommended action': item.recommended_action_display,
       'Recommended command': item.recommended_command ?? 'none',
       'Session read': item?.handoffs?.session_read ?? 'none',
+      'Session recovery': item?.handoffs?.session_recovery ?? 'none',
       'Session issues': item?.handoffs?.session_events_issues ?? 'none',
       'Session diagnostics': item?.handoffs?.session_events_diagnostics ?? 'none',
     }));
@@ -1282,6 +1286,7 @@ async function runSessionRecovery({ session = SESSION, siteRoot = SITE_ROOT, nar
     'Recommended action': sessionRecord.recommended_action_display,
     'Recommended command': sessionRecord.recommended_command ?? 'none',
     'Session read': sessionRecord?.handoffs?.session_read ?? 'none',
+    'Session recovery': sessionRecord?.handoffs?.session_recovery ?? 'none',
     'Session issues': sessionRecord?.handoffs?.session_events_issues ?? 'none',
     'Session diagnostics': sessionRecord?.handoffs?.session_events_diagnostics ?? 'none',
     'Session path': sessionRecord.session_path,
@@ -1344,6 +1349,7 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
     'Request issues': sessionRecord.request_issue_summary,
     'Recommended action': sessionRecord.recommended_action_display,
     'Recommended command': sessionRecord.recommended_command ?? 'none',
+    'Session recovery': sessionRecord?.handoffs?.session_recovery ?? 'none',
     'Session read': sessionRecord?.handoffs?.session_read ?? 'none',
     'Session issues': sessionRecord?.handoffs?.session_events_issues ?? 'none',
     'Session diagnostics': sessionRecord?.handoffs?.session_events_diagnostics ?? 'none',
@@ -1410,6 +1416,7 @@ async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaD
     'Preflight artifact': sessionRecord.mcp_preflight_artifact_path ?? 'none',
     'Recommended action': sessionRecord.recommended_action_display,
     'Recommended command': sessionRecord.recommended_command ?? 'none',
+    'Session recovery': sessionRecord?.handoffs?.session_recovery ?? 'none',
     'Session events': sessionRecord?.handoffs?.session_events ?? 'none',
     'Session issues': sessionRecord?.handoffs?.session_events_issues ?? 'none',
     'Session diagnostics': sessionRecord?.handoffs?.session_events_diagnostics ?? 'none',
