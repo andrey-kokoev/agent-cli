@@ -613,11 +613,13 @@ async function runMcpPreflight({ jsonOutput = false } = {}) {
 
 async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DIR, jsonOutput = false } = {}) {
   const inventory = readSessionInventory({ siteRoot, naradaDir });
+  const inventoryRollup = summarizeSessionInventoryRollup(inventory);
   if (jsonOutput) {
     console.log(`${JSON.stringify({
       schema: 'narada.agent_cli.session_inventory.v1',
       site_root: siteRoot,
       carrier_session_count: inventory.length,
+      summary: inventoryRollup,
       sessions: inventory,
     }, null, 2)}\n`);
     return 0;
@@ -625,6 +627,9 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
   const summary = {
     SiteRoot: siteRoot,
     'Carrier sessions': inventory.length,
+    'Heartbeat states': inventoryRollup.heartbeat_status_summary,
+    'MCP states': inventoryRollup.mcp_operational_state_summary,
+    'Terminal states': inventoryRollup.last_terminal_state_summary,
   };
   if (inventory.length === 0) {
     summary.Status = 'no persisted carrier sessions';
@@ -701,6 +706,38 @@ function readSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DIR } =
     })
     .filter(Boolean)
     .sort((left, right) => String(right?.heartbeat_at ?? '').localeCompare(String(left?.heartbeat_at ?? '')) || left.session.localeCompare(right.session));
+}
+
+function summarizeSessionInventoryRollup(inventory = []) {
+  const heartbeatCounts = {};
+  const mcpStateCounts = {};
+  const terminalStateCounts = {};
+  for (const item of inventory) {
+    incrementInventoryCounter(heartbeatCounts, item?.heartbeat_status ?? 'unknown');
+    incrementInventoryCounter(mcpStateCounts, item?.mcp_operational_state ?? 'unknown');
+    incrementInventoryCounter(terminalStateCounts, item?.last_terminal_state ?? 'unknown');
+  }
+  return {
+    heartbeat_status_counts: heartbeatCounts,
+    heartbeat_status_summary: formatInventoryCounts(heartbeatCounts),
+    mcp_operational_state_counts: mcpStateCounts,
+    mcp_operational_state_summary: formatInventoryCounts(mcpStateCounts),
+    last_terminal_state_counts: terminalStateCounts,
+    last_terminal_state_summary: formatInventoryCounts(terminalStateCounts),
+  };
+}
+
+function incrementInventoryCounter(counts, key) {
+  counts[key] = (counts[key] ?? 0) + 1;
+}
+
+function formatInventoryCounts(counts) {
+  const entries = Object.entries(counts);
+  if (entries.length === 0) return '0';
+  return entries
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([key, count]) => `${count} (${key})`)
+    .join(', ');
 }
 
 function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, naradaDir = NARADA_DIR } = {}) {

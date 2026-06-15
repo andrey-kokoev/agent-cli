@@ -686,11 +686,14 @@ const sessionInventoryRun = spawnSync(process.execPath, [
   encoding: 'utf8',
 });
 assert.equal(sessionInventoryRun.status, 0);
-assert.equal(sessionInventoryRun.stdout.includes('Carrier sessions  2'), true);
-assert.equal(sessionInventoryRun.stdout.includes('Session               healthy-session'), true);
-assert.equal(sessionInventoryRun.stdout.includes('MCP state             healthy'), true);
-assert.equal(sessionInventoryRun.stdout.includes('Session               faulted-session'), true);
-assert.equal(sessionInventoryRun.stdout.includes('MCP state             runtime_faulted'), true);
+assert.equal(sessionInventoryRun.stdout.includes('Carrier sessions'), true);
+assert.equal(sessionInventoryRun.stdout.includes('Heartbeat states'), true);
+assert.equal(sessionInventoryRun.stdout.includes('MCP states'), true);
+assert.equal(sessionInventoryRun.stdout.includes('Terminal states'), true);
+assert.equal(sessionInventoryRun.stdout.includes('healthy-session'), true);
+assert.equal(sessionInventoryRun.stdout.includes('healthy'), true);
+assert.equal(sessionInventoryRun.stdout.includes('faulted-session'), true);
+assert.equal(sessionInventoryRun.stdout.includes('runtime_faulted'), true);
 assert.equal(sessionInventoryRun.stdout.includes('MCP startup failures  1 (degraded:mcp_stdout_pollution)'), true);
 assert.equal(sessionInventoryRun.stdout.includes('MCP runtime faults    1 (runtime:fs_read_file)'), true);
 assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-scan-test')), false);
@@ -711,6 +714,14 @@ const sessionInventoryJson = JSON.parse(sessionInventoryJsonRun.stdout);
 assert.equal(sessionInventoryJson.schema, 'narada.agent_cli.session_inventory.v1');
 assert.equal(sessionInventoryJson.site_root, inventoryRoot);
 assert.equal(sessionInventoryJson.carrier_session_count, 2);
+assert.deepEqual(sessionInventoryJson.summary, {
+  heartbeat_status_counts: { alive: 2 },
+  heartbeat_status_summary: '2 (alive)',
+  mcp_operational_state_counts: { healthy: 1, runtime_faulted: 1 },
+  mcp_operational_state_summary: '1 (healthy), 1 (runtime_faulted)',
+  last_terminal_state_counts: { completed: 1, failed: 1 },
+  last_terminal_state_summary: '1 (completed), 1 (failed)',
+});
 assert.equal(Array.isArray(sessionInventoryJson.sessions), true);
 assert.equal(sessionInventoryJson.sessions[0].session, 'healthy-session');
 assert.equal(sessionInventoryJson.sessions[0].agent_id, 'narada.test');
