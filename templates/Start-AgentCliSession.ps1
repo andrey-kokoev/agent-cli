@@ -248,12 +248,31 @@ $displayModel = if ($env:NARADA_AI_MODEL) { $env:NARADA_AI_MODEL } else { 'gpt-4
 Write-Host "  Provider: $IntelligenceProvider" -ForegroundColor DarkGray
 Write-Host "  Model:   $displayModel" -ForegroundColor DarkGray
 Write-Host ""
-
 Write-Host "Preflight MCP fabric..." -ForegroundColor Cyan
-$preflightArgs = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight')
+$preflightArgs = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-json')
 Set-Location $WorkDir
-& node @preflightArgs
+$preflightRaw = & node @preflightArgs
 $preflightExitCode = $LASTEXITCODE
+$preflight = $null
+if ($preflightRaw) {
+    try {
+        $preflight = $preflightRaw | ConvertFrom-Json
+    } catch {
+        Write-Warning "MCP preflight returned non-JSON output; continuing with exit-code-only handling."
+    }
+}
+if ($preflight) {
+    Write-Host ("  MCP state: {0}" -f $preflight.mcp_operational_state) -ForegroundColor DarkGray
+    if ($preflight.mcp_startup_failure_count -gt 0 -and $preflight.mcp_startup_failure_summary) {
+        Write-Host ("  MCP startup failures: {0}" -f $preflight.mcp_startup_failure_summary) -ForegroundColor DarkYellow
+    }
+    if ($preflight.mcp_runtime_fault_count -gt 0 -and $preflight.mcp_runtime_fault_summary) {
+        Write-Host ("  MCP runtime faults:   {0}" -f $preflight.mcp_runtime_fault_summary) -ForegroundColor DarkYellow
+    }
+    if ($preflight.artifact_path) {
+        Write-Host ("  Preflight artifact:   {0}" -f $preflight.artifact_path) -ForegroundColor DarkGray
+    }
+}
 if ($preflightExitCode -eq 1) {
     Write-Error "MCP preflight failed."
     exit 1

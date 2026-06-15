@@ -972,9 +972,10 @@ assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventoryJson'), t
 assert.equal(windowsWrapperTemplate.includes('[switch]$McpPreflightJson'), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-json'"), true);
-assert.equal(windowsWrapperTemplate.includes("'--mcp-preflight-json'"), true);
-assert.equal(windowsWrapperTemplate.includes('Session inventory...'), true);
+assert.equal(windowsWrapperTemplate.includes("$preflightArgs = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-json')"), true);
+assert.equal(windowsWrapperTemplate.includes('ConvertFrom-Json'), true);
 assert.equal(windowsWrapperTemplate.includes('MCP preflight reported degraded startup posture; continuing interactive attach.'), true);
+assert.equal(windowsWrapperTemplate.includes('MCP state:'), true);
 for (const [providerId, adapterId] of Object.entries(expectedAdapters)) {
   const support = resolveProviderSupportState(providerId, metadata[providerId], REQUEST_ADAPTERS);
   assert.equal(support.state, PROVIDER_SUPPORT_STATES.VERIFIED_SUPPORTED);
