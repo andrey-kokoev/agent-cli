@@ -24,6 +24,23 @@ function formatStartupMcpSummary(event) {
   return `[agent-runtime-server] ${parts.join(' | ')}`;
 }
 
+function formatStartupMcpEvent(event) {
+  if (!event || event.event !== 'session_started') return null;
+  if (event.mcp_operational_state === 'healthy') return null;
+  return {
+    schema: 'narada.agent_runtime_server.wrapper_event.v1',
+    event: 'mcp_startup_status',
+    timestamp: event.timestamp ?? new Date().toISOString(),
+    agent_id: event.agent_id ?? null,
+    session_id: event.session_id ?? null,
+    mcp_operational_state: event.mcp_operational_state ?? null,
+    mcp_startup_failure_count: event.mcp_startup_failure_count ?? 0,
+    mcp_startup_failure_summary: event.mcp_startup_failure_summary ?? '0',
+    mcp_runtime_fault_count: event.mcp_runtime_fault_count ?? 0,
+    mcp_runtime_fault_summary: event.mcp_runtime_fault_summary ?? '0',
+  };
+}
+
 function formatRuntimeMcpFaultSummary(event) {
   if (!event || event.event !== 'carrier_diagnostic_recorded') return null;
   if (event.diagnostic_code !== 'mcp_runtime_fault') return null;
@@ -33,9 +50,27 @@ function formatRuntimeMcpFaultSummary(event) {
   return `[agent-runtime-server] MCP runtime fault ${serverName}:${toolName}${errorCode}`;
 }
 
+function formatRuntimeMcpFaultEvent(event) {
+  if (!event || event.event !== 'carrier_diagnostic_recorded') return null;
+  if (event.diagnostic_code !== 'mcp_runtime_fault') return null;
+  return {
+    schema: 'narada.agent_runtime_server.wrapper_event.v1',
+    event: 'mcp_runtime_fault',
+    timestamp: event.timestamp ?? new Date().toISOString(),
+    agent_id: event.agent_id ?? null,
+    session_id: event.session_id ?? null,
+    diagnostic_code: event.diagnostic_code,
+    server_name: event.server_name ?? 'unknown',
+    tool_name: event.tool_name ?? '<missing>',
+    error_code: event.error_code ?? null,
+  };
+}
+
 async function main() {
   const requestedArgs = process.argv.slice(2);
-  const args = requestedArgs.includes('--server') ? requestedArgs : ['--server', ...requestedArgs];
+  const wrapperEventsJsonl = requestedArgs.includes('--wrapper-events-jsonl');
+  const forwardedArgs = requestedArgs.filter((arg) => arg !== '--wrapper-events-jsonl');
+  const args = forwardedArgs.includes('--server') ? forwardedArgs : ['--server', ...forwardedArgs];
   const child = spawn(process.execPath, [carrierPath, ...args], {
     stdio: ['inherit', 'pipe', 'pipe'],
     env: process.env,
@@ -62,11 +97,19 @@ async function main() {
         const summary = formatStartupMcpSummary(event);
         if (summary) {
           console.error(summary);
+          if (wrapperEventsJsonl) {
+            const wrapperEvent = formatStartupMcpEvent(event);
+            if (wrapperEvent) console.error(JSON.stringify(wrapperEvent));
+          }
           startupSummaryPrinted = true;
         }
         const runtimeFaultSummary = formatRuntimeMcpFaultSummary(event);
         if (runtimeFaultSummary && !runtimeFaultSummaries.has(runtimeFaultSummary)) {
           console.error(runtimeFaultSummary);
+          if (wrapperEventsJsonl) {
+            const wrapperEvent = formatRuntimeMcpFaultEvent(event);
+            if (wrapperEvent) console.error(JSON.stringify(wrapperEvent));
+          }
           runtimeFaultSummaries.add(runtimeFaultSummary);
         }
       } catch {}
@@ -95,4 +138,4 @@ if (isEntrypoint) {
   });
 }
 
-export { formatStartupMcpSummary, formatRuntimeMcpFaultSummary };
+export { formatStartupMcpEvent, formatStartupMcpSummary, formatRuntimeMcpFaultEvent, formatRuntimeMcpFaultSummary };

@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
-import { formatRuntimeMcpFaultSummary, formatStartupMcpSummary } from '../bin/agent-runtime-server.mjs';
+import { formatRuntimeMcpFaultEvent, formatRuntimeMcpFaultSummary, formatStartupMcpEvent, formatStartupMcpSummary } from '../bin/agent-runtime-server.mjs';
 import { commandTokens } from '@narada2/carrier-command-contract';
 import {
   classifyCarrierInputHold,
@@ -762,9 +762,13 @@ assert.equal(interactiveHeaderRows.includes('MCP state            runtime_faulte
 assert.equal(interactiveHeaderRows.includes('MCP startup failures 1 (polluted:mcp_stdout_pollution)'), true);
 assert.equal(interactiveHeaderRows.includes('MCP runtime faults   1 (narada:fs_read_file)'), true);
 assert.equal(formatStartupMcpSummary({ event: 'session_started', mcp_operational_state: 'healthy' }), null);
+assert.deepEqual(formatStartupMcpEvent({ event: 'session_started', mcp_operational_state: 'healthy' }), null);
 assert.equal(
   formatStartupMcpSummary({
     event: 'session_started',
+    timestamp: '2026-06-15T14:20:00.000Z',
+    agent_id: 'narada.test',
+    session_id: 'runtime-wrapper-test',
     mcp_operational_state: 'startup_degraded',
     mcp_startup_failure_count: 1,
     mcp_startup_failure_summary: '1 (degraded:mcp_stdout_pollution)',
@@ -772,6 +776,31 @@ assert.equal(
     mcp_runtime_fault_summary: '0',
   }),
   '[agent-runtime-server] MCP state=startup_degraded | startup=1 (degraded:mcp_stdout_pollution)',
+);
+assert.deepEqual(
+  formatStartupMcpEvent({
+    event: 'session_started',
+    timestamp: '2026-06-15T14:20:00.000Z',
+    agent_id: 'narada.test',
+    session_id: 'runtime-wrapper-test',
+    mcp_operational_state: 'startup_degraded',
+    mcp_startup_failure_count: 1,
+    mcp_startup_failure_summary: '1 (degraded:mcp_stdout_pollution)',
+    mcp_runtime_fault_count: 0,
+    mcp_runtime_fault_summary: '0',
+  }),
+  {
+    schema: 'narada.agent_runtime_server.wrapper_event.v1',
+    event: 'mcp_startup_status',
+    timestamp: '2026-06-15T14:20:00.000Z',
+    agent_id: 'narada.test',
+    session_id: 'runtime-wrapper-test',
+    mcp_operational_state: 'startup_degraded',
+    mcp_startup_failure_count: 1,
+    mcp_startup_failure_summary: '1 (degraded:mcp_stdout_pollution)',
+    mcp_runtime_fault_count: 0,
+    mcp_runtime_fault_summary: '0',
+  },
 );
 assert.equal(
   formatRuntimeMcpFaultSummary({
@@ -783,7 +812,31 @@ assert.equal(
   }),
   '[agent-runtime-server] MCP runtime fault reset:fs_stat ECONNRESET',
 );
+assert.deepEqual(
+  formatRuntimeMcpFaultEvent({
+    event: 'carrier_diagnostic_recorded',
+    timestamp: '2026-06-15T14:21:00.000Z',
+    agent_id: 'narada.test',
+    session_id: 'runtime-wrapper-test',
+    diagnostic_code: 'mcp_runtime_fault',
+    server_name: 'reset',
+    tool_name: 'fs_stat',
+    error_code: 'ECONNRESET',
+  }),
+  {
+    schema: 'narada.agent_runtime_server.wrapper_event.v1',
+    event: 'mcp_runtime_fault',
+    timestamp: '2026-06-15T14:21:00.000Z',
+    agent_id: 'narada.test',
+    session_id: 'runtime-wrapper-test',
+    diagnostic_code: 'mcp_runtime_fault',
+    server_name: 'reset',
+    tool_name: 'fs_stat',
+    error_code: 'ECONNRESET',
+  },
+);
 assert.equal(formatRuntimeMcpFaultSummary({ event: 'carrier_diagnostic_recorded', diagnostic_code: 'other' }), null);
+assert.equal(formatRuntimeMcpFaultEvent({ event: 'carrier_diagnostic_recorded', diagnostic_code: 'other' }), null);
 assert.deepEqual(createMcpStatusSnapshot(Object.assign(Object.create(null), {
   narada: { tools: [{ name: 'fs_read_file' }] },
   __mcp_startup_failures: [{ server_name: 'polluted', code: 'mcp_stdout_pollution' }],
@@ -2514,6 +2567,7 @@ writeFileSync(join(runtimeServerSite, '.ai', 'mcp', 'degraded-mcp.json'), `${JSO
 }, null, 2)}\n`, 'utf8');
 const runtimeServerChild = spawn(process.execPath, [
   fileURLToPath(new URL('../bin/agent-runtime-server.mjs', import.meta.url)),
+  '--wrapper-events-jsonl',
   '--identity', 'narada.test',
   '--session', 'runtime-wrapper-test',
 ], {
@@ -2537,6 +2591,12 @@ const runtimeServerExitCode = await new Promise((resolveExit) => runtimeServerCh
 assert.equal(runtimeServerExitCode, 0);
 const runtimeServerEvents = runtimeServerStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
 assert.equal(runtimeServerEvents[0].event, 'session_started');
+assert.equal(runtimeServerEvents[0].mcp_operational_state, 'startup_degraded');
+assert.equal(runtimeServerStderr.includes('[agent-runtime-server] MCP state=startup_degraded | startup=1 (degraded:mcp_stdout_pollution)'), true);
+const runtimeServerStderrEvents = runtimeServerStderr.split(/\r?\n/).filter((line) => line.trim().startsWith('{')).map((line) => JSON.parse(line));
+assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'mcp_startup_status' && event.mcp_operational_state === 'startup_degraded' && event.mcp_startup_failure_summary === '1 (degraded:mcp_stdout_pollution)'), true);
+assert.equal(runtimeServerEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-runtime-wrapper-1' && event.mcp_startup_failure_summary === '1 (degraded:mcp_stdout_pollution)'), true);
+rmSync(runtimeServerSite, { recursive: true, force: true });
 assert.equal(runtimeServerEvents[0].mcp_operational_state, 'startup_degraded');
 assert.equal(runtimeServerStderr.includes('[agent-runtime-server] MCP state=startup_degraded | startup=1 (degraded:mcp_stdout_pollution)'), true);
 assert.equal(runtimeServerEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-runtime-wrapper-1' && event.mcp_startup_failure_summary === '1 (degraded:mcp_stdout_pollution)'), true);
