@@ -86,6 +86,7 @@ const SESSION = options.session ?? IDENTITY.replace(/\./g, '-');
 const AUTO_APPROVE = true;
 const PROGRAMMATIC_INPUTS = buildProgrammaticInputs(options);
 const EXIT_AFTER_PROGRAMMATIC_INPUT = PROGRAMMATIC_INPUTS.length > 0 && options.interactiveAfterMessage !== true;
+const MCP_PREFLIGHT_MODE = options.mcpPreflight === true;
 const SERVER_MODE = options.server === true;
 const sessionSettings = {
   model: options.model ?? MODEL,
@@ -316,11 +317,11 @@ const NARADA_DIR = basename(SITE_ROOT) === '.narada' ? SITE_ROOT : join(SITE_ROO
 const SESSION_DIR = SERVER_MODE
   ? join(NARADA_DIR, 'crew', 'nars-sessions', SESSION)
   : (existsSync(PC_RUNTIME) ? join(PC_RUNTIME, 'agent-sessions') : resolve(SITE_ROOT, '.ai', 'runtime', 'agent-sessions'));
-if (!existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
 const SESSION_PATH = SERVER_MODE ? join(SESSION_DIR, 'session.jsonl') : join(SESSION_DIR, `${SESSION}.jsonl`);
 const EVENTS_PATH = join(SESSION_DIR, 'events.jsonl');
 const CARRIER_SESSION_DIR = join(NARADA_DIR, 'crew', 'nars-sessions', SESSION);
-if (!existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
 const HEARTBEAT_PATH = join(CARRIER_SESSION_DIR, 'heartbeat.json');
 const HEARTBEAT_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_HEARTBEAT_ENABLE, true);
 const OPERATION_HEARTBEAT_DIRECTIVE_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_OPERATION_HEARTBEAT_DIRECTIVE_ENABLE, SERVER_MODE);
@@ -334,8 +335,11 @@ let activeOperationHeartbeatDirectiveEmitter = null;
 
 // ---------------------------------------------------------------------------
 // Main
-// ---------------------------------------------------------------------------
 async function main() {
+  if (MCP_PREFLIGHT_MODE) {
+    process.exitCode = await runMcpPreflight();
+    return;
+  }
   if (HEARTBEAT_ENABLED) {
     activeHeartbeat = startCarrierHeartbeat({
       path: HEARTBEAT_PATH,
@@ -353,6 +357,7 @@ async function main() {
   }
 
   const mcpServers = await discoverAndStartMcpServers(SITE_ROOT);
+
   recordMcpStartupFailures(mcpServers);
   const allTools = aggregateTools(mcpServers);
   const rolePrompt = loadRolePrompt(IDENTITY, SITE_ROOT);
@@ -504,6 +509,29 @@ async function main() {
   }
   printHeader('Session saved. Goodbye.', { before: true });
 }
+
+async function runMcpPreflight() {
+  const mcpServers = await discoverAndStartMcpServers(SITE_ROOT);
+  try {
+    const allTools = aggregateTools(mcpServers);
+    const mcpStatus = createMcpStatusSnapshot(mcpServers);
+    console.log(formatKeyValueRows({
+      Identity: IDENTITY,
+      Session: SESSION,
+      SiteRoot: SITE_ROOT,
+      'MCP servers': Object.keys(mcpServers).length,
+      'MCP state': mcpStatus.mcp_operational_state,
+      ...(mcpStatus.mcp_startup_failure_count > 0 ? { 'MCP startup failures': mcpStatus.mcp_startup_failure_summary } : {}),
+      ...(mcpStatus.mcp_runtime_fault_count > 0 ? { 'MCP runtime faults': mcpStatus.mcp_runtime_fault_summary } : {}),
+      Tools: allTools.length,
+    }));
+    return mcpStatus.mcp_operational_state === 'healthy' ? 0 : 2;
+  } finally {
+    closeMcpServers(mcpServers);
+  }
+}
+
+
 
 function startInteractiveControlJsonlWatcher({ controlPath, inputQueue }) {
   mkdirSync(resolve(controlPath, '..'), { recursive: true });
@@ -5059,6 +5087,8 @@ function parseArgs(argv) {
       opts.autoApprove = true;
     } else if (argv[i] === '--server') {
       opts.server = true;
+    } else if (argv[i] === '--mcp-preflight') {
+      opts.mcpPreflight = true;
     } else if (argv[i] === '--stream') {
       opts.stream = true;
     } else if (argv[i] === '--no-stream') {
@@ -5200,6 +5230,7 @@ export {
   renderMarkdownForTerminal,
   wrapTerminalLine,
   runConversationTurn,
+  runMcpPreflight,
   runServerMode,
   serverStatus,
   resolveProviderAdapter,
@@ -5213,7 +5244,7 @@ export {
 
 if (isEntrypoint) {
   if (options.help) {
-    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
+    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
     console.log('Programmatic input: --message and --message-file are explicit control inputs; do not use raw stdin piping as the control API.');
     console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, ANTHROPIC_API_KEY, NARADA_AI_API_KEY, NARADA_AI_BASE_URL, NARADA_AI_MODEL, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_ENABLE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_DELAY_MS, NARADA_SITE_ROOT`);
     process.exit(0);

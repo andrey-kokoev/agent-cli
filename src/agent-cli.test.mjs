@@ -558,6 +558,7 @@ assert.deepEqual(parseArgs(['--startup-system-directive', 'run startup sequence'
 });
 assert.deepEqual(parseArgs(['--no-startup-system-directive']), { startupSystemDirective: false });
 assert.deepEqual(parseArgs(['--control-jsonl', '.narada/control.jsonl']), { controlJsonl: '.narada/control.jsonl' });
+assert.deepEqual(parseArgs(['--mcp-preflight']), { mcpPreflight: true });
 assert.equal(parseColorEnv('off', true), false);
 const heartbeatRoot = mkdtempSync(join(tmpdir(), 'narada-agent-cli-heartbeat-'));
 const heartbeatSession = 'carrier_session_heartbeat_test';
@@ -788,6 +789,8 @@ assert.equal(windowsWrapperTemplate.includes("[ValidateSet('openai-api', 'kimi-a
 assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_API_BASE_URL"), true);
 assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_MODEL"), true);
 assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and -not $env:NARADA_AI_API_KEY -and $env:KIMI_CODE_API_KEY"), true);
+assert.equal(windowsWrapperTemplate.includes("'--mcp-preflight'"), true);
+assert.equal(windowsWrapperTemplate.includes('MCP preflight reported degraded startup posture; continuing interactive attach.'), true);
 for (const [providerId, adapterId] of Object.entries(expectedAdapters)) {
   const support = resolveProviderSupportState(providerId, metadata[providerId], REQUEST_ADAPTERS);
   assert.equal(support.state, PROVIDER_SUPPORT_STATES.VERIFIED_SUPPORTED);
@@ -2056,6 +2059,99 @@ const degradedSessionEntries = readFileSync(join(degradedServerSite, '.narada', 
   .map((line) => JSON.parse(line));
 assert.equal(degradedSessionEntries.some((entry) => entry.event_kind === 'carrier_diagnostic_recorded' && entry.payload?.server_name === 'degraded' && entry.payload?.diagnostic_code === 'mcp_stdout_pollution'), true);
 rmSync(degradedServerSite, { recursive: true, force: true });
+
+const preflightHealthySite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-preflight-healthy-'));
+mkdirSync(join(preflightHealthySite, '.ai', 'mcp'), { recursive: true });
+const preflightHealthyServerPath = join(preflightHealthySite, 'healthy-mcp-server.mjs');
+writeFileSync(preflightHealthyServerPath, `
+import readline from 'node:readline';
+const rl = readline.createInterface({ input: process.stdin });
+rl.on('line', (line) => {
+  const request = JSON.parse(line);
+  if (request.method === 'initialize') {
+    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05' } }));
+    return;
+  }
+  if (request.method === 'tools/list') {
+    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { tools: [{ name: 'fs_stat', inputSchema: { type: 'object' } }] } }));
+  }
+});
+`, 'utf8');
+writeFileSync(join(preflightHealthySite, '.ai', 'mcp', 'healthy-mcp.json'), `${JSON.stringify({
+  mcpServers: {
+    healthy: {
+      transport: 'stdio',
+      command: 'node',
+      args: [preflightHealthyServerPath],
+    },
+  },
+}, null, 2)}\n`, 'utf8');
+const preflightHealthy = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--identity', 'narada.test',
+  '--session', 'preflight-healthy-test',
+  '--mcp-preflight',
+], {
+  env: {
+    ...process.env,
+    NARADA_SITE_ROOT: preflightHealthySite,
+    NARADA_INTELLIGENCE_PROVIDER: 'codex-subscription',
+  },
+  encoding: 'utf8',
+});
+assert.equal(preflightHealthy.status, 0);
+assert.equal(preflightHealthy.stdout.includes('MCP state    healthy'), true);
+assert.equal(preflightHealthy.stdout.includes('MCP servers  1'), true);
+assert.equal(preflightHealthy.stdout.includes('Tools        1'), true);
+assert.equal(existsSync(join(preflightHealthySite, '.narada', 'crew', 'nars-sessions', 'preflight-healthy-test')), false);
+rmSync(preflightHealthySite, { recursive: true, force: true });
+
+const preflightDegradedSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-preflight-degraded-'));
+mkdirSync(join(preflightDegradedSite, '.ai', 'mcp'), { recursive: true });
+const preflightDegradedServerPath = join(preflightDegradedSite, 'degraded-mcp-server.mjs');
+writeFileSync(preflightDegradedServerPath, `
+import readline from 'node:readline';
+console.log('startup banner');
+const rl = readline.createInterface({ input: process.stdin });
+rl.on('line', (line) => {
+  const request = JSON.parse(line);
+  if (request.method === 'initialize') {
+    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05' } }));
+    return;
+  }
+  if (request.method === 'tools/list') {
+    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { tools: [] } }));
+  }
+});
+`, 'utf8');
+writeFileSync(join(preflightDegradedSite, '.ai', 'mcp', 'degraded-mcp.json'), `${JSON.stringify({
+  mcpServers: {
+    degraded: {
+      transport: 'stdio',
+      command: 'node',
+      args: [preflightDegradedServerPath],
+    },
+  },
+}, null, 2)}\n`, 'utf8');
+const preflightDegraded = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--identity', 'narada.test',
+  '--session', 'preflight-degraded-test',
+  '--mcp-preflight',
+], {
+  env: {
+    ...process.env,
+    NARADA_SITE_ROOT: preflightDegradedSite,
+    NARADA_INTELLIGENCE_PROVIDER: 'codex-subscription',
+  },
+  encoding: 'utf8',
+});
+assert.equal(preflightDegraded.status, 2);
+assert.equal(preflightDegraded.stdout.includes('MCP servers           0'), true);
+assert.equal(preflightDegraded.stdout.includes('MCP state             startup_degraded'), true);
+assert.equal(preflightDegraded.stdout.includes('MCP startup failures  1 (degraded:mcp_stdout_pollution)'), true);
+assert.equal(existsSync(join(preflightDegradedSite, '.narada', 'crew', 'nars-sessions', 'preflight-degraded-test')), false);
+rmSync(preflightDegradedSite, { recursive: true, force: true });
 
 const runtimeServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-runtime-server-'));
 mkdirSync(join(runtimeServerSite, '.ai', 'mcp'), { recursive: true });

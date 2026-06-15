@@ -224,6 +224,20 @@ Write-Host "  Provider: $IntelligenceProvider" -ForegroundColor DarkGray
 Write-Host "  Model:   $displayModel" -ForegroundColor DarkGray
 Write-Host ""
 
+Write-Host "Preflight MCP fabric..." -ForegroundColor Cyan
+$preflightArgs = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight')
+Set-Location $WorkDir
+& node @preflightArgs
+$preflightExitCode = $LASTEXITCODE
+if ($preflightExitCode -eq 1) {
+    Write-Error "MCP preflight failed."
+    exit 1
+}
+if ($preflightExitCode -eq 2) {
+    Write-Warning "MCP preflight reported degraded startup posture; continuing interactive attach."
+}
+Write-Host ""
+
 Set-Location $WorkDir
 & node @argList
 
