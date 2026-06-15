@@ -632,6 +632,7 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
     'Terminal states': inventoryRollup.last_terminal_state_summary,
     'Lifecycle states': inventoryRollup.last_lifecycle_state_summary,
     'Lifecycle outcomes': inventoryRollup.lifecycle_outcome_summary,
+    'Request issues': inventoryRollup.request_issue_summary,
   };
   if (inventory.length === 0) {
     summary.Status = 'no persisted carrier sessions';
@@ -716,12 +717,14 @@ function summarizeSessionInventoryRollup(inventory = []) {
   const terminalStateCounts = {};
   const lifecycleStateCounts = {};
   const lifecycleOutcomeCounts = {};
+  const requestIssueCounts = {};
   for (const item of inventory) {
     incrementInventoryCounter(heartbeatCounts, item?.heartbeat_status ?? 'unknown');
     incrementInventoryCounter(mcpStateCounts, item?.mcp_operational_state ?? 'unknown');
     incrementInventoryCounter(terminalStateCounts, item?.last_terminal_state ?? 'unknown');
     incrementInventoryCounter(lifecycleStateCounts, item?.last_lifecycle_state ?? 'unknown');
     mergeInventoryCounts(lifecycleOutcomeCounts, item?.lifecycle_state_counts ?? null);
+    mergeInventoryCounts(requestIssueCounts, item?.request_issue_counts ?? null);
   }
   return {
     heartbeat_status_counts: heartbeatCounts,
@@ -734,6 +737,8 @@ function summarizeSessionInventoryRollup(inventory = []) {
     last_lifecycle_state_summary: formatInventoryCounts(lifecycleStateCounts),
     lifecycle_outcome_counts: lifecycleOutcomeCounts,
     lifecycle_outcome_summary: formatInventoryCounts(lifecycleOutcomeCounts),
+    request_issue_counts: requestIssueCounts,
+    request_issue_summary: formatInventoryCounts(requestIssueCounts),
   };
 }
 
@@ -768,6 +773,13 @@ function classifyPersistedSessionLifecycleState(entry) {
   return null;
 }
 
+function classifyPersistedSessionIssueCode(entry) {
+  const eventKind = entry?.event ?? entry?.event_kind ?? null;
+  if (eventKind === 'error') return entry?.code ?? entry?.payload?.code ?? 'error';
+  if (eventKind === 'interactive_loop_error') return 'interactive_loop_error';
+  return null;
+}
+
 function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, naradaDir = NARADA_DIR } = {}) {
   const heartbeat = readJsonFile(join(sessionDir, 'heartbeat.json'));
   const entries = readJsonlFile(join(sessionDir, 'session.jsonl'));
@@ -775,6 +787,7 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
   const runtimeDiagnostics = [];
   let linkedPreflight = null;
   const lifecycleStateCounts = {};
+  const requestIssueCounts = {};
   let lastEventKind = null;
   let lastEventAt = null;
   let lastTerminalState = null;
@@ -794,6 +807,8 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
       lastLifecycleAt = lifecycleOccurredAt ?? lastLifecycleAt;
       lastLifecycleState = lifecycleState;
     }
+    const issueCode = classifyPersistedSessionIssueCode(entry);
+    if (issueCode) incrementInventoryCounter(requestIssueCounts, issueCode);
     if (entry?.event_kind === 'input_completed' || entry?.event === 'input_event_completed') {
       lastTerminalState = entry?.payload?.terminal_state ?? entry?.terminal_state ?? lastTerminalState;
     }
@@ -838,6 +853,8 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     last_lifecycle_state: lastLifecycleState,
     lifecycle_state_counts: lifecycleStateCounts,
     lifecycle_state_summary: formatInventoryCounts(lifecycleStateCounts),
+    request_issue_counts: requestIssueCounts,
+    request_issue_summary: formatInventoryCounts(requestIssueCounts),
     mcp_operational_state: mcpOperationalState,
     mcp_startup_failure_summary: startupFailures.length > 0
       ? formatMcpStartupFailureSummary(startupFailures)

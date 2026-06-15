@@ -635,6 +635,13 @@ writeFileSync(join(inventorySessionsDir, 'faulted-session', 'session.jsonl'), [
     payload: { server_name: 'runtime', diagnostic_code: 'mcp_runtime_fault', tool_name: 'fs_read_file' },
   }),
   JSON.stringify({
+    event: 'error',
+    timestamp: '2026-06-14T11:59:40.000Z',
+    request_id: null,
+    code: 'invalid_json',
+    message: 'Unexpected token',
+  }),
+  JSON.stringify({
     event_kind: 'input_completed',
     timestamp: '2026-06-14T11:59:45.000Z',
     payload: { terminal_state: 'failed' },
@@ -672,7 +679,7 @@ assert.equal(inventoryEntries[1].session, 'faulted-session');
 assert.equal(inventoryEntries[1].agent_id, 'narada.test');
 assert.equal(inventoryEntries[1].started_at, '2026-06-14T11:40:00.000Z');
 assert.equal(inventoryEntries[1].mcp_operational_state, 'runtime_faulted');
-assert.equal(inventoryEntries[1].session_event_count, 3);
+assert.equal(inventoryEntries[1].session_event_count, 4);
 assert.equal(inventoryEntries[1].last_event_kind, 'input_completed');
 assert.equal(inventoryEntries[1].last_event_at, '2026-06-14T11:59:45.000Z');
 assert.equal(inventoryEntries[1].last_terminal_state, 'failed');
@@ -681,6 +688,8 @@ assert.equal(inventoryEntries[1].last_lifecycle_at, '2026-06-14T11:59:45.000Z');
 assert.equal(inventoryEntries[1].last_lifecycle_state, 'failed');
 assert.deepEqual(inventoryEntries[1].lifecycle_state_counts, { failed: 1 });
 assert.equal(inventoryEntries[1].lifecycle_state_summary, '1 (failed)');
+assert.deepEqual(inventoryEntries[1].request_issue_counts, { invalid_json: 1 });
+assert.equal(inventoryEntries[1].request_issue_summary, '1 (invalid_json)');
 assert.equal(inventoryEntries[1].mcp_startup_failure_summary, '1 (degraded:mcp_stdout_pollution)');
 assert.equal(inventoryEntries[1].mcp_runtime_fault_summary, '1 (runtime:fs_read_file)');
 const sessionInventoryRun = spawnSync(process.execPath, [
@@ -702,6 +711,7 @@ assert.equal(sessionInventoryRun.stdout.includes('MCP states'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Terminal states'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Lifecycle states'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Lifecycle outcomes'), true);
+assert.equal(sessionInventoryRun.stdout.includes('Request issues'), true);
 assert.equal(sessionInventoryRun.stdout.includes('healthy-session'), true);
 assert.equal(sessionInventoryRun.stdout.includes('healthy'), true);
 assert.equal(sessionInventoryRun.stdout.includes('faulted-session'), true);
@@ -737,6 +747,8 @@ assert.deepEqual(sessionInventoryJson.summary, {
   last_lifecycle_state_summary: '1 (closed), 1 (failed)',
   lifecycle_outcome_counts: { closed: 1, completed: 1, failed: 1 },
   lifecycle_outcome_summary: '1 (closed), 1 (completed), 1 (failed)',
+  request_issue_counts: { invalid_json: 1 },
+  request_issue_summary: '1 (invalid_json)',
 });
 assert.equal(Array.isArray(sessionInventoryJson.sessions), true);
 assert.equal(sessionInventoryJson.sessions[0].session, 'healthy-session');
