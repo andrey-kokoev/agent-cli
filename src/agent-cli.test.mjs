@@ -30,6 +30,7 @@ import {
   copyToClipboard,
   consumeOperatorDirectiveInputText,
   createCarrierDirectiveEmitter,
+  createInteractiveHeaderRows,
   createInputQueue,
   createOperationHeartbeatDirectiveEmitter,
   createTerminalStyle,
@@ -601,6 +602,19 @@ assert.equal(formatHeaderRow('Identity', 'narada.architect', {}).includes('\x1b[
 const headerRows = stripAnsiForTest(formatHeaderRows([['MCP servers', 1], ['  narada-proper', '29 tools']]));
 assert.equal(headerRows.includes('MCP servers     1'), true);
 assert.equal(headerRows.includes('  narada-proper 29 tools'), true);
+const interactiveHeaderRows = stripAnsiForTest(formatHeaderRows(createInteractiveHeaderRows({
+  mcpServers: Object.assign(Object.create(null), {
+    narada: { tools: [{ name: 'fs_read_file' }] },
+    __mcp_startup_failures: [{ server_name: 'polluted', code: 'mcp_stdout_pollution' }],
+    __mcp_runtime_diagnostics: [{ server_name: 'narada', tool_name: 'fs_read_file' }],
+  }),
+  allTools: [{ name: 'fs_read_file' }],
+  sessionSettings: { model: 'gpt-5', thinking: 'medium', stream: true, goal: null },
+  transcriptDisplaySettings: { toolOutputs: true },
+})));
+assert.equal(interactiveHeaderRows.includes('MCP state            runtime_faulted'), true);
+assert.equal(interactiveHeaderRows.includes('MCP startup failures 1 (polluted:mcp_stdout_pollution)'), true);
+assert.equal(interactiveHeaderRows.includes('MCP runtime faults   1 (narada:fs_read_file)'), true);
 assert.deepEqual(wrapTerminalLine('alpha beta gamma', 10), ['alpha beta', 'gamma']);
 assert.equal(renderMarkdownForTerminal('- `code`').includes('• '), true);
 assert.equal(renderMarkdownForTerminal('- `code`').includes('\x1b[90mcode\x1b[0m'), true);

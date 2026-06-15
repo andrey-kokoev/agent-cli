@@ -238,6 +238,36 @@ function mcpOperationalState(mcpServers) {
   return 'startup_degraded';
 }
 
+function createInteractiveHeaderRows({
+  mcpServers,
+  allTools,
+  sessionSettings,
+  transcriptDisplaySettings,
+} = {}) {
+  const startupFailures = getMcpStartupFailures(mcpServers);
+  const runtimeDiagnostics = getMcpRuntimeDiagnostics(mcpServers);
+  return [
+    ['Identity', IDENTITY],
+    ['Session', SESSION],
+    ['Provider', INTELLIGENCE_PROVIDER],
+    ['Model', sessionSettings.model],
+    ['Thinking', sessionSettings.thinking],
+    ['Stream', sessionSettings.stream ? 'on' : 'off'],
+    ['Goal', carrierGoalStatusLabel(sessionSettings.goal)],
+    ['MCP servers', Object.keys(mcpServers).length],
+    ['MCP state', mcpOperationalState(mcpServers)],
+    ...(startupFailures.length > 0 ? [['MCP startup failures', formatMcpStartupFailureSummary(startupFailures)]] : []),
+    ...(runtimeDiagnostics.length > 0 ? [['MCP runtime faults', formatMcpRuntimeDiagnosticSummary(runtimeDiagnostics)]] : []),
+    ...Object.entries(mcpServers)
+      .filter(([, srv]) => Array.isArray(srv?.tools))
+      .map(([name, srv]) => [`  ${name}`, `${srv.tools.length} tools`]),
+    ['Tools', allTools.length],
+    ['Tool outputs', transcriptDisplaySettings.toolOutputs ? 'shown' : 'hidden'],
+    ['Approvals', 'disabled'],
+    ['Help', '/help'],
+  ];
+}
+
 function environmentBlockLength(env) {
   return Object.entries(env).reduce((total, [key, value]) => total + key.length + String(value ?? '').length + 2, 1);
 }
@@ -317,21 +347,12 @@ async function main() {
   let controlWatcher = null;
   const promptState = { active: false };
 
-  printHeaderRows([
-    ['Identity', IDENTITY],
-    ['Session', SESSION],
-    ['Provider', INTELLIGENCE_PROVIDER],
-    ['Model', sessionSettings.model],
-    ['Thinking', sessionSettings.thinking],
-    ['Stream', sessionSettings.stream ? 'on' : 'off'],
-    ['Goal', carrierGoalStatusLabel(sessionSettings.goal)],
-    ['MCP servers', Object.keys(mcpServers).length],
-    ...Object.entries(mcpServers).map(([name, srv]) => [`  ${name}`, `${srv.tools.length} tools`]),
-    ['Tools', allTools.length],
-    ['Tool outputs', transcriptDisplaySettings.toolOutputs ? 'shown' : 'hidden'],
-    ['Approvals', 'disabled'],
-    ['Help', '/help'],
-  ], { before: true, after: true });
+  printHeaderRows(createInteractiveHeaderRows({
+    mcpServers,
+    allTools,
+    sessionSettings,
+    transcriptDisplaySettings,
+  }), { before: true, after: true });
 
   let messages = loadSession(SESSION_PATH);
   if (messages.length === 0 && rolePrompt) {
@@ -5108,6 +5129,7 @@ export {
   cleanOpenAiMessages,
   codexExecMcpToolEventSummary,
   consumeOperatorDirectiveInputText,
+  createInteractiveHeaderRows,
   codexExecEventText,
   discoverAndStartMcpServers,
   environmentBlockLength,
