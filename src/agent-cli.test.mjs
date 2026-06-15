@@ -575,6 +575,8 @@ assert.deepEqual(parseArgs(['--session-inventory']), { sessionInventory: true })
 assert.deepEqual(parseArgs(['--session-inventory-json']), { sessionInventoryJson: true });
 assert.deepEqual(parseArgs(['--session-inventory-actions']), { sessionInventoryActions: true });
 assert.deepEqual(parseArgs(['--session-inventory-actions-json']), { sessionInventoryActionsJson: true });
+assert.deepEqual(parseArgs(['--session-inventory-recovery']), { sessionInventoryRecovery: true });
+assert.deepEqual(parseArgs(['--session-inventory-recovery-json']), { sessionInventoryRecoveryJson: true });
 assert.deepEqual(parseArgs(['--session-inventory-events']), { sessionInventoryEvents: true });
 assert.deepEqual(parseArgs(['--session-inventory-events-json']), { sessionInventoryEventsJson: true });
 assert.equal(parseColorEnv('off', true), false);
@@ -917,6 +919,53 @@ assert.equal(sessionInventoryActionsJson.actions[0].recommended_action, 'review_
 assert.equal(sessionInventoryActionsJson.actions[1].session, 'faulted-session');
 assert.equal(sessionInventoryActionsJson.actions[1].recommended_action, 'review_runtime_diagnostics');
 assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-actions-json-test')), false);
+const sessionInventoryRecoveryRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-inventory-recovery',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'inventory-recovery-test',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(sessionInventoryRecoveryRun.status, 0);
+assert.equal(sessionInventoryRecoveryRun.stdout.includes('Recovery queue'), true);
+assert.equal(sessionInventoryRecoveryRun.stdout.includes('faulted-session'), true);
+assert.equal(sessionInventoryRecoveryRun.stdout.includes('healthy-session'), false);
+assert.equal(sessionInventoryRecoveryRun.stdout.includes('Recovery groups: review_runtime_diagnostics (1)'), true);
+assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-recovery-test')), false);
+const sessionInventoryRecoveryJsonRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-inventory-recovery-json',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'inventory-recovery-json-test',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(sessionInventoryRecoveryJsonRun.status, 0);
+const sessionInventoryRecoveryJson = JSON.parse(sessionInventoryRecoveryJsonRun.stdout);
+assert.equal(sessionInventoryRecoveryJson.schema, 'narada.agent_cli.session_inventory_recovery.v1');
+assert.equal(sessionInventoryRecoveryJson.site_root, inventoryRoot);
+assert.equal(sessionInventoryRecoveryJson.carrier_session_count, 1);
+assert.equal(sessionInventoryRecoveryJson.total_carrier_session_count, 2);
+assert.deepEqual(sessionInventoryRecoveryJson.summary, {
+  recommended_action_counts: {
+    review_runtime_diagnostics: 1,
+  },
+  recommended_action_summary: '1 (review_runtime_diagnostics)',
+});
+assert.equal(sessionInventoryRecoveryJson.groups.review_runtime_diagnostics[0].session, 'faulted-session');
+assert.equal(sessionInventoryRecoveryJson.actions.length, 1);
+assert.equal(sessionInventoryRecoveryJson.actions[0].session, 'faulted-session');
+assert.equal(sessionInventoryRecoveryJson.actions[0].recommended_action, 'review_runtime_diagnostics');
+assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-recovery-json-test')), false);
 const filteredInventoryRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
   '--session-inventory',
@@ -1703,6 +1752,8 @@ assert.equal(windowsWrapperTemplate.includes("'--session-inventory'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-json'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-actions'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-actions-json'"), true);
+assert.equal(windowsWrapperTemplate.includes("'--session-inventory-recovery'"), true);
+assert.equal(windowsWrapperTemplate.includes("'--session-inventory-recovery-json'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-events'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-events-json'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-filter', $SessionInventoryFilter, '--session-inventory-match', $SessionInventoryMatch"), true);

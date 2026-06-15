@@ -24,6 +24,10 @@ param(
 
     [switch]$SessionInventoryActionsJson,
 
+    [switch]$SessionInventoryRecovery,
+
+    [switch]$SessionInventoryRecoveryJson,
+
     [switch]$SessionInventoryEvents,
 
     [switch]$SessionInventoryEventsJson,
@@ -287,6 +291,27 @@ if ($SessionInventoryActionsJson) {
         $inventoryActionsJsonArgs += @('--session-inventory-filter', $SessionInventoryFilter, '--session-inventory-match', $SessionInventoryMatch)
     }
     & node $AgentCliPath @inventoryActionsJsonArgs
+    exit $LASTEXITCODE
+}
+
+if ($SessionInventoryRecovery) {
+    Write-Host "Session inventory recovery..." -ForegroundColor Cyan
+    Set-Location $WorkDir
+    $inventoryRecoveryArgs = @('--identity', $IdentityName, '--session', $SessionName, '--session-inventory-recovery')
+    if ($SessionInventoryFilter -and $SessionInventoryMatch) {
+        $inventoryRecoveryArgs += @('--session-inventory-filter', $SessionInventoryFilter, '--session-inventory-match', $SessionInventoryMatch)
+    }
+    & node $AgentCliPath @inventoryRecoveryArgs
+    exit $LASTEXITCODE
+}
+
+if ($SessionInventoryRecoveryJson) {
+    Set-Location $WorkDir
+    $inventoryRecoveryJsonArgs = @('--identity', $IdentityName, '--session', $SessionName, '--session-inventory-recovery-json')
+    if ($SessionInventoryFilter -and $SessionInventoryMatch) {
+        $inventoryRecoveryJsonArgs += @('--session-inventory-filter', $SessionInventoryFilter, '--session-inventory-match', $SessionInventoryMatch)
+    }
+    & node $AgentCliPath @inventoryRecoveryJsonArgs
     exit $LASTEXITCODE
 }
 
