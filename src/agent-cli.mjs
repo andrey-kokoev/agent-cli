@@ -552,6 +552,35 @@ function recordMcpStartupFailures(mcpServers, { emit = null } = {}) {
   }
 }
 
+function recordMcpRuntimeFault({ serverName, toolName, error, emit = null }) {
+  if (isAbortError(error)) return;
+  const message = error instanceof Error ? error.message : String(error);
+  const payload = {
+    level: 'error',
+    message: `MCP runtime fault: ${serverName ?? 'unknown'} ${toolName ?? '<missing>'} ${message}`,
+    diagnostic_code: 'mcp_runtime_fault',
+    server_name: serverName ?? null,
+    tool_name: toolName ?? null,
+    error_code: error?.code ?? null,
+    diagnostic: {
+      schema: 'narada.agent_cli.mcp_runtime_diagnostic.v0',
+      code: 'mcp_runtime_fault',
+      server_name: serverName ?? null,
+      tool_name: toolName ?? null,
+      error_code: error?.code ?? null,
+      message,
+    },
+  };
+  recordCarrierDiagnostic(payload.level, payload.message, {
+    diagnostic_code: payload.diagnostic_code,
+    server_name: payload.server_name,
+    tool_name: payload.tool_name,
+    error_code: payload.error_code,
+    diagnostic: payload.diagnostic,
+  });
+  emit?.('carrier_diagnostic_recorded', payload);
+}
+
 function classifyCarrierHostCommandInput(input, { enabled = HOST_COMMANDS_ENABLED, approvalMode = 'execute' } = {}) {
   const rawInput = String(input ?? '');
   const trimmedStart = rawInput.trimStart();
@@ -2068,6 +2097,7 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
     };
   } catch (err) {
     const recovery = toolFailureRecovery(err?.message);
+    recordMcpRuntimeFault({ serverName: server?.name, toolName: name, error: err, emit });
     if (!serverMode) {
       turn?.clearStatus?.();
       if (shouldDisplayToolOutputs()) printToolResultLine(`failed ${name} in ${formatDuration(Date.now() - startedAt)} · ${err.message}${recovery ? `\n${recovery}` : ''}`, { level: 'error' });

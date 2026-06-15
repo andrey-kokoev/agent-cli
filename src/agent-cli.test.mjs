@@ -1434,11 +1434,16 @@ const mcpAbortResult = await executeMcpTool(
     },
   },
   null,
-  { turn: mcpAbortTurn, turnId: 'turn_mcp_abort' },
+  {
+    turn: mcpAbortTurn,
+    turnId: 'turn_mcp_abort',
+    emit: (event, payload) => emitted.push({ event, ...payload }),
+  },
 );
 assert.equal(Date.now() - mcpAbortStart < 100, true, 'MCP tool abort should resolve quickly, not wait for timeout');
 const mcpAbortContent = JSON.parse(mcpAbortResult.content);
 assert.equal(mcpAbortContent.error, 'agent_cli_interrupt_requested');
+assert.equal(emitted.some((event) => event.event === 'carrier_diagnostic_recorded' && event.diagnostic_code === 'mcp_runtime_fault'), false);
 
 const admissionEvents = [];
 let mutatingToolSendCalled = false;
@@ -1857,9 +1862,13 @@ try {
     },
     resetServers,
     null,
-    { turnId: 'turn_after_reset' },
+    {
+      turnId: 'turn_after_reset',
+      emit: (event, payload) => admissionEvents.push({ event, ...payload }),
+    },
   );
   assert.equal(JSON.parse(afterReset.content).error, 'read ECONNRESET');
+  assert.equal(admissionEvents.some((event) => event.event === 'carrier_diagnostic_recorded' && event.server_name === 'reset' && event.tool_name === 'fs_stat' && event.diagnostic_code === 'mcp_runtime_fault' && event.error_code === 'ECONNRESET'), true);
 } finally {
   await Promise.all(Object.values(resetServers).map((server) => stopChildProcess(server.process)));
   rmSync(resetAfterTimeoutSite, { recursive: true, force: true });
