@@ -210,6 +210,21 @@ function formatPersistedSessionInventoryEventLine(entry) {
   return `- ${session} ${timestamp} ${eventKind}${details.length > 0 ? ` [${details.join('; ')}]` : ''}`;
 }
 
+function renderSessionInventoryEventGroups(groups = {}) {
+  const sections = [];
+  for (const [groupKey, buckets] of Object.entries(groups)) {
+    const lines = [`Event groups: ${groupKey}`];
+    for (const [bucketKey, entries] of Object.entries(buckets)) {
+      lines.push(`- ${bucketKey} (${entries.length})`);
+      for (const entry of entries.slice(0, 5)) {
+        lines.push(`  ${formatPersistedSessionInventoryEventLine(entry)}`);
+      }
+    }
+    sections.push(lines.join('\n'));
+  }
+  return sections.join('\n\n');
+}
+
 function attachMcpStartupFailures(mcpServers, failures = []) {
   Object.defineProperty(mcpServers, MCP_STARTUP_FAILURES_KEY, {
     value: Array.isArray(failures) ? failures.slice() : [],
@@ -859,6 +874,11 @@ async function runSessionInventoryEvents({ siteRoot = SITE_ROOT, naradaDir = NAR
       event_count: inventoryEventSummary.event_count,
       event_kind_counts: inventoryEventSummary.event_kind_counts,
       event_kind_summary: inventoryEventSummary.event_kind_summary,
+      issue_code_counts: inventoryEventSummary.issue_code_counts,
+      issue_code_summary: inventoryEventSummary.issue_code_summary,
+      terminal_state_counts: inventoryEventSummary.terminal_state_counts,
+      terminal_state_summary: inventoryEventSummary.terminal_state_summary,
+      groups: inventoryEventSummary.groups,
       sessions: inventoryEventSummary.sessions,
       recent_events: inventoryEventSummary.recent_events,
     }, null, 2)}\n`);
@@ -871,6 +891,8 @@ async function runSessionInventoryEvents({ siteRoot = SITE_ROOT, naradaDir = NAR
     'Sessions with events': inventoryEventSummary.sessions.length,
     'Event count': inventoryEventSummary.event_count,
     'Event kinds': inventoryEventSummary.event_kind_summary,
+    'Issue codes': inventoryEventSummary.issue_code_summary,
+    'Terminal states': inventoryEventSummary.terminal_state_summary,
   };
   if (inventoryEventSummary.event_count === 0) {
     summary.Status = 'no persisted carrier session events';
@@ -889,6 +911,7 @@ async function runSessionInventoryEvents({ siteRoot = SITE_ROOT, naradaDir = NAR
   if (inventoryEventSummary.recent_events.length > 0) {
     blocks.push(['Recent events:', ...inventoryEventSummary.recent_events.map((entry) => formatPersistedSessionInventoryEventLine(entry))].join('\n'));
   }
+  blocks.push(renderSessionInventoryEventGroups(inventoryEventSummary.groups));
   console.log(blocks.join('\n\n'));
   return 0;
 }
@@ -1100,6 +1123,8 @@ function filterPersistedSessionEvents(events = [], { eventFilter = 'all' } = {})
 function summarizeSessionInventoryEvents(inventory = [], { naradaDir = NARADA_DIR, eventFilter = 'all', recentCount = 20 } = {}) {
   const normalizedEventFilter = normalizeSessionEventsFilter(eventFilter);
   const eventKindCounts = {};
+  const issueCodeCounts = {};
+  const terminalStateCounts = {};
   const sessions = [];
   const recentEvents = [];
   for (const item of inventory) {
@@ -1109,13 +1134,17 @@ function summarizeSessionInventoryEvents(inventory = [], { naradaDir = NARADA_DI
     if (events.length === 0) continue;
     for (const entry of events) {
       const eventKind = entry?.event_kind ?? entry?.event ?? 'unknown-event';
+      const terminalState = entry?.payload?.terminal_state ?? entry?.terminal_state ?? null;
+      const issueCode = classifyPersistedSessionIssueCode(entry);
       incrementInventoryCounter(eventKindCounts, eventKind);
+      if (terminalState) incrementInventoryCounter(terminalStateCounts, terminalState);
+      if (issueCode) incrementInventoryCounter(issueCodeCounts, issueCode);
       recentEvents.push({
         session,
         timestamp: entry?.timestamp ?? entry?.occurred_at ?? entry?.payload?.occurred_at ?? entry?.payload?.created_at ?? 'unknown-time',
         event_kind: eventKind,
-        terminal_state: entry?.payload?.terminal_state ?? entry?.terminal_state ?? null,
-        issue_code: classifyPersistedSessionIssueCode(entry),
+        terminal_state: terminalState,
+        issue_code: issueCode,
       });
     }
     const lastEvent = events.at(-1) ?? null;
@@ -1133,9 +1162,36 @@ function summarizeSessionInventoryEvents(inventory = [], { naradaDir = NARADA_DI
     event_count: recentEvents.length,
     event_kind_counts: eventKindCounts,
     event_kind_summary: formatInventoryCounts(eventKindCounts),
+    issue_code_counts: issueCodeCounts,
+    issue_code_summary: formatInventoryCounts(issueCodeCounts),
+    terminal_state_counts: terminalStateCounts,
+    terminal_state_summary: formatInventoryCounts(terminalStateCounts),
+    groups: summarizeSessionInventoryEventGroups(recentEvents),
     sessions,
     recent_events: recentEvents.slice(0, recentCount),
   };
+}
+
+function summarizeSessionInventoryEventGroups(events = []) {
+  return {
+    event_kind: summarizeSessionInventoryEventGroupBy(events, (entry) => entry?.event_kind ?? 'unknown-event'),
+    issue_code: summarizeSessionInventoryEventGroupBy(events.filter((entry) => entry?.issue_code), (entry) => entry.issue_code),
+    terminal_state: summarizeSessionInventoryEventGroupBy(events.filter((entry) => entry?.terminal_state), (entry) => entry.terminal_state),
+  };
+}
+
+function summarizeSessionInventoryEventGroupBy(events = [], getKey) {
+  const groups = Object.create(null);
+  for (const entry of events) {
+    const key = String(getKey(entry) ?? 'unknown');
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(entry);
+  }
+  return Object.fromEntries(Object.entries(groups)
+    .sort((left, right) => right[1].length - left[1].length || left[0].localeCompare(right[0]))
+    .map(([key, entries]) => [key, entries
+      .slice()
+      .sort((left, right) => String(right.timestamp ?? '').localeCompare(String(left.timestamp ?? '')) || left.session.localeCompare(right.session) || left.event_kind.localeCompare(right.event_kind))]));
 }
 
 function normalizeSessionInventoryFilterKey(value) {
