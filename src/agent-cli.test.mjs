@@ -595,6 +595,8 @@ assert.deepEqual(parseArgs(['--session-inventory-recovery']), { sessionInventory
 assert.deepEqual(parseArgs(['--session-inventory-recovery-json']), { sessionInventoryRecoveryJson: true });
 assert.deepEqual(parseArgs(['--session-inventory-events']), { sessionInventoryEvents: true });
 assert.deepEqual(parseArgs(['--session-inventory-events-json']), { sessionInventoryEventsJson: true });
+assert.deepEqual(parseArgs(['--session-operations']), { sessionOperations: true });
+assert.deepEqual(parseArgs(['--session-operations-json']), { sessionOperationsJson: true });
 assert.deepEqual(parseArgs(['--session-recovery']), { sessionRecovery: true });
 assert.deepEqual(parseArgs(['--session-recovery-json']), { sessionRecoveryJson: true });
 assert.deepEqual(parseArgs(['--host-command-output-read']), { hostCommandOutputRead: true });
@@ -1744,6 +1746,56 @@ assert.equal(sessionInventoryOperationsJson.sessions[0].session, 'healthy-sessio
 assert.equal(sessionInventoryOperationsJson.sessions[0].last_operation_id, 'operation_inventory_1');
 assert.equal(sessionInventoryOperationsJson.sessions[0].last_directive_kind, 'operation_heartbeat');
 assert.equal(sessionInventoryOperationsJson.sessions[0].last_directive_visibility, 'record_only');
+const sessionOperationsRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-operations',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'healthy-session',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(sessionOperationsRun.status, 0);
+assert.equal(sessionOperationsRun.stdout.includes('Operation events'), true);
+assert.equal(sessionOperationsRun.stdout.includes('Directive kinds'), true);
+assert.equal(sessionOperationsRun.stdout.includes('Directive visibility'), true);
+assert.equal(sessionOperationsRun.stdout.includes('Operation ids'), true);
+assert.equal(sessionOperationsRun.stdout.includes('Session operations'), true);
+assert.equal(sessionOperationsRun.stdout.includes('narada-agent-cli --identity narada.test --session healthy-session --session-operations'), true);
+const sessionOperationsJsonRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-operations-json',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'healthy-session',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(sessionOperationsJsonRun.status, 0);
+const sessionOperationsJson = JSON.parse(sessionOperationsJsonRun.stdout);
+assert.equal(sessionOperationsJson.schema, 'narada.agent_cli.session_operations.v1');
+assert.equal(sessionOperationsJson.site_root, inventoryRoot);
+assert.equal(sessionOperationsJson.session, 'healthy-session');
+assert.equal(sessionOperationsJson.found, true);
+assert.equal(sessionOperationsJson.operation.operation_event_summary, '1 (directive_emission_authorized), 1 (directive_emission_rule_recorded), 1 (directive_emitted)');
+assert.deepEqual(sessionOperationsJson.operation.operation_event_counts, {
+  directive_emission_authorized: 1,
+  directive_emission_rule_recorded: 1,
+  directive_emitted: 1,
+});
+assert.deepEqual(sessionOperationsJson.operation.directive_kind_counts, { operation_heartbeat: 3 });
+assert.equal(sessionOperationsJson.operation.directive_visibility_summary, '3 (record_only)');
+assert.equal(sessionOperationsJson.operation.operation_id_summary, '3 (operation_inventory_1)');
+assert.equal(sessionOperationsJson.event_summary.event_count, 10);
+assert.equal(sessionOperationsJson.preflight.operational_state, 'healthy');
+assert.equal(sessionOperationsJson.recovery.recovery_kind, 'no_recovery');
+assert.equal(sessionOperationsJson.record.operation_id_summary, '3 (operation_inventory_1)');
 const hostCommandOutputReadJsonRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
   '--host-command-output-read-json',
@@ -2473,6 +2525,8 @@ assert.equal(windowsWrapperTemplate.includes('[switch]$SessionRead'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionRecovery'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionRecoveryJson'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionReadJson'), true);
+assert.equal(windowsWrapperTemplate.includes('[switch]$SessionOperations'), true);
+assert.equal(windowsWrapperTemplate.includes('[switch]$SessionOperationsJson'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$HostCommandOutputRead'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$HostCommandOutputReadJson'), true);
 assert.equal(windowsWrapperTemplate.includes('[string]$HostCommandOutputRef'), true);
@@ -3787,6 +3841,7 @@ child.stdout.on('data', (chunk) => { stdout += chunk; });
 child.stderr.on('data', (chunk) => { stderr += chunk; });
 child.stdin.write('not json\n');
 child.stdin.write(`${JSON.stringify({ id: 'status-1', method: 'session.status', params: {} })}\n`);
+child.stdin.write(`${JSON.stringify({ id: 'operations-1', method: 'session.operations', params: {} })}\n`);
 child.stdin.write(`${JSON.stringify({ id: 'recovery-1', method: 'session.recovery', params: {} })}\n`);
 child.stdin.write(`${JSON.stringify({ id: 'preflight-1', method: 'preflight.recovery', params: {} })}\n`);
 child.stdin.write(`${JSON.stringify({ id: 'close-1', method: 'session.close', params: {} })}\n`);
@@ -3819,6 +3874,19 @@ assert.equal(serverStatusEvent?.request_outcome_total, 1);
 assert.equal(serverStatusEvent?.request_posture, 'invalid_control_traffic');
 assert.equal(serverStatusEvent?.request_issue_counts?.invalid_json, 1);
 assert.equal(serverStatusEvent?.operational_posture, 'request_invalid_control_traffic');
+const serverOperationsEvent = serverEvents.find((event) => event.event === 'session_operations' && event.request_id === 'operations-1');
+assert.equal(serverEvents.some((event) => event.event === 'session_operations' && event.request_id === 'operations-1'), true);
+assert.equal(serverOperationsEvent?.event, 'session_operations');
+assert.equal(serverOperationsEvent?.last_event_kind, 'session_operations_requested');
+assert.equal(serverOperationsEvent?.operation?.operation_event_summary, '1 (directive_emission_authorized), 1 (directive_emission_rule_recorded), 1 (directive_emitted)');
+assert.deepEqual(serverOperationsEvent?.operation?.operation_event_counts, {
+  directive_emission_authorized: 1,
+  directive_emission_rule_recorded: 1,
+  directive_emitted: 1,
+});
+assert.equal(serverOperationsEvent?.operation?.directive_kind_summary, '3 (operation_heartbeat)');
+assert.equal(serverOperationsEvent?.operation?.directive_visibility_summary, '3 (record_only)');
+assert.equal(serverOperationsEvent?.operation?.operation_id_summary, '3 (operation_inventory_1)');
 const serverRecoveryEvent = serverEvents.find((event) => event.event === 'session_recovery' && event.request_id === 'recovery-1');
 assert.equal(serverRecoveryEvent?.event, 'session_recovery');
 assert.equal(serverRecoveryEvent?.last_event_kind, 'session_recovery_requested');
@@ -3849,12 +3917,14 @@ const persistedServerEvents = readPersistedSessionEvents({ session: 'server-test
 assert.deepEqual(
   persistedServerEvents.filter((entry) => [
     'session_status_requested',
+    'session_operations_requested',
     'session_recovery_requested',
     'preflight_recovery_requested',
     'session_close_requested',
   ].includes(entry.event)).map((entry) => ({ event: entry.event, request_id: entry.request_id, method: entry.method })),
   [
     { event: 'session_status_requested', request_id: 'status-1', method: 'session.status' },
+    { event: 'session_operations_requested', request_id: 'operations-1', method: 'session.operations' },
     { event: 'session_recovery_requested', request_id: 'recovery-1', method: 'session.recovery' },
     { event: 'preflight_recovery_requested', request_id: 'preflight-1', method: 'preflight.recovery' },
     { event: 'session_close_requested', request_id: 'close-1', method: 'session.close' },

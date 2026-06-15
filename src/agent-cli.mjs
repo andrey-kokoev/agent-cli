@@ -123,6 +123,8 @@ const SESSION_RECOVERY_MODE = options.sessionRecovery === true;
 const SESSION_RECOVERY_JSON_MODE = options.sessionRecoveryJson === true;
 const SESSION_READ_MODE = options.sessionRead === true;
 const SESSION_READ_JSON_MODE = options.sessionReadJson === true;
+const SESSION_OPERATIONS_MODE = options.sessionOperations === true;
+const SESSION_OPERATIONS_JSON_MODE = options.sessionOperationsJson === true;
 const HOST_COMMAND_OUTPUT_READ_MODE = options.hostCommandOutputRead === true;
 const HOST_COMMAND_OUTPUT_READ_JSON_MODE = options.hostCommandOutputReadJson === true;
 const HOST_COMMAND_OUTPUT_REF = String(options.hostCommandOutputRef ?? '').trim() || null;
@@ -350,6 +352,8 @@ function buildPersistedSessionHandoffs({ session, identity = IDENTITY, eventCoun
   if (!normalizedSession) return {};
   const base = `narada-agent-cli --identity ${normalizedIdentity} --session ${normalizedSession}`;
   return {
+    session_operations: `${base} --session-operations`,
+    session_operations_json: `${base} --session-operations-json`,
     session_read: `${base} --session-read`,
     session_read_json: `${base} --session-read-json`,
     session_recovery: `${base} --session-recovery`,
@@ -1224,7 +1228,7 @@ const NARADA_DIR = basename(SITE_ROOT) === '.narada' ? SITE_ROOT : join(SITE_ROO
 const SESSION_DIR = SERVER_MODE
   ? join(NARADA_DIR, 'crew', 'nars-sessions', SESSION)
   : (existsSync(PC_RUNTIME) ? join(PC_RUNTIME, 'agent-sessions') : resolve(SITE_ROOT, '.ai', 'runtime', 'agent-sessions'));
-if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_OPERATIONS_MODE && !SESSION_INVENTORY_OPERATIONS_JSON_MODE && !SESSION_INVENTORY_HOST_COMMANDS_MODE && !SESSION_INVENTORY_HOST_COMMANDS_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !HOST_COMMAND_OUTPUT_READ_MODE && !HOST_COMMAND_OUTPUT_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_OPERATIONS_MODE && !SESSION_INVENTORY_OPERATIONS_JSON_MODE && !SESSION_INVENTORY_HOST_COMMANDS_MODE && !SESSION_INVENTORY_HOST_COMMANDS_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_OPERATIONS_MODE && !SESSION_OPERATIONS_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !HOST_COMMAND_OUTPUT_READ_MODE && !HOST_COMMAND_OUTPUT_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
 const SESSION_PATH = SERVER_MODE ? join(SESSION_DIR, 'session.jsonl') : join(SESSION_DIR, `${SESSION}.jsonl`);
 const EVENTS_PATH = join(SESSION_DIR, 'events.jsonl');
 const CARRIER_SESSION_DIR = join(NARADA_DIR, 'crew', 'nars-sessions', SESSION);
@@ -1338,6 +1342,14 @@ async function main() {
   }
   if (SESSION_INVENTORY_EVENTS_JSON_MODE) {
     process.exitCode = await runSessionInventoryEvents({ jsonOutput: true, filterKey: SESSION_INVENTORY_FILTER_KEY, filterValue: SESSION_INVENTORY_FILTER_VALUE, eventFilter: SESSION_INVENTORY_EVENTS_FILTER, recentCount: SESSION_INVENTORY_EVENTS_COUNT });
+    return;
+  }
+  if (SESSION_OPERATIONS_MODE) {
+    process.exitCode = await runSessionOperationsRead();
+    return;
+  }
+  if (SESSION_OPERATIONS_JSON_MODE) {
+    process.exitCode = await runSessionOperationsRead({ jsonOutput: true });
     return;
   }
   if (SESSION_RECOVERY_MODE) {
@@ -2186,6 +2198,82 @@ async function runSessionInventoryOperations({ siteRoot = SITE_ROOT, naradaDir =
   return 0;
 }
 
+async function runSessionOperationsRead({ session = SESSION, siteRoot = SITE_ROOT, naradaDir = NARADA_DIR, jsonOutput = false } = {}) {
+  const sessionRecord = readPersistedSession({ session, siteRoot, naradaDir });
+  if (!sessionRecord) {
+    if (jsonOutput) {
+      console.log(`${JSON.stringify({
+        schema: 'narada.agent_cli.session_operations.v1',
+        site_root: siteRoot,
+        session,
+        found: false,
+      }, null, 2)}\n`);
+    } else {
+      console.log(formatKeyValueRows({
+        SiteRoot: siteRoot,
+        Session: session,
+        Status: 'persisted session not found',
+      }));
+    }
+    return 0;
+  }
+  const sessionEventSummary = createSessionEventSummaryPayload(sessionRecord, { naradaDir, eventFilter: 'all', recentCount: 20 });
+  const sessionOperationPayload = createSessionOperationPayload(sessionRecord);
+  if (jsonOutput) {
+    console.log(`${JSON.stringify({
+      schema: 'narada.agent_cli.session_operations.v1',
+      site_root: siteRoot,
+      session,
+      found: true,
+      operation: sessionOperationPayload,
+      event_summary: sessionEventSummary,
+      recovery: createSessionRecoveryPayload(sessionRecord),
+      preflight: createSessionPreflightPayload(sessionRecord),
+      host_command_output: createSessionHostCommandOutputPayload(sessionRecord),
+      record: sessionRecord,
+    }, null, 2)}\n`);
+    return 0;
+  }
+  console.log(formatKeyValueRows({
+    SiteRoot: siteRoot,
+    Session: sessionRecord.session,
+    Agent: sessionRecord.agent_id ?? 'unknown',
+    Runtime: sessionRecord.runtime ?? 'unknown',
+    Mode: sessionRecord.mode ?? 'unknown',
+    Started: sessionRecord.started_at ?? 'unknown',
+    Heartbeat: sessionRecord.heartbeat_display,
+    'Operational posture': sessionRecord.operational_posture_display,
+    'MCP state': sessionRecord.mcp_operational_state,
+    'Request posture': sessionRecord.request_posture_display,
+    'Operation events': sessionOperationPayload.operation_event_summary,
+    'Directive kinds': sessionOperationPayload.directive_kind_summary,
+    'Directive visibility': sessionOperationPayload.directive_visibility_summary,
+    'Operation ids': sessionOperationPayload.operation_id_summary,
+    'Last operation id': sessionOperationPayload.last_operation_id ?? 'none',
+    'Last directive kind': sessionOperationPayload.last_directive_kind ?? 'none',
+    'Last directive visibility': sessionOperationPayload.last_directive_visibility ?? 'none',
+    'Last operation event': sessionOperationPayload.last_operation_event_kind ?? 'none',
+    'Last operation at': sessionOperationPayload.last_operation_at ?? 'unknown',
+    'Event count': sessionEventSummary.event_count,
+    'Event kinds': sessionEventSummary.event_kind_summary,
+    'Issue codes': sessionEventSummary.issue_code_summary,
+    'Terminal states': sessionEventSummary.terminal_state_summary,
+    'Recovery kind': sessionRecord.recovery_kind_display ?? 'none',
+    'Recovery primary': sessionRecord.recovery_primary_command ?? 'none',
+    'Recovery followup': sessionRecord.recovery_followup_command ?? 'none',
+    'Recommended action': sessionRecord.recommended_action_display,
+    'Recommended command': sessionRecord.recommended_command ?? 'none',
+    'Session operations': sessionOperationPayload.handoffs.session_operations ?? 'none',
+    'Session read': sessionRecord?.handoffs?.session_read ?? 'none',
+    'Session recovery': sessionRecord?.handoffs?.session_recovery ?? 'none',
+    'Session issues': sessionRecord?.handoffs?.session_events_issues ?? 'none',
+    'Session diagnostics': sessionRecord?.handoffs?.session_events_diagnostics ?? 'none',
+    'Host command output review': sessionRecord?.handoffs?.host_command_output_read ?? 'none',
+    'Session path': sessionRecord.session_path,
+  }));
+  return 0;
+}
+
 async function runSessionInventoryActions({ siteRoot = SITE_ROOT, naradaDir = NARADA_DIR, jsonOutput = false, filterKey = null, filterValue = null } = {}) {
   const inventory = readSessionInventory({ siteRoot, naradaDir });
   const normalizedFilterKey = normalizeSessionInventoryFilterKey(filterKey);
@@ -2378,6 +2466,35 @@ function createSessionRecoveryPayload(sessionRecord) {
   };
 }
 
+function createSessionOperationPayload(sessionRecord) {
+  if (!sessionRecord) return null;
+  return {
+    operation_event_count: sessionRecord.operation_event_count ?? 0,
+    operation_event_counts: sessionRecord.operation_event_counts ?? {},
+    operation_event_summary: sessionRecord.operation_event_summary ?? '0',
+    directive_kind_counts: sessionRecord.directive_kind_counts ?? {},
+    directive_kind_summary: sessionRecord.directive_kind_summary ?? '0',
+    directive_visibility_counts: sessionRecord.directive_visibility_counts ?? {},
+    directive_visibility_summary: sessionRecord.directive_visibility_summary ?? '0',
+    operation_id_counts: sessionRecord.operation_id_counts ?? {},
+    operation_id_summary: sessionRecord.operation_id_summary ?? '0',
+    last_operation_id: sessionRecord.last_operation_id ?? null,
+    last_directive_kind: sessionRecord.last_directive_kind ?? null,
+    last_directive_visibility: sessionRecord.last_directive_visibility ?? null,
+    last_operation_event_kind: sessionRecord.last_operation_event_kind ?? null,
+    last_operation_at: sessionRecord.last_operation_at ?? null,
+    handoffs: {
+      session_operations: sessionRecord?.handoffs?.session_operations ?? null,
+      session_operations_json: sessionRecord?.handoffs?.session_operations_json ?? null,
+      session_read: sessionRecord?.handoffs?.session_read ?? null,
+      session_recovery: sessionRecord?.handoffs?.session_recovery ?? null,
+      session_events_issues: sessionRecord?.handoffs?.session_events_issues ?? null,
+      session_events_diagnostics: sessionRecord?.handoffs?.session_events_diagnostics ?? null,
+      host_command_output_read: sessionRecord?.handoffs?.host_command_output_read ?? null,
+    },
+  };
+}
+
 function createSessionPreflightPayload(sessionRecord) {
   if (!sessionRecord) return null;
   return {
@@ -2455,12 +2572,14 @@ async function runSessionRecovery({ session = SESSION, siteRoot = SITE_ROOT, nar
     return 0;
   }
   const sessionEventSummary = createSessionEventSummaryPayload(sessionRecord, { naradaDir, eventFilter: 'all', recentCount: 20 });
+  const sessionOperationPayload = createSessionOperationPayload(sessionRecord);
   if (jsonOutput) {
     console.log(`${JSON.stringify({
       schema: 'narada.agent_cli.session_recovery.v1',
       site_root: siteRoot,
       session,
       found: true,
+      operation: sessionOperationPayload,
       recovery: createSessionRecoveryPayload(sessionRecord),
       preflight: createSessionPreflightPayload(sessionRecord),
       host_command_output: createSessionHostCommandOutputPayload(sessionRecord),
@@ -2492,6 +2611,16 @@ async function runSessionRecovery({ session = SESSION, siteRoot = SITE_ROOT, nar
     'Preflight action': sessionRecord.mcp_preflight_recommended_action_display ?? 'none',
     'Preflight command': sessionRecord.mcp_preflight_recommended_command ?? 'none',
     'Preflight diagnostics': sessionRecord?.mcp_preflight_handoffs?.mcp_preflight_diagnostics ?? 'none',
+    'Operation events': sessionOperationPayload.operation_event_summary,
+    'Directive kinds': sessionOperationPayload.directive_kind_summary,
+    'Directive visibility': sessionOperationPayload.directive_visibility_summary,
+    'Operation ids': sessionOperationPayload.operation_id_summary,
+    'Last operation id': sessionOperationPayload.last_operation_id ?? 'none',
+    'Last directive kind': sessionOperationPayload.last_directive_kind ?? 'none',
+    'Last directive visibility': sessionOperationPayload.last_directive_visibility ?? 'none',
+    'Last operation event': sessionOperationPayload.last_operation_event_kind ?? 'none',
+    'Last operation at': sessionOperationPayload.last_operation_at ?? 'unknown',
+    'Session operations': sessionOperationPayload.handoffs.session_operations ?? 'none',
     'Session read': sessionRecord?.handoffs?.session_read ?? 'none',
     'Session recovery': sessionRecord?.handoffs?.session_recovery ?? 'none',
     'Session issues': sessionRecord?.handoffs?.session_events_issues ?? 'none',
@@ -2529,6 +2658,7 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
   }
   const recentEvents = filteredEvents.slice(-recentCount);
   const sessionEventSummary = createSessionEventSummaryPayload(sessionRecord, { naradaDir, eventFilter: normalizedEventFilter, recentCount });
+  const sessionOperationPayload = createSessionOperationPayload(sessionRecord);
   if (jsonOutput) {
     console.log(`${JSON.stringify({
       schema: 'narada.agent_cli.session_events_read.v1',
@@ -2538,6 +2668,7 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
       event_filter: normalizedEventFilter,
       event_count: filteredEvents.length,
       total_event_count: events.length,
+      operation: sessionOperationPayload,
       event_kind_counts: sessionEventSummary.event_kind_counts,
       event_kind_summary: sessionEventSummary.event_kind_summary,
       issue_code_counts: sessionEventSummary.issue_code_counts,
@@ -2571,6 +2702,15 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
     'Event kinds': sessionEventSummary.event_kind_summary,
     'Issue codes': sessionEventSummary.issue_code_summary,
     'Terminal states': sessionEventSummary.terminal_state_summary,
+    'Operation events': sessionOperationPayload.operation_event_summary,
+    'Directive kinds': sessionOperationPayload.directive_kind_summary,
+    'Directive visibility': sessionOperationPayload.directive_visibility_summary,
+    'Operation ids': sessionOperationPayload.operation_id_summary,
+    'Last operation id': sessionOperationPayload.last_operation_id ?? 'none',
+    'Last directive kind': sessionOperationPayload.last_directive_kind ?? 'none',
+    'Last directive visibility': sessionOperationPayload.last_directive_visibility ?? 'none',
+    'Last operation event': sessionOperationPayload.last_operation_event_kind ?? 'none',
+    'Last operation at': sessionOperationPayload.last_operation_at ?? 'unknown',
     'Host command states': sessionRecord.host_command_terminal_state_summary,
     'Last host command': sessionRecord.last_host_command_summary ?? 'none',
     'Last host command state': sessionRecord.last_host_command_terminal_state ?? 'none',
@@ -2589,6 +2729,7 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
     'Preflight action': sessionRecord.mcp_preflight_recommended_action_display ?? 'none',
     'Preflight command': sessionRecord.mcp_preflight_recommended_command ?? 'none',
     'Preflight diagnostics': sessionRecord?.mcp_preflight_handoffs?.mcp_preflight_diagnostics ?? 'none',
+    'Session operations': sessionOperationPayload.handoffs.session_operations ?? 'none',
     'Session recovery': sessionRecord?.handoffs?.session_recovery ?? 'none',
     'Session read': sessionRecord?.handoffs?.session_read ?? 'none',
     'Session issues': sessionRecord?.handoffs?.session_events_issues ?? 'none',
@@ -2623,12 +2764,14 @@ async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaD
     return 0;
   }
   const sessionEventSummary = createSessionEventSummaryPayload(sessionRecord, { naradaDir, eventFilter: 'all', recentCount: 20 });
+  const sessionOperationPayload = createSessionOperationPayload(sessionRecord);
   if (jsonOutput) {
     console.log(`${JSON.stringify({
       schema: 'narada.agent_cli.session_read.v1',
       site_root: siteRoot,
       session,
       found: true,
+      operation: sessionOperationPayload,
       recovery: createSessionRecoveryPayload(sessionRecord),
       preflight: createSessionPreflightPayload(sessionRecord),
       host_command_output: createSessionHostCommandOutputPayload(sessionRecord),
@@ -2648,6 +2791,15 @@ async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaD
     'Operational posture': sessionRecord.operational_posture_display,
     'MCP state': sessionRecord.mcp_operational_state,
     'Request posture': sessionRecord.request_posture_display,
+    'Operation events': sessionOperationPayload.operation_event_summary,
+    'Directive kinds': sessionOperationPayload.directive_kind_summary,
+    'Directive visibility': sessionOperationPayload.directive_visibility_summary,
+    'Operation ids': sessionOperationPayload.operation_id_summary,
+    'Last operation id': sessionOperationPayload.last_operation_id ?? 'none',
+    'Last directive kind': sessionOperationPayload.last_directive_kind ?? 'none',
+    'Last directive visibility': sessionOperationPayload.last_directive_visibility ?? 'none',
+    'Last operation event': sessionOperationPayload.last_operation_event_kind ?? 'none',
+    'Last operation at': sessionOperationPayload.last_operation_at ?? 'unknown',
     'Last event': sessionRecord.last_event_kind ?? 'none',
     'Last event at': sessionRecord.last_event_at ?? 'unknown',
     'Last terminal state': sessionRecord.last_terminal_state ?? 'none',
@@ -2673,6 +2825,7 @@ async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaD
     'Preflight action': sessionRecord.mcp_preflight_recommended_action_display ?? 'none',
     'Preflight command': sessionRecord.mcp_preflight_recommended_command ?? 'none',
     'Preflight diagnostics': sessionRecord?.mcp_preflight_handoffs?.mcp_preflight_diagnostics ?? 'none',
+    'Session operations': sessionOperationPayload.handoffs.session_operations ?? 'none',
     'Recovery kind': sessionRecord.recovery_kind_display ?? 'none',
     'Recovery primary': sessionRecord.recovery_primary_command ?? 'none',
     'Recovery followup': sessionRecord.recovery_followup_command ?? 'none',
@@ -6275,12 +6428,44 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
 function isConcurrentServerRequestLine(line) {
   try {
     const request = JSON.parse(line);
+    if (request?.method === 'session.operations') return false;
     if (request?.method === 'session.recovery') return false;
     if (request?.method === 'preflight.recovery') return false;
     return classifyCarrierControlRequest(request).concurrent_allowed;
   } catch {
     return false;
   }
+}
+
+function serverOperations({ requestId, state, mcpServers, mcpPreflightArtifact = readMcpPreflightArtifact() }) {
+  const mcpStatus = createMcpStatusSnapshot(mcpServers);
+  const mcpPreflightSnapshot = createMcpPreflightArtifactSnapshot(mcpPreflightArtifact);
+  const sessionActivity = createSessionActivitySnapshot(state);
+  const sessionRecord = readPersistedSession({ session: SESSION, siteRoot: SITE_ROOT, naradaDir: NARADA_DIR });
+  const sessionOperationPayload = createSessionOperationPayload(sessionRecord);
+  const sessionEventSummary = createSessionEventSummaryPayload(sessionRecord, { naradaDir: NARADA_DIR, eventFilter: 'all', recentCount: 20 });
+  const operationalPosture = createOperationalPostureSnapshot({
+    state,
+    mcpOperationalState: mcpStatus.mcp_operational_state,
+  });
+  return {
+    request_id: requestId,
+    transport: 'jsonl_stdio',
+    event: 'session_operations',
+    active_turn_state: state.activeTurn ? 'running' : 'idle',
+    active_turn_id: state.activeTurn?.turnId ?? null,
+    ...mcpStatus,
+    ...mcpPreflightSnapshot,
+    ...sessionActivity,
+    ...operationalPosture,
+    operation: sessionOperationPayload,
+    event_summary: sessionEventSummary,
+    recovery: createSessionRecoveryPayload(sessionRecord),
+    preflight: createSessionPreflightPayload(sessionRecord),
+    host_command_output: createSessionHostCommandOutputPayload(sessionRecord),
+    session_path: SESSION_PATH,
+    events_path: EVENTS_PATH,
+  };
 }
 
 function serverRecovery({ requestId, state, mcpServers, mcpPreflightArtifact = readMcpPreflightArtifact() }) {
@@ -6323,6 +6508,12 @@ async function handleServerRequestLine(line, context) {
 }
 
 async function handleServerRequest(request, { state, messages, allTools, mcpServers, mcpPreflightArtifact, emit, callChatApiFn }) {
+  if (request?.method === 'session.operations') {
+    const requestId = request?.id ?? null;
+    recordServerWorkflowRequest('session_operations_requested', { requestId, method: 'session.operations' });
+    emit('session_operations', serverOperations({ requestId, state, mcpServers, mcpPreflightArtifact }));
+    return;
+  }
   if (request?.method === 'session.recovery') {
     const requestId = request?.id ?? null;
     noteSessionActivity(state, 'session_recovery_requested');
@@ -8203,6 +8394,10 @@ function parseArgs(argv) {
       opts.sessionInventoryEvents = true;
     } else if (argv[i] === '--session-inventory-events-json') {
       opts.sessionInventoryEventsJson = true;
+    } else if (argv[i] === '--session-operations') {
+      opts.sessionOperations = true;
+    } else if (argv[i] === '--session-operations-json') {
+      opts.sessionOperationsJson = true;
     } else if (argv[i] === '--session-inventory-filter' && i + 1 < argv.length) {
       opts.sessionInventoryFilter = argv[i + 1];
       i++;
@@ -8391,6 +8586,7 @@ export {
   runMcpPreflightDiagnostics,
   runMcpPreflight,
   runSessionEventsRead,
+  runSessionOperationsRead,
   runSessionRecovery,
   runSessionRead,
   runSessionInventory,
@@ -8415,7 +8611,7 @@ export {
 
 if (isEntrypoint) {
   if (options.help) {
-    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-diagnostics] [--mcp-preflight-diagnostics-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--mcp-preflight-diagnostics-filter <all|startup|runtime>] [--session-inventory] [--session-inventory-json] [--session-inventory-operations] [--session-inventory-operations-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics>] [--session-inventory-events-count <n>] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics>] [--session-events-count <n>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
+    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-diagnostics] [--mcp-preflight-diagnostics-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--mcp-preflight-diagnostics-filter <all|startup|runtime>] [--session-inventory] [--session-inventory-json] [--session-inventory-operations] [--session-inventory-operations-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics>] [--session-inventory-events-count <n>] [--session-operations] [--session-operations-json] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics>] [--session-events-count <n>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
     console.log('Programmatic input: --message and --message-file are explicit control inputs; do not use raw stdin piping as the control API.');
     console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, ANTHROPIC_API_KEY, NARADA_AI_API_KEY, NARADA_AI_BASE_URL, NARADA_AI_MODEL, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_ENABLE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_DELAY_MS, NARADA_SITE_ROOT`);
     process.exit(0);

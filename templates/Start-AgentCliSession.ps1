@@ -65,6 +65,10 @@ param(
 
     [switch]$SessionReadJson,
 
+    [switch]$SessionOperations,
+
+    [switch]$SessionOperationsJson,
+
     [switch]$HostCommandOutputRead,
 
     [switch]$HostCommandOutputReadJson,
@@ -445,6 +449,19 @@ if ($SessionRecoveryJson) {
 if ($SessionReadJson) {
     Set-Location $WorkDir
     & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-read-json'
+    exit $LASTEXITCODE
+}
+
+if ($SessionOperations) {
+    Write-Host "Session operations..." -ForegroundColor Cyan
+    Set-Location $WorkDir
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-operations'
+    exit $LASTEXITCODE
+}
+
+if ($SessionOperationsJson) {
+    Set-Location $WorkDir
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-operations-json'
     exit $LASTEXITCODE
 }
 
