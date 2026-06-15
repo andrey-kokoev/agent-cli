@@ -3049,11 +3049,12 @@ function recordCarrierDiagnostic(level, message, extra = {}) {
   }));
 }
 
-function recordServerWorkflowRequest(event, { requestId = null, method = null, transport = 'jsonl_stdio' } = {}) {
+function recordServerWorkflowRequest(event, { requestId = null, method = null, transport = 'jsonl_stdio', ...extra } = {}) {
   appendSession(SESSION_PATH, sessionEventEntry(event, {
     request_id: requestId,
     method,
     transport,
+    ...extra,
   }));
 }
 
@@ -5858,10 +5859,16 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
       return;
     }
     if (controlRequest.method_kind === 'observers_status') {
+      recordServerWorkflowRequest('observer_status_requested', { requestId, method: request?.method ?? 'observers.status' });
       emit('observer_status', observerServerStatus({ requestId, state }));
       return;
     }
     if (controlRequest.method_kind === 'observer_set_muted') {
+      recordServerWorkflowRequest('observer_state_change_requested', {
+        requestId,
+        method: request?.method ?? null,
+        observer_action: controlRequest.observer_action ?? null,
+      });
       const result = handleObserverCommand(controlRequest.observer_action, state.displaySettings);
       emit('observer_status', {
         ...observerServerStatus({ requestId, state }),

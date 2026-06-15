@@ -4689,6 +4689,48 @@ assert.deepEqual(
 assert.equal(interruptPersistenceStderr.includes('Fatal error'), false);
 rmSync(interruptPersistenceSite, { recursive: true, force: true });
 
+const observerPersistenceSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-observer-persist-'));
+mkdirSync(join(observerPersistenceSite, '.ai', 'mcp'), { recursive: true });
+const observerPersistenceChild = spawn(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--identity', 'narada.test',
+  '--session', 'observer-persist-test',
+  '--server',
+], {
+  cwd: observerPersistenceSite,
+  env: { ...process.env, NARADA_SITE_ROOT: observerPersistenceSite },
+  stdio: ['pipe', 'pipe', 'pipe'],
+});
+let observerPersistenceStdout = '';
+let observerPersistenceStderr = '';
+observerPersistenceChild.stdout.setEncoding('utf8');
+observerPersistenceChild.stderr.setEncoding('utf8');
+observerPersistenceChild.stdout.on('data', (chunk) => { observerPersistenceStdout += chunk; });
+observerPersistenceChild.stderr.on('data', (chunk) => { observerPersistenceStderr += chunk; });
+observerPersistenceChild.stdin.write(`${JSON.stringify({ id: 'observer-status-1', method: 'observers.status', params: {} })}\n`);
+observerPersistenceChild.stdin.write(`${JSON.stringify({ id: 'observer-mute-1', method: 'observer.mute', params: {} })}\n`);
+observerPersistenceChild.stdin.end();
+const observerPersistenceExitCode = await new Promise((resolveExit) => observerPersistenceChild.on('exit', resolveExit));
+assert.equal(observerPersistenceExitCode, 0);
+const observerPersistenceEvents = observerPersistenceStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+assert.equal(observerPersistenceEvents.some((event) => event.event === 'observer_status' && event.request_id === 'observer-status-1' && event.observer_muted === false), true);
+assert.equal(observerPersistenceEvents.some((event) => event.event === 'observer_status' && event.request_id === 'observer-mute-1' && event.observer_muted === true), true);
+const observerPersistenceSessionEntries = readPersistedSessionEvents({ session: 'observer-persist-test', naradaDir: join(observerPersistenceSite, '.narada') });
+assert.deepEqual(
+  observerPersistenceSessionEntries.filter((entry) => ['observer_status_requested', 'observer_state_change_requested'].includes(entry.event)).map((entry) => ({
+    event: entry.event,
+    request_id: entry.request_id,
+    method: entry.method,
+    observer_action: entry.observer_action ?? null,
+  })),
+  [
+    { event: 'observer_status_requested', request_id: 'observer-status-1', method: 'observers.status', observer_action: null },
+    { event: 'observer_state_change_requested', request_id: 'observer-mute-1', method: 'observer.mute', observer_action: 'mute' },
+  ],
+);
+assert.equal(observerPersistenceStderr.includes('Fatal error'), false);
+rmSync(observerPersistenceSite, { recursive: true, force: true });
+
 console.log('agent-cli adapter tests PASSED.');
 
 function stopChildProcess(proc) {
