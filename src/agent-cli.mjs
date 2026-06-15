@@ -277,6 +277,48 @@ function createMcpStatusSnapshot(mcpServers) {
   };
 }
 
+function summarizeSessionInventoryGroups(inventory = []) {
+  return {
+    operational_posture: summarizeSessionInventoryGroupBy(inventory, 'operational_posture', 'operational_posture_display'),
+    request_posture: summarizeSessionInventoryGroupBy(inventory, 'request_posture', 'request_posture_display'),
+    mcp_state: summarizeSessionInventoryGroupBy(inventory, 'mcp_operational_state', 'mcp_operational_state'),
+    heartbeat_status: summarizeSessionInventoryGroupBy(inventory, 'heartbeat_status', 'heartbeat_display'),
+  };
+}
+
+function summarizeSessionInventoryGroupBy(inventory = [], keyField, displayField) {
+  const groups = Object.create(null);
+  for (const item of inventory) {
+    const key = String(item?.[keyField] ?? 'unknown');
+    if (!groups[key]) groups[key] = [];
+    groups[key].push({
+      session: item.session,
+      display: item?.[displayField] ?? item?.[keyField] ?? 'unknown',
+      heartbeat_at: item?.heartbeat_at ?? null,
+    });
+  }
+  return Object.fromEntries(Object.entries(groups)
+    .sort((left, right) => right[1].length - left[1].length || left[0].localeCompare(right[0]))
+    .map(([key, entries]) => [key, entries
+      .sort((left, right) => String(right.heartbeat_at ?? '').localeCompare(String(left.heartbeat_at ?? '')) || left.session.localeCompare(right.session))
+      .map(({ session, display }) => ({ session, display }))]));
+}
+
+function renderSessionInventoryGroups(groups = {}) {
+  const sections = [];
+  for (const [groupKey, buckets] of Object.entries(groups)) {
+    const lines = [`Groups: ${groupKey}`];
+    for (const [bucketKey, entries] of Object.entries(buckets)) {
+      lines.push(`- ${bucketKey} (${entries.length})`);
+      for (const entry of entries.slice(0, 5)) {
+        lines.push(`  - ${entry.session}: ${entry.display}`);
+      }
+    }
+    sections.push(lines.join('\n'));
+  }
+  return sections.join('\n\n');
+}
+
 function noteSessionActivity(state, eventKind, occurredAt = new Date().toISOString(), terminalState = null) {
   if (!state) return;
   state.sessionEventCount = (state.sessionEventCount ?? 0) + 1;
@@ -720,6 +762,7 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
   const filteredInventory = filterSessionInventory(inventory, { filterKey: normalizedFilterKey, filterValue: normalizedFilterValue });
   const inventoryRollup = summarizeSessionInventoryRollup(inventory);
   const filteredInventoryRollup = summarizeSessionInventoryRollup(filteredInventory);
+  const inventoryGroups = summarizeSessionInventoryGroups(filteredInventory);
   const filterLabel = normalizedFilterKey && normalizedFilterValue ? `${normalizedFilterKey}:${normalizedFilterValue}` : 'all';
   if (jsonOutput) {
     console.log(`${JSON.stringify({
@@ -729,6 +772,7 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
       total_carrier_session_count: inventory.length,
       inventory_filter: filterLabel,
       summary: filteredInventoryRollup,
+      groups: inventoryGroups,
       sessions: filteredInventory,
     }, null, 2)}\n`);
     return 0;
@@ -765,6 +809,7 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
       'Session path': item.session_path,
     }));
   }
+  blocks.push(renderSessionInventoryGroups(inventoryGroups));
   console.log(blocks.join('\n\n'));
   return 0;
 }
@@ -6051,6 +6096,7 @@ export {
   readPersistedSessionEvents,
   filterPersistedSessionEvents,
   filterSessionInventory,
+  summarizeSessionInventoryGroups,
   readPersistedSession,
   readSessionInventory,
   serverStatus,

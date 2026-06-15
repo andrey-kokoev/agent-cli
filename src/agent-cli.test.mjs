@@ -50,6 +50,7 @@ import {
   formatKeyValueRows,
   filterPersistedSessionEvents,
   filterSessionInventory,
+  summarizeSessionInventoryGroups,
   formatProgressStatus,
   formatTimestamp,
   formatToolResultContent,
@@ -687,6 +688,11 @@ assert.equal(inventoryEntries.length, 2);
 assert.equal(filterSessionInventory(inventoryEntries, { filterKey: 'operational_posture', filterValue: 'mcp_runtime_faulted' }).length, 1);
 assert.equal(filterSessionInventory(inventoryEntries, { filterKey: 'request_posture', filterValue: 'runtime_failures' }).length, 1);
 assert.equal(filterSessionInventory(inventoryEntries, { filterKey: 'mcp_state', filterValue: 'healthy' }).length, 1);
+const inventoryGroups = summarizeSessionInventoryGroups(inventoryEntries);
+assert.equal(inventoryGroups.operational_posture.healthy[0].session, 'healthy-session');
+assert.equal(inventoryGroups.operational_posture.mcp_runtime_faulted[0].session, 'faulted-session');
+assert.equal(inventoryGroups.request_posture.runtime_failures[0].session, 'faulted-session');
+assert.equal(inventoryGroups.mcp_state.runtime_faulted[0].session, 'faulted-session');
 assert.equal(inventoryEntries[0].session, 'healthy-session');
 assert.equal(inventoryEntries[0].agent_id, 'narada.test');
 assert.equal(inventoryEntries[0].runtime, 'agent-cli');
@@ -819,6 +825,10 @@ assert.deepEqual(sessionInventoryJson.summary, {
   },
   request_issue_summary: '1 (invalid_json), 1 (request_dispatch_failed), 1 (request_failed), 1 (session_closed)',
 });
+assert.equal(sessionInventoryJson.groups.operational_posture.healthy[0].session, 'healthy-session');
+assert.equal(sessionInventoryJson.groups.operational_posture.mcp_runtime_faulted[0].session, 'faulted-session');
+assert.equal(sessionInventoryJson.groups.request_posture.runtime_failures[0].session, 'faulted-session');
+assert.equal(sessionInventoryJson.groups.mcp_state.runtime_faulted[0].session, 'faulted-session');
 assert.equal(Array.isArray(sessionInventoryJson.sessions), true);
 assert.equal(sessionInventoryJson.sessions[0].session, 'healthy-session');
 assert.equal(sessionInventoryJson.sessions[0].agent_id, 'narada.test');
@@ -865,6 +875,7 @@ assert.equal(filteredInventoryRun.stdout.includes('operational_posture:mcp_runti
 assert.equal(filteredInventoryRun.stdout.includes('Matched sessions'), true);
 assert.equal(filteredInventoryRun.stdout.includes('faulted-session'), true);
 assert.equal(filteredInventoryRun.stdout.includes('healthy-session'), false);
+assert.equal(filteredInventoryRun.stdout.includes('Groups: operational_posture'), true);
 const filteredInventoryJsonRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
   '--session-inventory-json',
@@ -891,6 +902,8 @@ assert.equal(filteredInventoryJson.sessions.length, 1);
 assert.equal(filteredInventoryJson.sessions[0].session, 'faulted-session');
 assert.deepEqual(filteredInventoryJson.summary.operational_posture_counts, { mcp_runtime_faulted: 1 });
 assert.deepEqual(filteredInventoryJson.summary.request_posture_counts, { runtime_failures: 1 });
+assert.equal(filteredInventoryJson.groups.operational_posture.mcp_runtime_faulted[0].session, 'faulted-session');
+assert.equal(filteredInventoryJson.groups.request_posture.runtime_failures[0].session, 'faulted-session');
 const filteredInventoryMissJsonRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
   '--session-inventory-json',
@@ -912,6 +925,7 @@ const filteredInventoryMissJson = JSON.parse(filteredInventoryMissJsonRun.stdout
 assert.equal(filteredInventoryMissJson.inventory_filter, 'heartbeat_status:missing');
 assert.equal(filteredInventoryMissJson.carrier_session_count, 0);
 assert.equal(filteredInventoryMissJson.total_carrier_session_count, 2);
+assert.deepEqual(filteredInventoryMissJson.groups.operational_posture, {});
 assert.deepEqual(filteredInventoryMissJson.sessions, []);
 const sessionReadRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
