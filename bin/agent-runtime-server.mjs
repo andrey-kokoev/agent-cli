@@ -67,13 +67,14 @@ function formatRuntimeMcpFaultEvent(event) {
 }
 
 function formatWrapperStatusEvent(event) {
-  if (!event || (event.event !== 'session_started' && event.event !== 'session_status')) return null;
+  if (!event || (event.event !== 'session_started' && event.event !== 'session_status' && event.event !== 'session_closed')) return null;
   return {
     schema: 'narada.agent_runtime_server.wrapper_event.v1',
     event: 'session_status_snapshot',
     timestamp: event.timestamp ?? new Date().toISOString(),
     source_event: event.event,
     request_id: event.request_id ?? null,
+    terminal_state: event.terminal_state ?? null,
     agent_id: event.agent_id ?? null,
     session_id: event.session_id ?? null,
     active_turn_state: event.active_turn_state ?? null,

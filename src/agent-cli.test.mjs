@@ -788,6 +788,7 @@ assert.deepEqual(
     timestamp: '2026-06-15T14:19:00.000Z',
     source_event: 'session_started',
     request_id: null,
+    terminal_state: null,
     agent_id: 'narada.test',
     session_id: 'runtime-wrapper-test',
     active_turn_state: 'idle',
@@ -802,6 +803,50 @@ assert.deepEqual(
     last_event_kind: 'session_started',
     last_event_at: '2026-06-15T14:19:00.000Z',
     last_terminal_state: null,
+  },
+);
+assert.deepEqual(
+  formatWrapperStatusEvent({
+    event: 'session_closed',
+    timestamp: '2026-06-15T14:19:05.000Z',
+    request_id: 'close-runtime-wrapper-test',
+    terminal_state: 'closed',
+    agent_id: 'narada.test',
+    session_id: 'runtime-wrapper-test',
+    active_turn_state: 'idle',
+    active_turn_id: null,
+    mcp_operational_state: 'healthy',
+    mcp_startup_failure_count: 0,
+    mcp_startup_failure_summary: '0',
+    mcp_runtime_fault_count: 0,
+    mcp_runtime_fault_summary: '0',
+    mcp_preflight_operational_state: 'healthy',
+    session_event_count: 3,
+    last_event_kind: 'session_closed',
+    last_event_at: '2026-06-15T14:19:05.000Z',
+    last_terminal_state: 'closed',
+  }),
+  {
+    schema: 'narada.agent_runtime_server.wrapper_event.v1',
+    event: 'session_status_snapshot',
+    timestamp: '2026-06-15T14:19:05.000Z',
+    source_event: 'session_closed',
+    request_id: 'close-runtime-wrapper-test',
+    terminal_state: 'closed',
+    agent_id: 'narada.test',
+    session_id: 'runtime-wrapper-test',
+    active_turn_state: 'idle',
+    active_turn_id: null,
+    mcp_operational_state: 'healthy',
+    mcp_startup_failure_count: 0,
+    mcp_startup_failure_summary: '0',
+    mcp_runtime_fault_count: 0,
+    mcp_runtime_fault_summary: '0',
+    mcp_preflight_operational_state: 'healthy',
+    session_event_count: 3,
+    last_event_kind: 'session_closed',
+    last_event_at: '2026-06-15T14:19:05.000Z',
+    last_terminal_state: 'closed',
   },
 );
 assert.equal(
@@ -2284,7 +2329,12 @@ assert.equal(serverEvents.some((event) => event.event === 'session_status' && ev
 assert.deepEqual(serverEvents.find((event) => event.event === 'session_status' && event.request_id === 'status-1')?.mcp_tools, []);
 assert.equal(serverEvents.find((event) => event.event === 'session_status' && event.request_id === 'status-1')?.session_event_count >= 2, true);
 assert.equal(serverEvents.find((event) => event.event === 'session_status' && event.request_id === 'status-1')?.last_event_kind, 'session_status_requested');
-assert.equal(serverEvents.at(-1).event, 'session_closed');
+const serverClosedEvent = serverEvents.find((event) => event.event === 'session_closed' && event.request_id === 'close-1');
+assert.equal(serverClosedEvent?.event, 'session_closed');
+assert.equal(serverClosedEvent?.terminal_state, 'closed');
+assert.equal(serverClosedEvent?.last_event_kind, 'session_closed');
+assert.equal(serverClosedEvent?.last_terminal_state, 'closed');
+assert.equal(serverClosedEvent?.session_event_count >= 3, true);
 const serverHeartbeat = JSON.parse(readFileSync(join(serverSite, '.narada', 'crew', 'nars-sessions', 'server-test', 'heartbeat.json'), 'utf8'));
 assert.equal(serverHeartbeat.schema, 'narada.carrier_heartbeat.v1');
 assert.equal(serverHeartbeat.carrier_session_id, 'server-test');
@@ -2357,6 +2407,7 @@ assert.equal(degradedEvents[0].session_event_count, 1);
 assert.equal(degradedEvents[0].last_event_kind, 'session_started');
 assert.equal(degradedEvents.some((event) => event.event === 'carrier_diagnostic_recorded' && event.server_name === 'degraded' && event.diagnostic_code === 'mcp_stdout_pollution'), true);
 assert.equal(degradedEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-degraded-1' && event.mcp_startup_failure_count === 1 && event.mcp_startup_failure_summary === '1 (degraded:mcp_stdout_pollution)'), true);
+assert.equal(degradedEvents.some((event) => event.event === 'session_closed' && event.request_id === 'close-degraded-1' && event.terminal_state === 'closed' && event.last_event_kind === 'session_closed' && event.last_terminal_state === 'closed'), true);
 const degradedSessionEntries = readFileSync(join(degradedServerSite, '.narada', 'crew', 'nars-sessions', 'degraded-server-test', 'session.jsonl'), 'utf8')
   .trim()
   .split(/\r?\n/)
@@ -2639,7 +2690,9 @@ const runtimeServerStderrEvents = runtimeServerStderr.split(/\r?\n/).filter((lin
 assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'session_status_snapshot' && event.source_event === 'session_started' && event.mcp_operational_state === 'startup_degraded' && event.last_event_kind === 'session_started'), true);
 assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'session_status_snapshot' && event.source_event === 'session_status' && event.request_id === 'status-runtime-wrapper-1' && event.mcp_operational_state === 'startup_degraded'), true);
 assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'mcp_startup_status' && event.mcp_operational_state === 'startup_degraded' && event.mcp_startup_failure_summary === '1 (degraded:mcp_stdout_pollution)'), true);
+assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'session_status_snapshot' && event.source_event === 'session_closed' && event.request_id === 'close-runtime-wrapper-1' && event.terminal_state === 'closed' && event.last_event_kind === 'session_closed' && event.last_terminal_state === 'closed'), true);
 assert.equal(runtimeServerEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-runtime-wrapper-1' && event.mcp_startup_failure_summary === '1 (degraded:mcp_stdout_pollution)'), true);
+assert.equal(runtimeServerEvents.some((event) => event.event === 'session_closed' && event.request_id === 'close-runtime-wrapper-1' && event.terminal_state === 'closed' && event.last_event_kind === 'session_closed' && event.last_terminal_state === 'closed'), true);
 rmSync(runtimeServerSite, { recursive: true, force: true });
 
 const directiveServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-directive-server-'));

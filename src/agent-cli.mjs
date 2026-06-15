@@ -3531,7 +3531,7 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
   let buffer = '';
   let orderedServerRequests = Promise.resolve();
   const dispatchRequestLine = (line) => {
-    const runRequest = () => handleServerRequestLine(line, { state, messages, allTools, mcpServers, emit, callChatApiFn });
+    const runRequest = () => handleServerRequestLine(line, { state, messages, allTools, mcpServers, mcpPreflightArtifact, emit, callChatApiFn });
     const pending = isConcurrentServerRequestLine(line)
       ? runRequest()
       : (orderedServerRequests = orderedServerRequests.then(runRequest, runRequest));
@@ -3592,7 +3592,7 @@ async function handleServerRequestLine(line, context) {
   await handleServerRequest(request, context);
 }
 
-async function handleServerRequest(request, { state, messages, allTools, mcpServers, emit, callChatApiFn }) {
+async function handleServerRequest(request, { state, messages, allTools, mcpServers, mcpPreflightArtifact, emit, callChatApiFn }) {
   const controlRequest = classifyCarrierControlRequest(request);
   const requestId = controlRequest.request_id;
   try {
@@ -3644,10 +3644,12 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
       return;
     }
     if (controlRequest.method_kind === 'session_close') {
+      const closedAt = new Date().toISOString();
       state.closed = true;
       if (state.activeTurn) requestTurnInterrupt(state.activeTurn);
+      noteSessionActivity(state, 'session_closed', closedAt, 'closed');
       emit('session_closed', {
-        request_id: requestId,
+        ...serverStatus({ requestId, state, allTools, mcpServers, mcpPreflightArtifact }),
         terminal_state: 'closed',
       });
       return;
