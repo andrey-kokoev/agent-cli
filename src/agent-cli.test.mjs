@@ -79,11 +79,13 @@ import {
   printAgentMessage,
   readCarrierHostCommandOutputRef,
   readMcpPreflightArtifact,
+  readPersistedSessionEvents,
   readSessionInventory,
   recordMcpPreflightArtifactLinkage,
   renderMarkdownForTerminal,
   rewriteSubmittedPromptForTest,
   runConversationTurn,
+  runSessionEventsRead,
   runSessionInventory,
   runServerMode,
   serverStatus,
@@ -877,6 +879,48 @@ assert.equal(sessionReadJson.record.session, 'healthy-session');
 assert.equal(sessionReadJson.record.operational_posture, 'healthy');
 assert.equal(sessionReadJson.record.last_lifecycle_state, 'closed');
 assert.equal(sessionReadJson.record.request_posture, 'clean');
+const persistedEvents = readPersistedSessionEvents({ session: 'faulted-session', naradaDir: inventoryNaradaDir });
+assert.equal(persistedEvents.length, 7);
+assert.equal(persistedEvents.at(-1).event_kind, 'input_completed');
+const sessionEventsRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-events',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'faulted-session',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(sessionEventsRun.status, 0);
+assert.equal(sessionEventsRun.stdout.includes('Event count'), true);
+assert.equal(sessionEventsRun.stdout.includes('Recent events:'), true);
+assert.equal(sessionEventsRun.stdout.includes('carrier_diagnostic_recorded'), true);
+assert.equal(sessionEventsRun.stdout.includes('input_completed [terminal=failed]'), true);
+const sessionEventsJsonRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-events-json',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'healthy-session',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(sessionEventsJsonRun.status, 0);
+const sessionEventsJson = JSON.parse(sessionEventsJsonRun.stdout);
+assert.equal(sessionEventsJson.schema, 'narada.agent_cli.session_events_read.v1');
+assert.equal(sessionEventsJson.site_root, inventoryRoot);
+assert.equal(sessionEventsJson.session, 'healthy-session');
+assert.equal(sessionEventsJson.found, true);
+assert.equal(sessionEventsJson.event_count, 3);
+assert.equal(Array.isArray(sessionEventsJson.recent_events), true);
+assert.equal(sessionEventsJson.recent_events.at(-1).event, 'session_closed');
+assert.equal(sessionEventsJson.record.last_lifecycle_state, 'closed');
 const missingSessionRoot = mkdtempSync(join(tmpdir(), 'narada-agent-cli-session-read-missing-'));
 const missingSessionReadJsonRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
@@ -896,6 +940,26 @@ assert.equal(missingSessionReadJson.schema, 'narada.agent_cli.session_read.v1');
 assert.equal(missingSessionReadJson.site_root, missingSessionRoot);
 assert.equal(missingSessionReadJson.session, 'missing-session');
 assert.equal(missingSessionReadJson.found, false);
+const missingSessionEventsJsonRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-events-json',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'missing-session',
+], {
+  cwd: missingSessionRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: missingSessionRoot },
+  encoding: 'utf8',
+});
+assert.equal(missingSessionEventsJsonRun.status, 0);
+const missingSessionEventsJson = JSON.parse(missingSessionEventsJsonRun.stdout);
+assert.equal(missingSessionEventsJson.schema, 'narada.agent_cli.session_events_read.v1');
+assert.equal(missingSessionEventsJson.site_root, missingSessionRoot);
+assert.equal(missingSessionEventsJson.session, 'missing-session');
+assert.equal(missingSessionEventsJson.found, false);
+assert.equal(missingSessionEventsJson.event_count, 0);
+assert.deepEqual(missingSessionEventsJson.recent_events, []);
 rmSync(missingSessionRoot, { recursive: true, force: true });
 rmSync(inventoryRoot, { recursive: true, force: true });
 
@@ -1314,11 +1378,15 @@ assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventory'), true)
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventoryJson'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionRead'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionReadJson'), true);
+assert.equal(windowsWrapperTemplate.includes('[switch]$SessionEvents'), true);
+assert.equal(windowsWrapperTemplate.includes('[switch]$SessionEventsJson'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$McpPreflightJson'), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-json'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-read'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-read-json'"), true);
+assert.equal(windowsWrapperTemplate.includes("'--session-events'"), true);
+assert.equal(windowsWrapperTemplate.includes("'--session-events-json'"), true);
 assert.equal(windowsWrapperTemplate.includes("$preflightArgs = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-json')"), true);
 assert.equal(windowsWrapperTemplate.includes('ConvertFrom-Json'), true);
 assert.equal(windowsWrapperTemplate.includes('MCP preflight reported degraded startup posture; continuing interactive attach.'), true);

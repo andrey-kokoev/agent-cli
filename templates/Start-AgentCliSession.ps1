@@ -24,6 +24,10 @@ param(
 
     [switch]$SessionReadJson,
 
+    [switch]$SessionEvents,
+
+    [switch]$SessionEventsJson,
+
     [switch]$McpPreflightJson,
 
     [switch]$AutoApprove
@@ -244,6 +248,19 @@ if ($SessionRead) {
 if ($SessionReadJson) {
     Set-Location $WorkDir
     & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-read-json'
+    exit $LASTEXITCODE
+}
+
+if ($SessionEvents) {
+    Write-Host "Session events..." -ForegroundColor Cyan
+    Set-Location $WorkDir
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-events'
+    exit $LASTEXITCODE
+}
+
+if ($SessionEventsJson) {
+    Set-Location $WorkDir
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-events-json'
     exit $LASTEXITCODE
 }
 

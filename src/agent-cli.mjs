@@ -92,6 +92,8 @@ const SESSION_INVENTORY_MODE = options.sessionInventory === true;
 const SESSION_INVENTORY_JSON_MODE = options.sessionInventoryJson === true;
 const SESSION_READ_MODE = options.sessionRead === true;
 const SESSION_READ_JSON_MODE = options.sessionReadJson === true;
+const SESSION_EVENTS_MODE = options.sessionEvents === true;
+const SESSION_EVENTS_JSON_MODE = options.sessionEventsJson === true;
 const SERVER_MODE = options.server === true;
 const sessionSettings = {
   model: options.model ?? MODEL,
@@ -171,6 +173,17 @@ function buildChildProcessEnv(extra = {}, baseEnv = process.env) {
     if (baseEnv[key] !== undefined) env[key] = baseEnv[key];
   }
   return { ...env, ...extra, FORCE_COLOR: '0', NO_COLOR: '1' };
+}
+
+function formatPersistedSessionEventLine(entry) {
+  const timestamp = entry?.timestamp ?? entry?.occurred_at ?? entry?.payload?.occurred_at ?? entry?.payload?.created_at ?? 'unknown-time';
+  const eventKind = entry?.event_kind ?? entry?.event ?? 'unknown-event';
+  const terminalState = entry?.payload?.terminal_state ?? entry?.terminal_state ?? null;
+  const issueCode = classifyPersistedSessionIssueCode(entry);
+  const details = [];
+  if (terminalState) details.push(`terminal=${terminalState}`);
+  if (issueCode) details.push(`code=${issueCode}`);
+  return `- ${timestamp} ${eventKind}${details.length > 0 ? ` [${details.join('; ')}]` : ''}`;
 }
 
 function attachMcpStartupFailures(mcpServers, failures = []) {
@@ -427,11 +440,11 @@ const NARADA_DIR = basename(SITE_ROOT) === '.narada' ? SITE_ROOT : join(SITE_ROO
 const SESSION_DIR = SERVER_MODE
   ? join(NARADA_DIR, 'crew', 'nars-sessions', SESSION)
   : (existsSync(PC_RUNTIME) ? join(PC_RUNTIME, 'agent-sessions') : resolve(SITE_ROOT, '.ai', 'runtime', 'agent-sessions'));
-if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
 const SESSION_PATH = SERVER_MODE ? join(SESSION_DIR, 'session.jsonl') : join(SESSION_DIR, `${SESSION}.jsonl`);
 const EVENTS_PATH = join(SESSION_DIR, 'events.jsonl');
 const CARRIER_SESSION_DIR = join(NARADA_DIR, 'crew', 'nars-sessions', SESSION);
-if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
 const HEARTBEAT_PATH = join(CARRIER_SESSION_DIR, 'heartbeat.json');
 const MCP_PREFLIGHT_ARTIFACT_DIR = join(NARADA_DIR, 'runtime', 'agent-cli', 'mcp-preflight');
 const HEARTBEAT_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_HEARTBEAT_ENABLE, true);
@@ -469,6 +482,14 @@ async function main() {
   }
   if (SESSION_READ_JSON_MODE) {
     process.exitCode = await runSessionRead({ jsonOutput: true });
+    return;
+  }
+  if (SESSION_EVENTS_MODE) {
+    process.exitCode = await runSessionEventsRead();
+    return;
+  }
+  if (SESSION_EVENTS_JSON_MODE) {
+    process.exitCode = await runSessionEventsRead({ jsonOutput: true });
     return;
   }
   if (HEARTBEAT_ENABLED) {
@@ -735,6 +756,60 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
   return 0;
 }
 
+async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, naradaDir = NARADA_DIR, jsonOutput = false, recentCount = 20 } = {}) {
+  const sessionRecord = readPersistedSession({ session, siteRoot, naradaDir });
+  const events = readPersistedSessionEvents({ session, naradaDir });
+  if (!sessionRecord) {
+    if (jsonOutput) {
+      console.log(`${JSON.stringify({
+        schema: 'narada.agent_cli.session_events_read.v1',
+        site_root: siteRoot,
+        session,
+        found: false,
+        event_count: 0,
+        recent_events: [],
+      }, null, 2)}\n`);
+    } else {
+      console.log(formatKeyValueRows({
+        SiteRoot: siteRoot,
+        Session: session,
+        Status: 'persisted session not found',
+      }));
+    }
+    return 0;
+  }
+  const recentEvents = events.slice(-recentCount);
+  if (jsonOutput) {
+    console.log(`${JSON.stringify({
+      schema: 'narada.agent_cli.session_events_read.v1',
+      site_root: siteRoot,
+      session,
+      found: true,
+      event_count: events.length,
+      recent_events: recentEvents,
+      record: sessionRecord,
+    }, null, 2)}\n`);
+    return 0;
+  }
+  const blocks = [formatKeyValueRows({
+    SiteRoot: siteRoot,
+    Session: sessionRecord.session,
+    'Event count': events.length,
+    'Last event': sessionRecord.last_event_kind ?? 'none',
+    'Last event at': sessionRecord.last_event_at ?? 'unknown',
+    'Operational posture': sessionRecord.operational_posture_display,
+    'Request posture': sessionRecord.request_posture_display,
+    'Lifecycle outcomes': sessionRecord.lifecycle_state_summary,
+    'Request issues': sessionRecord.request_issue_summary,
+    'Session path': sessionRecord.session_path,
+  })];
+  if (recentEvents.length > 0) {
+    blocks.push(['Recent events:', ...recentEvents.map((entry) => formatPersistedSessionEventLine(entry))].join('\n'));
+  }
+  console.log(blocks.join('\n\n'));
+  return 0;
+}
+
 async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaDir = NARADA_DIR, jsonOutput = false } = {}) {
   const sessionRecord = readPersistedSession({ session, siteRoot, naradaDir });
   if (!sessionRecord) {
@@ -848,6 +923,16 @@ function readPersistedSession({ session = SESSION, siteRoot = SITE_ROOT, naradaD
     return null;
   }
   return summarizePersistedSession({ session, sessionDir, siteRoot, naradaDir });
+}
+
+function readPersistedSessionEvents({ session = SESSION, naradaDir = NARADA_DIR } = {}) {
+  const sessionDir = join(naradaDir, 'crew', 'nars-sessions', session);
+  try {
+    if (!statSync(sessionDir).isDirectory()) return [];
+  } catch {
+    return [];
+  }
+  return readJsonlFile(join(sessionDir, 'session.jsonl'));
 }
 
 function summarizeSessionInventoryRollup(inventory = []) {
@@ -5734,6 +5819,10 @@ function parseArgs(argv) {
       opts.sessionRead = true;
     } else if (argv[i] === '--session-read-json') {
       opts.sessionReadJson = true;
+    } else if (argv[i] === '--session-events') {
+      opts.sessionEvents = true;
+    } else if (argv[i] === '--session-events-json') {
+      opts.sessionEventsJson = true;
     } else if (argv[i] === '--stream') {
       opts.stream = true;
     } else if (argv[i] === '--no-stream') {
@@ -5880,9 +5969,11 @@ export {
   wrapTerminalLine,
   runConversationTurn,
   runMcpPreflight,
+  runSessionEventsRead,
   runSessionRead,
   runSessionInventory,
   runServerMode,
+  readPersistedSessionEvents,
   readPersistedSession,
   readSessionInventory,
   serverStatus,
@@ -5897,7 +5988,7 @@ export {
 
 if (isEntrypoint) {
   if (options.help) {
-    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--session-inventory] [--session-inventory-json] [--session-read] [--session-read-json] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
+    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--session-inventory] [--session-inventory-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
     console.log('Programmatic input: --message and --message-file are explicit control inputs; do not use raw stdin piping as the control API.');
     console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, ANTHROPIC_API_KEY, NARADA_AI_API_KEY, NARADA_AI_BASE_URL, NARADA_AI_MODEL, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_ENABLE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_DELAY_MS, NARADA_SITE_ROOT`);
     process.exit(0);
