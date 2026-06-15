@@ -157,6 +157,7 @@ const CHILD_PROCESS_ENV_ALLOWLIST = Object.freeze([
   'NARADA_KIMI_CODE_MODEL',
 ]);
 const MCP_STARTUP_FAILURES_KEY = '__mcp_startup_failures';
+const MCP_RUNTIME_DIAGNOSTICS_KEY = '__mcp_runtime_diagnostics';
 
 function buildChildProcessEnv(extra = {}, baseEnv = process.env) {
   const env = {};
@@ -172,6 +173,14 @@ function attachMcpStartupFailures(mcpServers, failures = []) {
     enumerable: false,
     configurable: true,
   });
+  if (!Object.prototype.hasOwnProperty.call(mcpServers, MCP_RUNTIME_DIAGNOSTICS_KEY)) {
+    Object.defineProperty(mcpServers, MCP_RUNTIME_DIAGNOSTICS_KEY, {
+      value: [],
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
   return mcpServers;
 }
 
@@ -188,6 +197,45 @@ function formatMcpStartupFailureSummary(failures) {
     .map((failure) => `${failure.server_name ?? 'unknown'}:${failure.code ?? 'error'}`)
     .join(', ');
   return normalized.length > 3 ? `${normalized.length} (${details}, ...)` : `${normalized.length} (${details})`;
+}
+
+function getMcpRuntimeDiagnostics(mcpServers) {
+  const diagnostics = mcpServers?.[MCP_RUNTIME_DIAGNOSTICS_KEY];
+  return Array.isArray(diagnostics) ? diagnostics : [];
+}
+
+function rememberMcpRuntimeDiagnostic(mcpServers, diagnostic) {
+  if (!mcpServers) return [];
+  if (!Object.prototype.hasOwnProperty.call(mcpServers, MCP_RUNTIME_DIAGNOSTICS_KEY)) {
+    Object.defineProperty(mcpServers, MCP_RUNTIME_DIAGNOSTICS_KEY, {
+      value: [],
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  const diagnostics = mcpServers[MCP_RUNTIME_DIAGNOSTICS_KEY];
+  diagnostics.push(diagnostic);
+  if (diagnostics.length > 10) diagnostics.splice(0, diagnostics.length - 10);
+  return diagnostics;
+}
+
+function formatMcpRuntimeDiagnosticSummary(diagnostics) {
+  const normalized = Array.isArray(diagnostics) ? diagnostics : [];
+  if (normalized.length === 0) return '0';
+  const details = normalized
+    .slice(-3)
+    .map((diagnostic) => `${diagnostic.server_name ?? 'unknown'}:${diagnostic.tool_name ?? '<missing>'}`)
+    .join(', ');
+  return normalized.length > 3 ? `${normalized.length} (${details}, ...)` : `${normalized.length} (${details})`;
+}
+
+function mcpOperationalState(mcpServers) {
+  const startupFailures = getMcpStartupFailures(mcpServers);
+  const runtimeDiagnostics = getMcpRuntimeDiagnostics(mcpServers);
+  if (startupFailures.length === 0 && runtimeDiagnostics.length === 0) return 'healthy';
+  if (runtimeDiagnostics.length > 0) return 'runtime_faulted';
+  return 'startup_degraded';
 }
 
 function environmentBlockLength(env) {
@@ -552,7 +600,7 @@ function recordMcpStartupFailures(mcpServers, { emit = null } = {}) {
   }
 }
 
-function recordMcpRuntimeFault({ serverName, toolName, error, emit = null }) {
+function recordMcpRuntimeFault({ mcpServers = null, serverName, toolName, error, emit = null }) {
   if (isAbortError(error)) return;
   const message = error instanceof Error ? error.message : String(error);
   const payload = {
@@ -571,6 +619,7 @@ function recordMcpRuntimeFault({ serverName, toolName, error, emit = null }) {
       message,
     },
   };
+  rememberMcpRuntimeDiagnostic(mcpServers, payload.diagnostic);
   recordCarrierDiagnostic(payload.level, payload.message, {
     diagnostic_code: payload.diagnostic_code,
     server_name: payload.server_name,
@@ -941,6 +990,7 @@ async function handleSlashCommand(input, {
   }
   if (command === '/status') {
     const startupFailures = getMcpStartupFailures(mcpServers);
+    const runtimeDiagnostics = getMcpRuntimeDiagnostics(mcpServers);
     printCliMessage(formatKeyValueRows({
       Identity: IDENTITY,
       Session: SESSION,
@@ -950,7 +1000,9 @@ async function handleSlashCommand(input, {
       Stream: (carrierSessionSettings.stream ?? sessionSettings.stream) ? 'on' : 'off',
       Goal: carrierGoalStatusLabel(carrierSessionSettings.goal),
       'MCP servers': Object.keys(mcpServers).length,
+      'MCP state': mcpOperationalState(mcpServers),
       ...(startupFailures.length > 0 ? { 'MCP startup failures': formatMcpStartupFailureSummary(startupFailures) } : {}),
+      ...(runtimeDiagnostics.length > 0 ? { 'MCP runtime faults': formatMcpRuntimeDiagnosticSummary(runtimeDiagnostics) } : {}),
       Tools: allTools.length,
       'Tool outputs': displaySettings.toolOutputs ? 'shown' : 'hidden',
       Observers: displaySettings.observerMuted === true ? 'muted' : 'shown',
@@ -2097,7 +2149,7 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
     };
   } catch (err) {
     const recovery = toolFailureRecovery(err?.message);
-    recordMcpRuntimeFault({ serverName: server?.name, toolName: name, error: err, emit });
+    recordMcpRuntimeFault({ mcpServers, serverName: server?.name, toolName: name, error: err, emit });
     if (!serverMode) {
       turn?.clearStatus?.();
       if (shouldDisplayToolOutputs()) printToolResultLine(`failed ${name} in ${formatDuration(Date.now() - startedAt)} · ${err.message}${recovery ? `\n${recovery}` : ''}`, { level: 'error' });
@@ -3107,7 +3159,9 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
     model: sessionSettings.model,
     thinking: sessionSettings.thinking,
     mcp_server_count: Object.keys(mcpServers).length,
+    mcp_operational_state: mcpOperationalState(mcpServers),
     mcp_startup_failure_count: startupFailures.length,
+    mcp_runtime_fault_count: 0,
     tool_count: allTools.length,
     session_path: SESSION_PATH,
     events_path: EVENTS_PATH,
@@ -3482,6 +3536,7 @@ async function runServerConversationTurn({ requestId, state, messages, allTools,
 function serverStatus({ requestId, state, allTools, mcpServers }) {
   const goal = normalizeCarrierGoalState(sessionSettings.goal);
   const startupFailures = getMcpStartupFailures(mcpServers);
+  const runtimeDiagnostics = getMcpRuntimeDiagnostics(mcpServers);
   return {
     request_id: requestId,
     transport: 'jsonl_stdio',
@@ -3495,8 +3550,11 @@ function serverStatus({ requestId, state, allTools, mcpServers }) {
     active_turn_state: state.activeTurn ? 'running' : 'idle',
     active_turn_id: state.activeTurn?.turnId ?? null,
     mcp_server_count: Object.keys(mcpServers).length,
+    mcp_operational_state: mcpOperationalState(mcpServers),
     mcp_startup_failure_count: startupFailures.length,
     mcp_startup_failures: startupFailures,
+    mcp_runtime_fault_count: runtimeDiagnostics.length,
+    mcp_runtime_faults: runtimeDiagnostics,
     tool_count: allTools.length,
     mcp_tools: mcpToolCatalogEntries(mcpServers),
     observer_muted: (state?.displaySettings ?? transcriptDisplaySettings).observerMuted === true,

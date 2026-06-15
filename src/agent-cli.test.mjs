@@ -1218,6 +1218,7 @@ const toolStatusWithStartupFailure = serverStatus({
   allTools: tools,
   mcpServers: toolsFixtureServers,
 });
+assert.equal(toolStatusWithStartupFailure.mcp_operational_state, 'startup_degraded');
 assert.equal(toolStatusWithStartupFailure.mcp_startup_failure_count, 1);
 assert.equal(toolStatusWithStartupFailure.mcp_startup_failures[0].server_name, 'polluted');
 const printedStatusMessages = [];
@@ -1869,6 +1870,15 @@ try {
   );
   assert.equal(JSON.parse(afterReset.content).error, 'read ECONNRESET');
   assert.equal(admissionEvents.some((event) => event.event === 'carrier_diagnostic_recorded' && event.server_name === 'reset' && event.tool_name === 'fs_stat' && event.diagnostic_code === 'mcp_runtime_fault' && event.error_code === 'ECONNRESET'), true);
+  const resetStatus = serverStatus({
+    requestId: 'status-reset-fault',
+    state: { activeTurn: null },
+    allTools: [],
+    mcpServers: resetServers,
+  });
+  assert.equal(resetStatus.mcp_operational_state, 'runtime_faulted');
+  assert.equal(resetStatus.mcp_runtime_fault_count, 1);
+  assert.equal(resetStatus.mcp_runtime_faults[0].server_name, 'reset');
 } finally {
   await Promise.all(Object.values(resetServers).map((server) => stopChildProcess(server.process)));
   rmSync(resetAfterTimeoutSite, { recursive: true, force: true });
@@ -1903,6 +1913,7 @@ const exitCode = await new Promise((resolveExit) => child.on('exit', resolveExit
 assert.equal(exitCode, 0);
 const serverEvents = stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
 assert.equal(serverEvents[0].event, 'session_started');
+assert.equal(serverEvents[0].mcp_operational_state, 'healthy');
 assert.equal(serverEvents.some((event) => event.event === 'error' && event.code === 'invalid_json'), true);
 assert.equal(serverEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-1'), true);
 assert.deepEqual(serverEvents.find((event) => event.event === 'session_status' && event.request_id === 'status-1')?.mcp_tools, []);
@@ -1966,6 +1977,7 @@ const degradedExitCode = await new Promise((resolveExit) => degradedChild.on('ex
 assert.equal(degradedExitCode, 0);
 const degradedEvents = degradedStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
 assert.equal(degradedEvents[0].event, 'session_started');
+assert.equal(degradedEvents[0].mcp_operational_state, 'startup_degraded');
 assert.equal(degradedEvents[0].mcp_startup_failure_count, 1);
 assert.equal(degradedEvents.some((event) => event.event === 'carrier_diagnostic_recorded' && event.server_name === 'degraded' && event.diagnostic_code === 'mcp_stdout_pollution'), true);
 assert.equal(degradedEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-degraded-1' && event.mcp_startup_failure_count === 1), true);
