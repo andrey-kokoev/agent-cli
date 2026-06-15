@@ -892,6 +892,11 @@ assert.deepEqual(
     mcp_runtime_fault_count: 0,
     mcp_runtime_fault_summary: '0',
     mcp_preflight_operational_state: 'healthy',
+    request_outcome_total: 0,
+    request_posture: 'clean',
+    request_posture_display: 'clean',
+    operational_posture: 'healthy',
+    operational_posture_display: 'healthy',
     session_event_count: 1,
     last_event_kind: 'session_started',
     last_event_at: '2026-06-15T14:19:00.000Z',
@@ -914,6 +919,11 @@ assert.deepEqual(
     mcp_runtime_fault_count: 0,
     mcp_runtime_fault_summary: '0',
     mcp_preflight_operational_state: 'healthy',
+    request_outcome_total: 0,
+    request_posture: 'clean',
+    request_posture_display: 'clean',
+    operational_posture: 'healthy',
+    operational_posture_display: 'healthy',
     session_event_count: 1,
     last_event_kind: 'session_started',
     last_event_at: '2026-06-15T14:19:00.000Z',
@@ -936,6 +946,11 @@ assert.deepEqual(
     mcp_runtime_fault_count: 0,
     mcp_runtime_fault_summary: '0',
     mcp_preflight_operational_state: 'healthy',
+    request_outcome_total: 0,
+    request_posture: 'clean',
+    request_posture_display: 'clean',
+    operational_posture: 'healthy',
+    operational_posture_display: 'healthy',
     session_event_count: 3,
     last_event_kind: 'session_closed',
     last_event_at: '2026-06-15T14:19:05.000Z',
@@ -958,6 +973,11 @@ assert.deepEqual(
     mcp_runtime_fault_count: 0,
     mcp_runtime_fault_summary: '0',
     mcp_preflight_operational_state: 'healthy',
+    request_outcome_total: 0,
+    request_posture: 'clean',
+    request_posture_display: 'clean',
+    operational_posture: 'healthy',
+    operational_posture_display: 'healthy',
     session_event_count: 3,
     last_event_kind: 'session_closed',
     last_event_at: '2026-06-15T14:19:05.000Z',
@@ -1087,6 +1107,13 @@ assert.deepEqual(createSessionActivitySnapshot({
   last_event_kind: 'input_completed',
   last_event_at: '2026-06-14T00:01:00.000Z',
   last_terminal_state: 'completed',
+  request_outcome_total: 0,
+  request_posture: 'clean',
+  request_posture_display: 'clean',
+  request_outcome_counts: {},
+  request_outcome_summary: '0',
+  request_issue_counts: {},
+  request_issue_summary: '0',
 });
 assert.deepEqual(wrapTerminalLine('alpha beta gamma', 10), ['alpha beta', 'gamma']);
 assert.equal(renderMarkdownForTerminal('- `code`').includes('• '), true);
@@ -2439,16 +2466,27 @@ assert.equal(serverEvents[0].mode, 'server');
 assert.equal(serverEvents[0].session_event_count, 1);
 assert.equal(serverEvents[0].last_event_kind, 'session_started');
 assert.equal(serverEvents[0].last_terminal_state, null);
+assert.equal(serverEvents[0].request_outcome_total, 0);
+assert.equal(serverEvents[0].request_posture, 'clean');
+assert.equal(serverEvents[0].operational_posture, 'healthy');
 assert.equal(serverEvents.some((event) => event.event === 'error' && event.code === 'invalid_json'), true);
 assert.equal(serverEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-1'), true);
 assert.deepEqual(serverEvents.find((event) => event.event === 'session_status' && event.request_id === 'status-1')?.mcp_tools, []);
-assert.equal(serverEvents.find((event) => event.event === 'session_status' && event.request_id === 'status-1')?.session_event_count >= 2, true);
-assert.equal(serverEvents.find((event) => event.event === 'session_status' && event.request_id === 'status-1')?.last_event_kind, 'session_status_requested');
+const serverStatusEvent = serverEvents.find((event) => event.event === 'session_status' && event.request_id === 'status-1');
+assert.equal(serverStatusEvent?.session_event_count >= 2, true);
+assert.equal(serverStatusEvent?.last_event_kind, 'session_status_requested');
+assert.equal(serverStatusEvent?.request_outcome_total, 1);
+assert.equal(serverStatusEvent?.request_posture, 'invalid_control_traffic');
+assert.equal(serverStatusEvent?.request_issue_counts?.invalid_json, 1);
+assert.equal(serverStatusEvent?.operational_posture, 'request_invalid_control_traffic');
 const serverClosedEvent = serverEvents.find((event) => event.event === 'session_closed' && event.request_id === 'close-1');
 assert.equal(serverClosedEvent?.event, 'session_closed');
 assert.equal(serverClosedEvent?.terminal_state, 'closed');
 assert.equal(serverClosedEvent?.last_event_kind, 'session_closed');
 assert.equal(serverClosedEvent?.last_terminal_state, 'closed');
+assert.equal(serverClosedEvent?.request_outcome_total, 1);
+assert.equal(serverClosedEvent?.request_posture, 'invalid_control_traffic');
+assert.equal(serverClosedEvent?.operational_posture, 'request_invalid_control_traffic');
 assert.equal(serverClosedEvent?.session_event_count >= 3, true);
 const serverHeartbeat = JSON.parse(readFileSync(join(serverSite, '.narada', 'crew', 'nars-sessions', 'server-test', 'heartbeat.json'), 'utf8'));
 assert.equal(serverHeartbeat.schema, 'narada.carrier_heartbeat.v1');
@@ -2520,9 +2558,12 @@ assert.equal(degradedEvents[0].mcp_runtime_fault_summary, '0');
 assert.deepEqual(degradedEvents[0].mcp_runtime_faults, []);
 assert.equal(degradedEvents[0].session_event_count, 1);
 assert.equal(degradedEvents[0].last_event_kind, 'session_started');
+assert.equal(degradedEvents[0].request_outcome_total, 0);
+assert.equal(degradedEvents[0].request_posture, 'clean');
+assert.equal(degradedEvents[0].operational_posture, 'mcp_startup_degraded');
 assert.equal(degradedEvents.some((event) => event.event === 'carrier_diagnostic_recorded' && event.server_name === 'degraded' && event.diagnostic_code === 'mcp_stdout_pollution'), true);
-assert.equal(degradedEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-degraded-1' && event.mcp_startup_failure_count === 1 && event.mcp_startup_failure_summary === '1 (degraded:mcp_stdout_pollution)'), true);
-assert.equal(degradedEvents.some((event) => event.event === 'session_closed' && event.request_id === 'close-degraded-1' && event.terminal_state === 'closed' && event.last_event_kind === 'session_closed' && event.last_terminal_state === 'closed'), true);
+assert.equal(degradedEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-degraded-1' && event.mcp_startup_failure_count === 1 && event.mcp_startup_failure_summary === '1 (degraded:mcp_stdout_pollution)' && event.operational_posture === 'mcp_startup_degraded'), true);
+assert.equal(degradedEvents.some((event) => event.event === 'session_closed' && event.request_id === 'close-degraded-1' && event.terminal_state === 'closed' && event.last_event_kind === 'session_closed' && event.last_terminal_state === 'closed' && event.operational_posture === 'mcp_startup_degraded'), true);
 const degradedSessionEntries = readFileSync(join(degradedServerSite, '.narada', 'crew', 'nars-sessions', 'degraded-server-test', 'session.jsonl'), 'utf8')
   .trim()
   .split(/\r?\n/)

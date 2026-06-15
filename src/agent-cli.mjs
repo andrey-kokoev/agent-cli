@@ -264,6 +264,70 @@ function noteSessionActivity(state, eventKind, occurredAt = new Date().toISOStri
   if (terminalState) state.lastTerminalState = terminalState;
 }
 
+function incrementSessionCounter(counts, key) {
+  if (!counts || !key) return;
+  counts[key] = (counts[key] ?? 0) + 1;
+}
+
+function classifySessionIssueOutcomeCode(issueCode) {
+  const normalizedCode = String(issueCode ?? '');
+  if (!normalizedCode) return null;
+  if (normalizedCode === 'session_closed') return 'rejected_closed';
+  if (normalizedCode === 'request_dispatch_failed') return 'dispatch_failure';
+  if (normalizedCode === 'request_failed') return 'request_runtime_failure';
+  if (normalizedCode === 'interactive_loop_error') return 'interactive_runtime_failure';
+  if (
+    normalizedCode === 'invalid_json'
+    || normalizedCode === 'message_required'
+    || normalizedCode === 'directive_message_required'
+    || normalizedCode.startsWith('invalid_')
+    || normalizedCode.startsWith('unsupported_')
+    || normalizedCode.startsWith('unknown_')
+    || normalizedCode.endsWith('_required')
+  ) {
+    return 'invalid_request';
+  }
+  return 'request_error';
+}
+
+function recordSessionRequestIssue(state, issueCode) {
+  if (!state || !issueCode) return;
+  if (!state.requestIssueCounts) state.requestIssueCounts = {};
+  if (!state.requestOutcomeCounts) state.requestOutcomeCounts = {};
+  incrementSessionCounter(state.requestIssueCounts, issueCode);
+  const issueOutcome = classifySessionIssueOutcomeCode(issueCode);
+  if (issueOutcome) incrementSessionCounter(state.requestOutcomeCounts, issueOutcome);
+}
+
+function createRequestPostureSnapshot(state = {}) {
+  const requestIssueCounts = state.requestIssueCounts ?? {};
+  const requestOutcomeCounts = state.requestOutcomeCounts ?? {};
+  const requestPosture = summarizeRequestPosture(requestOutcomeCounts);
+  return {
+    request_outcome_total: requestPosture.request_outcome_total,
+    request_posture: requestPosture.request_posture,
+    request_posture_display: requestPosture.request_posture_display,
+    request_outcome_counts: requestOutcomeCounts,
+    request_outcome_summary: formatInventoryCounts(requestOutcomeCounts),
+    request_issue_counts: requestIssueCounts,
+    request_issue_summary: formatInventoryCounts(requestIssueCounts),
+  };
+}
+
+function createOperationalPostureSnapshot({ state = {}, mcpOperationalState = 'unknown' } = {}) {
+  const requestPosture = createRequestPostureSnapshot(state);
+  const operationalPosture = summarizeOperationalPosture({
+    mcpOperationalState,
+    requestPosture: requestPosture.request_posture,
+    lastLifecycleState: state.lastTerminalState ?? null,
+  });
+  return {
+    operational_posture: operationalPosture.operational_posture,
+    operational_posture_display: operationalPosture.operational_posture_display,
+    ...requestPosture,
+  };
+}
+
 function createSessionActivitySnapshot(state = {}) {
   return {
     agent_id: IDENTITY,
@@ -274,6 +338,7 @@ function createSessionActivitySnapshot(state = {}) {
     last_event_kind: state.lastEventKind ?? null,
     last_event_at: state.lastEventAt ?? null,
     last_terminal_state: state.lastTerminalState ?? null,
+    ...createRequestPostureSnapshot(state),
   };
 }
 
@@ -800,23 +865,7 @@ function classifyPersistedSessionIssueCode(entry) {
 function classifyPersistedSessionIssueOutcome(entry) {
   const issueCode = classifyPersistedSessionIssueCode(entry);
   if (!issueCode) return null;
-  const normalizedCode = String(issueCode);
-  if (normalizedCode === 'session_closed') return 'rejected_closed';
-  if (normalizedCode === 'request_dispatch_failed') return 'dispatch_failure';
-  if (normalizedCode === 'request_failed') return 'request_runtime_failure';
-  if (normalizedCode === 'interactive_loop_error') return 'interactive_runtime_failure';
-  if (
-    normalizedCode === 'invalid_json'
-    || normalizedCode === 'message_required'
-    || normalizedCode === 'directive_message_required'
-    || normalizedCode.startsWith('invalid_')
-    || normalizedCode.startsWith('unsupported_')
-    || normalizedCode.startsWith('unknown_')
-    || normalizedCode.endsWith('_required')
-  ) {
-    return 'invalid_request';
-  }
-  return 'request_error';
+  return classifySessionIssueOutcomeCode(issueCode);
 }
 
 function summarizeRequestPosture(requestOutcomeCounts = {}) {
@@ -3666,6 +3715,8 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
     lastEventKind: null,
     lastEventAt: null,
     lastTerminalState: null,
+    requestIssueCounts: {},
+    requestOutcomeCounts: {},
   };
   let messages = loadSession(SESSION_PATH);
   if (messages.length === 0 && rolePrompt) {
@@ -3697,13 +3748,16 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
     },
   });
 
-  const emit = (event, payload = {}) => emitServerEvent(output, {
-    event,
-    agent_id: IDENTITY,
-    session_id: SESSION,
-    timestamp: new Date().toISOString(),
-    ...payload,
-  });
+  const emit = (event, payload = {}) => {
+    if (event === 'error' && payload?.code) recordSessionRequestIssue(state, payload.code);
+    return emitServerEvent(output, {
+      event,
+      agent_id: IDENTITY,
+      session_id: SESSION,
+      timestamp: new Date().toISOString(),
+      ...payload,
+    });
+  };
 
   noteSessionActivity(state, 'session_started', state.startedAt);
 
@@ -3717,6 +3771,7 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
     ...mcpStatus,
     ...mcpPreflightSnapshot,
     ...createSessionActivitySnapshot(state),
+    ...createOperationalPostureSnapshot({ state, mcpOperationalState: mcpStatus.mcp_operational_state }),
     tool_count: allTools.length,
     session_path: SESSION_PATH,
     events_path: EVENTS_PATH,
@@ -4100,6 +4155,10 @@ function serverStatus({ requestId, state, allTools, mcpServers, mcpPreflightArti
   const mcpStatus = createMcpStatusSnapshot(mcpServers);
   const mcpPreflightSnapshot = createMcpPreflightArtifactSnapshot(mcpPreflightArtifact);
   const sessionActivity = createSessionActivitySnapshot(state);
+  const operationalPosture = createOperationalPostureSnapshot({
+    state,
+    mcpOperationalState: mcpStatus.mcp_operational_state,
+  });
   return {
     request_id: requestId,
     transport: 'jsonl_stdio',
@@ -4116,6 +4175,7 @@ function serverStatus({ requestId, state, allTools, mcpServers, mcpPreflightArti
     ...mcpStatus,
     ...mcpPreflightSnapshot,
     ...sessionActivity,
+    ...operationalPosture,
     tool_count: allTools.length,
     mcp_tools: mcpToolCatalogEntries(mcpServers),
     observer_muted: (state?.displaySettings ?? transcriptDisplaySettings).observerMuted === true,
