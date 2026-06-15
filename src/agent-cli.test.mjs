@@ -579,7 +579,10 @@ assert.deepEqual(parseArgs(['--mcp-preflight-actions']), { mcpPreflightActions: 
 assert.deepEqual(parseArgs(['--mcp-preflight-actions-json']), { mcpPreflightActionsJson: true });
 assert.deepEqual(parseArgs(['--mcp-preflight-recovery']), { mcpPreflightRecovery: true });
 assert.deepEqual(parseArgs(['--mcp-preflight-recovery-json']), { mcpPreflightRecoveryJson: true });
+assert.deepEqual(parseArgs(['--mcp-preflight-diagnostics']), { mcpPreflightDiagnostics: true });
+assert.deepEqual(parseArgs(['--mcp-preflight-diagnostics-json']), { mcpPreflightDiagnosticsJson: true });
 assert.deepEqual(parseArgs(['--mcp-preflight-filter', 'mcp_state', '--mcp-preflight-match', 'startup_degraded']), { mcpPreflightFilter: 'mcp_state', mcpPreflightMatch: 'startup_degraded' });
+assert.deepEqual(parseArgs(['--mcp-preflight-diagnostics-filter', 'runtime']), { mcpPreflightDiagnosticsFilter: 'runtime' });
 assert.deepEqual(parseArgs(['--session-inventory']), { sessionInventory: true });
 assert.deepEqual(parseArgs(['--session-inventory-json']), { sessionInventoryJson: true });
 assert.deepEqual(parseArgs(['--session-inventory-actions']), { sessionInventoryActions: true });
@@ -2137,6 +2140,10 @@ assert.equal(windowsWrapperTemplate.includes('[switch]$McpPreflightActions'), tr
 assert.equal(windowsWrapperTemplate.includes('[switch]$McpPreflightActionsJson'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$McpPreflightRecovery'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$McpPreflightRecoveryJson'), true);
+assert.equal(windowsWrapperTemplate.includes("[ValidateSet('all', 'startup', 'runtime')]"), true);
+assert.equal(windowsWrapperTemplate.includes("[string]$McpPreflightDiagnosticsFilter = 'all'"), true);
+assert.equal(windowsWrapperTemplate.includes('[switch]$McpPreflightDiagnostics'), true);
+assert.equal(windowsWrapperTemplate.includes('[switch]$McpPreflightDiagnosticsJson'), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-json'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-actions'"), true);
@@ -2163,6 +2170,9 @@ assert.equal(windowsWrapperTemplate.includes("& node $AgentCliPath @preflightAct
 assert.equal(windowsWrapperTemplate.includes("& node $AgentCliPath @preflightActionsJsonArgs"), true);
 assert.equal(windowsWrapperTemplate.includes("& node $AgentCliPath @preflightRecoveryArgs"), true);
 assert.equal(windowsWrapperTemplate.includes("& node $AgentCliPath @preflightRecoveryJsonArgs"), true);
+assert.equal(windowsWrapperTemplate.includes("& node $AgentCliPath @preflightDiagnosticsArgs"), true);
+assert.equal(windowsWrapperTemplate.includes("& node $AgentCliPath @preflightDiagnosticsJsonArgs"), true);
+assert.equal(windowsWrapperTemplate.includes("'--mcp-preflight-diagnostics-filter', $McpPreflightDiagnosticsFilter"), true);
 assert.equal(windowsWrapperTemplate.includes('ConvertFrom-Json'), true);
 assert.equal(windowsWrapperTemplate.includes('MCP preflight reported degraded startup posture; continuing interactive attach.'), true);
 assert.equal(windowsWrapperTemplate.includes('MCP state:'), true);
@@ -3949,6 +3959,114 @@ assert.equal(preflightRecoveryFilteredJson.preflight_filter, 'recommended_action
 assert.equal(preflightRecoveryFilteredJson.preflight_artifact_count, 1);
 assert.equal(preflightRecoveryFilteredJson.artifacts[0].session, 'preflight-degraded');
 rmSync(preflightInventoryRoot, { recursive: true, force: true });
+
+const preflightDiagnosticsRoot = mkdtempSync(join(tmpdir(), 'narada-agent-cli-preflight-diagnostics-'));
+const preflightDiagnosticsArtifactDir = join(preflightDiagnosticsRoot, '.narada', 'runtime', 'agent-cli', 'mcp-preflight');
+mkdirSync(preflightDiagnosticsArtifactDir, { recursive: true });
+writeFileSync(join(preflightDiagnosticsArtifactDir, 'preflight-startup.json'), `${JSON.stringify({
+  schema: 'narada.agent_cli.mcp_preflight_artifact.v1',
+  session: 'preflight-startup',
+  identity: 'narada.test',
+  site_root: preflightDiagnosticsRoot,
+  generated_at: '2026-06-15T11:00:00.000Z',
+  mcp_operational_state: 'startup_degraded',
+  mcp_startup_failure_count: 1,
+  mcp_startup_failures: [{
+    schema: 'narada.agent_cli.mcp_startup_diagnostic.v0',
+    code: 'mcp_stdout_pollution',
+    message: 'MCP server startup emitted banner text',
+    phase: 'initialize_or_tools_list',
+    server_name: 'startup-server',
+    stdout_pollution: ['banner line'],
+    stderr: [],
+  }],
+  mcp_startup_failure_summary: '1 (degraded:mcp_stdout_pollution)',
+  mcp_runtime_fault_count: 0,
+  mcp_runtime_faults: [],
+  mcp_runtime_fault_summary: '0',
+  mcp_server_count: 0,
+  tool_count: 0,
+}, null, 2)}\n`, 'utf8');
+writeFileSync(join(preflightDiagnosticsArtifactDir, 'preflight-runtime.json'), `${JSON.stringify({
+  schema: 'narada.agent_cli.mcp_preflight_artifact.v1',
+  session: 'preflight-runtime',
+  identity: 'narada.test',
+  site_root: preflightDiagnosticsRoot,
+  generated_at: '2026-06-15T11:05:00.000Z',
+  mcp_operational_state: 'runtime_faulted',
+  mcp_startup_failure_count: 0,
+  mcp_startup_failures: [],
+  mcp_startup_failure_summary: '0',
+  mcp_runtime_fault_count: 1,
+  mcp_runtime_faults: [{
+    schema: 'narada.agent_cli.mcp_runtime_diagnostic.v0',
+    code: 'mcp_runtime_fault',
+    message: 'MCP tool call reset connection',
+    server_name: 'runtime-server',
+    tool_name: 'fs_stat',
+  }],
+  mcp_runtime_fault_summary: '1 (runtime-server:fs_stat)',
+  mcp_server_count: 1,
+  tool_count: 3,
+}, null, 2)}\n`, 'utf8');
+const preflightDiagnosticsRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--identity', 'narada.test',
+  '--session', 'preflight-diagnostics-scan',
+  '--mcp-preflight-diagnostics',
+], {
+  env: { ...process.env, NARADA_SITE_ROOT: preflightDiagnosticsRoot },
+  encoding: 'utf8',
+});
+assert.equal(preflightDiagnosticsRun.status, 0);
+assert.equal(preflightDiagnosticsRun.stdout.includes('Diagnostics filter'), true);
+assert.equal(preflightDiagnosticsRun.stdout.includes('Diagnostic codes'), true);
+assert.equal(preflightDiagnosticsRun.stdout.includes('startup-server'), true);
+assert.equal(preflightDiagnosticsRun.stdout.includes('runtime-server/fs_stat mcp_runtime_fault'), true);
+assert.equal(preflightDiagnosticsRun.stdout.includes('narada-agent-cli --identity narada.test --session preflight-runtime --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all'), true);
+assert.equal(existsSync(join(preflightDiagnosticsRoot, '.narada', 'crew', 'nars-sessions', 'preflight-diagnostics-scan')), false);
+const preflightDiagnosticsJsonRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--identity', 'narada.test',
+  '--session', 'preflight-diagnostics-json',
+  '--mcp-preflight-diagnostics-json',
+], {
+  env: { ...process.env, NARADA_SITE_ROOT: preflightDiagnosticsRoot },
+  encoding: 'utf8',
+});
+assert.equal(preflightDiagnosticsJsonRun.status, 0);
+const preflightDiagnosticsJson = JSON.parse(preflightDiagnosticsJsonRun.stdout);
+assert.equal(preflightDiagnosticsJson.schema, 'narada.agent_cli.mcp_preflight_diagnostics.v1');
+assert.equal(preflightDiagnosticsJson.site_root, preflightDiagnosticsRoot);
+assert.equal(preflightDiagnosticsJson.preflight_artifact_count, 2);
+assert.equal(preflightDiagnosticsJson.total_preflight_artifact_count, 2);
+assert.equal(preflightDiagnosticsJson.diagnostics_filter, 'all');
+assert.equal(preflightDiagnosticsJson.summary.diagnostic_count, 2);
+assert.deepEqual(preflightDiagnosticsJson.summary.diagnostic_lane_counts, { startup: 1, runtime: 1 });
+assert.deepEqual(preflightDiagnosticsJson.summary.diagnostic_code_counts, { mcp_runtime_fault: 1, mcp_stdout_pollution: 1 });
+assert.equal(preflightDiagnosticsJson.workflow_groups.review_runtime_diagnostics.sessions[0].session, 'preflight-runtime');
+assert.equal(preflightDiagnosticsJson.workflow_groups.review_startup_diagnostics.sessions[0].session, 'preflight-startup');
+assert.equal(preflightDiagnosticsJson.artifacts[0].session, 'preflight-runtime');
+assert.equal(preflightDiagnosticsJson.diagnostics[0].session, 'preflight-runtime');
+const preflightDiagnosticsRuntimeJsonRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--identity', 'narada.test',
+  '--session', 'preflight-diagnostics-runtime-json',
+  '--mcp-preflight-diagnostics-json',
+  '--mcp-preflight-diagnostics-filter', 'runtime',
+], {
+  env: { ...process.env, NARADA_SITE_ROOT: preflightDiagnosticsRoot },
+  encoding: 'utf8',
+});
+assert.equal(preflightDiagnosticsRuntimeJsonRun.status, 0);
+const preflightDiagnosticsRuntimeJson = JSON.parse(preflightDiagnosticsRuntimeJsonRun.stdout);
+assert.equal(preflightDiagnosticsRuntimeJson.diagnostics_filter, 'runtime');
+assert.equal(preflightDiagnosticsRuntimeJson.preflight_artifact_count, 1);
+assert.equal(preflightDiagnosticsRuntimeJson.summary.diagnostic_count, 1);
+assert.deepEqual(preflightDiagnosticsRuntimeJson.summary.diagnostic_lane_counts, { runtime: 1 });
+assert.equal(preflightDiagnosticsRuntimeJson.artifacts[0].session, 'preflight-runtime');
+assert.equal(preflightDiagnosticsRuntimeJson.diagnostics[0].diagnostic_code, 'mcp_runtime_fault');
+rmSync(preflightDiagnosticsRoot, { recursive: true, force: true });
 
 const runtimeServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-runtime-server-'));
 mkdirSync(join(runtimeServerSite, '.ai', 'mcp'), { recursive: true });

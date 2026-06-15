@@ -96,8 +96,11 @@ const MCP_PREFLIGHT_ACTIONS_MODE = options.mcpPreflightActions === true;
 const MCP_PREFLIGHT_ACTIONS_JSON_MODE = options.mcpPreflightActionsJson === true;
 const MCP_PREFLIGHT_RECOVERY_MODE = options.mcpPreflightRecovery === true;
 const MCP_PREFLIGHT_RECOVERY_JSON_MODE = options.mcpPreflightRecoveryJson === true;
+const MCP_PREFLIGHT_DIAGNOSTICS_MODE = options.mcpPreflightDiagnostics === true;
+const MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE = options.mcpPreflightDiagnosticsJson === true;
 const MCP_PREFLIGHT_FILTER_KEY = normalizeMcpPreflightFilterKey(options.mcpPreflightFilter);
 const MCP_PREFLIGHT_FILTER_VALUE = normalizeMcpPreflightFilterValue(options.mcpPreflightMatch);
+const MCP_PREFLIGHT_DIAGNOSTICS_FILTER = normalizeMcpPreflightDiagnosticsFilter(options.mcpPreflightDiagnosticsFilter);
 const SESSION_INVENTORY_MODE = options.sessionInventory === true;
 const SESSION_INVENTORY_JSON_MODE = options.sessionInventoryJson === true;
 const SESSION_INVENTORY_ACTIONS_MODE = options.sessionInventoryActions === true;
@@ -250,6 +253,8 @@ function buildMcpPreflightHandoffs({ session, identity = IDENTITY } = {}) {
   return {
     mcp_preflight_read: `${base} --mcp-preflight-read`,
     mcp_preflight_read_json: `${base} --mcp-preflight-read-json`,
+    mcp_preflight_diagnostics: `${base} --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all`,
+    mcp_preflight_diagnostics_json: `${base} --mcp-preflight-diagnostics-json --mcp-preflight-diagnostics-filter all`,
   };
 }
 
@@ -319,8 +324,155 @@ function createMcpPreflightPayload({
     artifact_path: artifactPath,
     generated_at: generatedAt,
     ...mcpStatus,
+    mcp_startup_failures: Array.isArray(mcpStatus.mcp_startup_failures) ? mcpStatus.mcp_startup_failures : [],
+    mcp_runtime_faults: Array.isArray(mcpStatus.mcp_runtime_faults) ? mcpStatus.mcp_runtime_faults : [],
     ...workflow,
   };
+}
+
+function normalizeMcpPreflightDiagnosticsFilter(value) {
+  const normalized = String(value ?? 'all').trim().toLowerCase();
+  if (['all', 'startup', 'runtime'].includes(normalized)) return normalized;
+  return 'all';
+}
+
+function formatMcpPreflightDiagnosticDisplay(code) {
+  const normalized = String(code ?? 'unknown').trim();
+  return normalized.length > 0 ? normalized.replace(/_/g, ' ') : 'unknown';
+}
+
+function createMcpPreflightDiagnosticEntry({ artifact = {}, diagnostic = {}, diagnosticLane = 'startup' } = {}) {
+  const diagnosticCode = String(diagnostic?.code ?? 'unknown').trim() || 'unknown';
+  const serverName = String(diagnostic?.server_name ?? 'unknown').trim() || 'unknown';
+  const toolName = String(diagnostic?.tool_name ?? '').trim() || null;
+  const stdoutPollutionCount = Array.isArray(diagnostic?.stdout_pollution) ? diagnostic.stdout_pollution.length : 0;
+  const stderrCount = Array.isArray(diagnostic?.stderr) ? diagnostic.stderr.length : 0;
+  const detailSummaryParts = [];
+  if (toolName) detailSummaryParts.push(`tool=${toolName}`);
+  if (stdoutPollutionCount > 0) detailSummaryParts.push(`stdout=${stdoutPollutionCount}`);
+  if (stderrCount > 0) detailSummaryParts.push(`stderr=${stderrCount}`);
+  return {
+    session: artifact.session,
+    identity: artifact.identity,
+    generated_at: artifact.generated_at ?? null,
+    artifact_path: artifact.artifact_path ?? null,
+    mcp_operational_state: artifact.mcp_operational_state ?? 'unknown',
+    recommended_action: artifact.recommended_action ?? 'unknown',
+    recommended_action_display: artifact.recommended_action_display ?? formatMcpPreflightDiagnosticDisplay(artifact.recommended_action),
+    recommended_command: artifact.recommended_command ?? null,
+    recovery_kind: artifact.recovery_kind ?? 'unknown',
+    recovery_kind_display: artifact.recovery_kind_display ?? formatMcpPreflightDiagnosticDisplay(artifact.recovery_kind),
+    recovery_primary_command: artifact.recovery_primary_command ?? null,
+    recovery_followup_command: artifact.recovery_followup_command ?? null,
+    handoffs: artifact.handoffs ?? {},
+    diagnostic_lane: diagnosticLane,
+    diagnostic_lane_display: diagnosticLane,
+    diagnostic_code: diagnosticCode,
+    diagnostic_code_display: formatMcpPreflightDiagnosticDisplay(diagnosticCode),
+    server_name: serverName,
+    server_name_display: serverName,
+    tool_name: toolName,
+    message: diagnostic?.message ?? null,
+    phase: diagnostic?.phase ?? null,
+    stdout_pollution_count: stdoutPollutionCount,
+    stderr_count: stderrCount,
+    detail_summary: detailSummaryParts.length > 0 ? detailSummaryParts.join('; ') : 'none',
+    diagnostic,
+  };
+}
+
+function summarizeMcpPreflightDiagnostics(inventory = [], { diagnosticFilter = 'all' } = {}) {
+  const normalizedDiagnosticFilter = normalizeMcpPreflightDiagnosticsFilter(diagnosticFilter);
+  const matchedArtifacts = [];
+  const diagnostics = [];
+  const diagnosticLaneCounts = {};
+  const diagnosticCodeCounts = {};
+  const serverNameCounts = {};
+  const recommendedActionCounts = {};
+  const recommendedCommandCounts = {};
+  const recoveryPrimaryCounts = {};
+  const recoveryFollowupCounts = {};
+  for (const artifact of inventory) {
+    const artifactDiagnostics = [];
+    if (normalizedDiagnosticFilter === 'all' || normalizedDiagnosticFilter === 'startup') {
+      for (const diagnostic of Array.isArray(artifact?.mcp_startup_failures) ? artifact.mcp_startup_failures : []) {
+        artifactDiagnostics.push(createMcpPreflightDiagnosticEntry({ artifact, diagnostic, diagnosticLane: 'startup' }));
+      }
+    }
+    if (normalizedDiagnosticFilter === 'all' || normalizedDiagnosticFilter === 'runtime') {
+      for (const diagnostic of Array.isArray(artifact?.mcp_runtime_faults) ? artifact.mcp_runtime_faults : []) {
+        artifactDiagnostics.push(createMcpPreflightDiagnosticEntry({ artifact, diagnostic, diagnosticLane: 'runtime' }));
+      }
+    }
+    if (artifactDiagnostics.length === 0) continue;
+    const artifactCodeCounts = {};
+    for (const entry of artifactDiagnostics) {
+      diagnostics.push(entry);
+      incrementInventoryCounter(diagnosticLaneCounts, entry.diagnostic_lane);
+      incrementInventoryCounter(diagnosticCodeCounts, entry.diagnostic_code);
+      incrementInventoryCounter(serverNameCounts, entry.server_name);
+      incrementInventoryCounter(artifactCodeCounts, entry.diagnostic_code);
+    }
+    incrementInventoryCounter(recommendedActionCounts, artifact?.recommended_action ?? 'unknown');
+    incrementInventoryCounter(recommendedCommandCounts, artifact?.recommended_command ?? 'none');
+    incrementInventoryCounter(recoveryPrimaryCounts, artifact?.recovery_primary_command ?? 'none');
+    incrementInventoryCounter(recoveryFollowupCounts, artifact?.recovery_followup_command ?? 'none');
+    matchedArtifacts.push({
+      ...artifact,
+      matched_diagnostic_count: artifactDiagnostics.length,
+      matched_diagnostic_code_counts: artifactCodeCounts,
+      matched_diagnostic_code_summary: formatInventoryCounts(artifactCodeCounts),
+      diagnostics: artifactDiagnostics,
+    });
+  }
+  return {
+    diagnostic_count: diagnostics.length,
+    artifacts_with_diagnostics: matchedArtifacts.length,
+    diagnostic_lane_counts: diagnosticLaneCounts,
+    diagnostic_lane_summary: formatInventoryCounts(diagnosticLaneCounts),
+    diagnostic_code_counts: diagnosticCodeCounts,
+    diagnostic_code_summary: formatInventoryCounts(diagnosticCodeCounts),
+    server_name_counts: serverNameCounts,
+    server_name_summary: formatInventoryCounts(serverNameCounts),
+    recommended_action_counts: recommendedActionCounts,
+    recommended_action_summary: formatInventoryCounts(recommendedActionCounts),
+    recommended_command_counts: recommendedCommandCounts,
+    recommended_command_summary: formatInventoryCounts(recommendedCommandCounts),
+    recovery_primary_counts: recoveryPrimaryCounts,
+    recovery_primary_summary: formatInventoryCounts(recoveryPrimaryCounts),
+    recovery_followup_counts: recoveryFollowupCounts,
+    recovery_followup_summary: formatInventoryCounts(recoveryFollowupCounts),
+    groups: {
+      diagnostic_lane: summarizeSessionInventoryGroupBy(diagnostics, 'diagnostic_lane', 'diagnostic_lane_display'),
+      diagnostic_code: summarizeSessionInventoryGroupBy(diagnostics, 'diagnostic_code', 'diagnostic_code_display'),
+      server_name: summarizeSessionInventoryGroupBy(diagnostics, 'server_name', 'server_name_display'),
+    },
+    workflow_groups: summarizeActionWorkflowGroups(matchedArtifacts),
+    diagnostics,
+    artifacts: matchedArtifacts,
+  };
+}
+
+function renderMcpPreflightDiagnostics(artifacts = []) {
+  return artifacts.map((item) => {
+    const block = formatKeyValueRows({
+      Session: item.session,
+      Identity: item.identity,
+      Generated: item.generated_at ?? 'unknown',
+      'MCP state': item.mcp_operational_state,
+      'Matched diagnostics': item.matched_diagnostic_count ?? 0,
+      'Diagnostic codes': item.matched_diagnostic_code_summary ?? '0',
+      'Recommended action': item.recommended_action_display ?? 'unknown',
+      'Recommended command': item.recommended_command ?? 'none',
+      'Recovery primary': item.recovery_primary_command ?? 'none',
+      'Recovery followup': item.recovery_followup_command ?? 'none',
+      'Preflight review': item?.handoffs?.mcp_preflight_read ?? 'none',
+      'Preflight diagnostics': item?.handoffs?.mcp_preflight_diagnostics ?? 'none',
+      Artifact: item.artifact_path ?? 'none',
+    });
+    const diagnosticLines = item.diagnostics.map((entry) => `- ${entry.diagnostic_lane} ${entry.server_name}${entry.tool_name ? `/${entry.tool_name}` : ''} ${entry.diagnostic_code}${entry.message ? `: ${entry.message}` : ''}${entry.detail_summary !== 'none' ? ` [${entry.detail_summary}]` : ''}`);
+    return `${block}\nDiagnostics:\n${diagnosticLines.join('\n')}`;
+  });
 }
 
 function summarizePersistedSessionRecommendedAction({
@@ -918,11 +1070,11 @@ const NARADA_DIR = basename(SITE_ROOT) === '.narada' ? SITE_ROOT : join(SITE_ROO
 const SESSION_DIR = SERVER_MODE
   ? join(NARADA_DIR, 'crew', 'nars-sessions', SESSION)
   : (existsSync(PC_RUNTIME) ? join(PC_RUNTIME, 'agent-sessions') : resolve(SITE_ROOT, '.ai', 'runtime', 'agent-sessions'));
-if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
 const SESSION_PATH = SERVER_MODE ? join(SESSION_DIR, 'session.jsonl') : join(SESSION_DIR, `${SESSION}.jsonl`);
 const EVENTS_PATH = join(SESSION_DIR, 'events.jsonl');
 const CARRIER_SESSION_DIR = join(NARADA_DIR, 'crew', 'nars-sessions', SESSION);
-if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
 const HEARTBEAT_PATH = join(CARRIER_SESSION_DIR, 'heartbeat.json');
 const MCP_PREFLIGHT_ARTIFACT_DIR = join(NARADA_DIR, 'runtime', 'agent-cli', 'mcp-preflight');
 const HEARTBEAT_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_HEARTBEAT_ENABLE, true);
@@ -976,6 +1128,14 @@ async function main() {
   }
   if (MCP_PREFLIGHT_RECOVERY_JSON_MODE) {
     process.exitCode = await runMcpPreflightRecovery({ jsonOutput: true, filterKey: MCP_PREFLIGHT_FILTER_KEY, filterValue: MCP_PREFLIGHT_FILTER_VALUE });
+    return;
+  }
+  if (MCP_PREFLIGHT_DIAGNOSTICS_MODE) {
+    process.exitCode = await runMcpPreflightDiagnostics({ filterKey: MCP_PREFLIGHT_FILTER_KEY, filterValue: MCP_PREFLIGHT_FILTER_VALUE, diagnosticsFilter: MCP_PREFLIGHT_DIAGNOSTICS_FILTER });
+    return;
+  }
+  if (MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE) {
+    process.exitCode = await runMcpPreflightDiagnostics({ jsonOutput: true, filterKey: MCP_PREFLIGHT_FILTER_KEY, filterValue: MCP_PREFLIGHT_FILTER_VALUE, diagnosticsFilter: MCP_PREFLIGHT_DIAGNOSTICS_FILTER });
     return;
   }
   if (SESSION_INVENTORY_MODE) {
@@ -1598,6 +1758,69 @@ async function runMcpPreflightRecovery({ siteRoot = SITE_ROOT, artifactDir = MCP
   return 0;
 }
 
+async function runMcpPreflightDiagnostics({ siteRoot = SITE_ROOT, artifactDir = MCP_PREFLIGHT_ARTIFACT_DIR, jsonOutput = false, filterKey = null, filterValue = null, diagnosticsFilter = 'all' } = {}) {
+  const inventory = readMcpPreflightInventory({ artifactDir, siteRoot });
+  const normalizedFilterKey = normalizeMcpPreflightFilterKey(filterKey);
+  const normalizedFilterValue = normalizeMcpPreflightFilterValue(filterValue);
+  const filteredInventory = filterMcpPreflightInventory(inventory, { filterKey: normalizedFilterKey, filterValue: normalizedFilterValue });
+  const diagnosticsRollup = summarizeMcpPreflightDiagnostics(filteredInventory, { diagnosticFilter: diagnosticsFilter });
+  const filterLabel = normalizedFilterKey && normalizedFilterValue ? `${normalizedFilterKey}:${normalizedFilterValue}` : 'all';
+  const normalizedDiagnosticsFilter = normalizeMcpPreflightDiagnosticsFilter(diagnosticsFilter);
+  if (jsonOutput) {
+    console.log(`${JSON.stringify({
+      schema: 'narada.agent_cli.mcp_preflight_diagnostics.v1',
+      site_root: siteRoot,
+      preflight_artifact_count: diagnosticsRollup.artifacts_with_diagnostics,
+      total_preflight_artifact_count: inventory.length,
+      preflight_filter: filterLabel,
+      diagnostics_filter: normalizedDiagnosticsFilter,
+      summary: {
+        diagnostic_count: diagnosticsRollup.diagnostic_count,
+        diagnostic_lane_counts: diagnosticsRollup.diagnostic_lane_counts,
+        diagnostic_lane_summary: diagnosticsRollup.diagnostic_lane_summary,
+        diagnostic_code_counts: diagnosticsRollup.diagnostic_code_counts,
+        diagnostic_code_summary: diagnosticsRollup.diagnostic_code_summary,
+        server_name_counts: diagnosticsRollup.server_name_counts,
+        server_name_summary: diagnosticsRollup.server_name_summary,
+        recommended_action_counts: diagnosticsRollup.recommended_action_counts,
+        recommended_action_summary: diagnosticsRollup.recommended_action_summary,
+        recommended_command_counts: diagnosticsRollup.recommended_command_counts,
+        recommended_command_summary: diagnosticsRollup.recommended_command_summary,
+        recovery_primary_counts: diagnosticsRollup.recovery_primary_counts,
+        recovery_primary_summary: diagnosticsRollup.recovery_primary_summary,
+        recovery_followup_counts: diagnosticsRollup.recovery_followup_counts,
+        recovery_followup_summary: diagnosticsRollup.recovery_followup_summary,
+      },
+      groups: diagnosticsRollup.groups,
+      workflow_groups: diagnosticsRollup.workflow_groups,
+      artifacts: diagnosticsRollup.artifacts,
+      diagnostics: diagnosticsRollup.diagnostics,
+    }, null, 2)}\n`);
+    return 0;
+  }
+  const summary = {
+    SiteRoot: siteRoot,
+    ...(filterLabel !== 'all' ? { 'Preflight filter': filterLabel, 'Matched artifacts': diagnosticsRollup.artifacts_with_diagnostics, 'Total artifacts': inventory.length } : { 'Artifacts with diagnostics': diagnosticsRollup.artifacts_with_diagnostics }),
+    'Diagnostics filter': normalizedDiagnosticsFilter,
+    'Diagnostic count': diagnosticsRollup.diagnostic_count,
+    'Diagnostic lanes': diagnosticsRollup.diagnostic_lane_summary,
+    'Diagnostic codes': diagnosticsRollup.diagnostic_code_summary,
+    Servers: diagnosticsRollup.server_name_summary,
+    'Recommended actions': diagnosticsRollup.recommended_action_summary,
+    'Recommended commands': diagnosticsRollup.recommended_command_summary,
+    'Recovery primary commands': diagnosticsRollup.recovery_primary_summary,
+    'Recovery followups': diagnosticsRollup.recovery_followup_summary,
+  };
+  if (diagnosticsRollup.diagnostic_count === 0) {
+    summary.Status = 'no persisted mcp preflight diagnostics';
+    console.log(formatKeyValueRows(summary));
+    return 0;
+  }
+  const blocks = [formatKeyValueRows(summary), ...renderMcpPreflightDiagnostics(diagnosticsRollup.artifacts), renderSessionInventoryWorkflowGroups(diagnosticsRollup.workflow_groups, { heading: 'Preflight diagnostic groups' }), renderSessionInventoryGroups(diagnosticsRollup.groups)];
+  console.log(blocks.join('\n\n'));
+  return 0;
+}
+
 async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DIR, jsonOutput = false, filterKey = null, filterValue = null } = {}) {
   const inventory = readSessionInventory({ siteRoot, naradaDir });
   const normalizedFilterKey = normalizeSessionInventoryFilterKey(filterKey);
@@ -2171,8 +2394,10 @@ function summarizePersistedMcpPreflightArtifact({ artifact, artifactPath, siteRo
     mcpStatus: {
       mcp_operational_state: artifact.mcp_operational_state ?? 'unknown',
       mcp_startup_failure_count: artifact.mcp_startup_failure_count ?? 0,
+      mcp_startup_failures: Array.isArray(artifact.mcp_startup_failures) ? artifact.mcp_startup_failures : [],
       mcp_startup_failure_summary: artifact.mcp_startup_failure_summary ?? '0',
       mcp_runtime_fault_count: artifact.mcp_runtime_fault_count ?? 0,
+      mcp_runtime_faults: Array.isArray(artifact.mcp_runtime_faults) ? artifact.mcp_runtime_faults : [],
       mcp_runtime_fault_summary: artifact.mcp_runtime_fault_summary ?? '0',
     },
     mcpServerCount: artifact.mcp_server_count ?? 0,
@@ -7270,11 +7495,18 @@ function parseArgs(argv) {
       opts.mcpPreflightRecovery = true;
     } else if (argv[i] === '--mcp-preflight-recovery-json') {
       opts.mcpPreflightRecoveryJson = true;
+    } else if (argv[i] === '--mcp-preflight-diagnostics') {
+      opts.mcpPreflightDiagnostics = true;
+    } else if (argv[i] === '--mcp-preflight-diagnostics-json') {
+      opts.mcpPreflightDiagnosticsJson = true;
     } else if (argv[i] === '--mcp-preflight-filter' && i + 1 < argv.length) {
       opts.mcpPreflightFilter = argv[i + 1];
       i++;
     } else if (argv[i] === '--mcp-preflight-match' && i + 1 < argv.length) {
       opts.mcpPreflightMatch = argv[i + 1];
+      i++;
+    } else if (argv[i] === '--mcp-preflight-diagnostics-filter' && i + 1 < argv.length) {
+      opts.mcpPreflightDiagnosticsFilter = argv[i + 1];
       i++;
     } else if (argv[i] === '--session-inventory') {
       opts.sessionInventory = true;
@@ -7400,6 +7632,7 @@ export {
   consumeOperatorDirectiveInputText,
   createInteractiveHeaderRows,
   createMcpPreflightArtifactSnapshot,
+  createMcpPreflightDiagnosticEntry,
   createMcpPreflightPayload,
   createMcpPreflightWorkflowSnapshot,
   createSessionActivitySnapshot,
@@ -7469,6 +7702,7 @@ export {
   renderMarkdownForTerminal,
   wrapTerminalLine,
   runConversationTurn,
+  runMcpPreflightDiagnostics,
   runMcpPreflight,
   runSessionEventsRead,
   runSessionRecovery,
@@ -7495,7 +7729,7 @@ export {
 
 if (isEntrypoint) {
   if (options.help) {
-    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--session-inventory] [--session-inventory-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics>] [--session-inventory-events-count <n>] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics>] [--session-events-count <n>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
+    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-diagnostics] [--mcp-preflight-diagnostics-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--mcp-preflight-diagnostics-filter <all|startup|runtime>] [--session-inventory] [--session-inventory-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics>] [--session-inventory-events-count <n>] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics>] [--session-events-count <n>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
     console.log('Programmatic input: --message and --message-file are explicit control inputs; do not use raw stdin piping as the control API.');
     console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, ANTHROPIC_API_KEY, NARADA_AI_API_KEY, NARADA_AI_BASE_URL, NARADA_AI_MODEL, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_ENABLE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_DELAY_MS, NARADA_SITE_ROOT`);
     process.exit(0);
