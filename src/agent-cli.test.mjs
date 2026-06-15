@@ -898,7 +898,12 @@ const sessionInventoryActionsRun = spawnSync(process.execPath, [
 assert.equal(sessionInventoryActionsRun.status, 0);
 assert.equal(sessionInventoryActionsRun.stdout.includes('Action queue'), true);
 assert.equal(sessionInventoryActionsRun.stdout.includes('Recommended actions'), true);
+assert.equal(sessionInventoryActionsRun.stdout.includes('Recommended commands'), true);
+assert.equal(sessionInventoryActionsRun.stdout.includes('Recovery primary commands'), true);
+assert.equal(sessionInventoryActionsRun.stdout.includes('Recovery followups'), true);
 assert.equal(sessionInventoryActionsRun.stdout.includes('review runtime diagnostics'), true);
+assert.equal(sessionInventoryActionsRun.stdout.includes('Action groups: review_runtime_diagnostics (1)'), true);
+assert.equal(sessionInventoryActionsRun.stdout.includes('Recommended commands: 1 (narada-agent-cli --identity narada.test --session faulted-session --session-recovery)'), true);
 assert.equal(sessionInventoryActionsRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-recovery'), true);
 assert.equal(sessionInventoryActionsRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20'), true);
 assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-actions-test')), false);
@@ -926,7 +931,37 @@ assert.deepEqual(sessionInventoryActionsJson.summary, {
     review_session_summary: 1,
   },
   recommended_action_summary: '1 (review_runtime_diagnostics), 1 (review_session_summary)',
+  recommended_command_counts: {
+    'narada-agent-cli --identity narada.test --session faulted-session --session-recovery': 1,
+    'narada-agent-cli --identity narada.test --session healthy-session --session-read': 1,
+  },
+  recommended_command_summary: '1 (narada-agent-cli --identity narada.test --session faulted-session --session-recovery), 1 (narada-agent-cli --identity narada.test --session healthy-session --session-read)',
+  recovery_primary_counts: {
+    'narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20': 1,
+    'narada-agent-cli --identity narada.test --session healthy-session --session-read': 1,
+  },
+  recovery_primary_summary: '1 (narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20), 1 (narada-agent-cli --identity narada.test --session healthy-session --session-read)',
+  recovery_followup_counts: {
+    'narada-agent-cli --identity narada.test --session faulted-session --session-read': 1,
+    none: 1,
+  },
+  recovery_followup_summary: '1 (narada-agent-cli --identity narada.test --session faulted-session --session-read), 1 (none)',
 });
+assert.equal(sessionInventoryActionsJson.workflow_groups.review_session_summary.display, 'review session summary');
+assert.deepEqual(sessionInventoryActionsJson.workflow_groups.review_session_summary.recommended_command_counts, {
+  'narada-agent-cli --identity narada.test --session healthy-session --session-read': 1,
+});
+assert.equal(sessionInventoryActionsJson.workflow_groups.review_runtime_diagnostics.display, 'review runtime diagnostics');
+assert.deepEqual(sessionInventoryActionsJson.workflow_groups.review_runtime_diagnostics.recommended_command_counts, {
+  'narada-agent-cli --identity narada.test --session faulted-session --session-recovery': 1,
+});
+assert.deepEqual(sessionInventoryActionsJson.workflow_groups.review_runtime_diagnostics.recovery_primary_counts, {
+  'narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20': 1,
+});
+assert.deepEqual(sessionInventoryActionsJson.workflow_groups.review_runtime_diagnostics.recovery_followup_counts, {
+  'narada-agent-cli --identity narada.test --session faulted-session --session-read': 1,
+});
+assert.equal(sessionInventoryActionsJson.workflow_groups.review_runtime_diagnostics.sessions[0].session, 'faulted-session');
 assert.equal(sessionInventoryActionsJson.actions[0].session, 'healthy-session');
 assert.equal(sessionInventoryActionsJson.actions[0].recommended_action, 'review_session_summary');
 assert.equal(sessionInventoryActionsJson.actions[1].session, 'faulted-session');
