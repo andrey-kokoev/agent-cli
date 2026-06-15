@@ -402,6 +402,9 @@ if ($SessionEvents) {
 if ($SessionEventsJson) {
     Set-Location $WorkDir
     & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-events-json' '--session-events-filter' $SessionEventsFilter '--session-events-count' $SessionEventsCount
+    exit $LASTEXITCODE
+}
+
 if ($McpPreflightJson) {
     Set-Location $WorkDir
     & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-json'
@@ -568,4 +571,42 @@ Set-Location $WorkDir
 $exitCode = $LASTEXITCODE
 if ($exitCode -ne 0) {
     Write-Warning "agent-cli exited with code $exitCode"
+
+    $sessionRecoveryArgs = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName, '--session-recovery-json')
+    $sessionRecoveryRaw = & node @sessionRecoveryArgs
+    $sessionRecoveryExitCode = $LASTEXITCODE
+    $sessionRecovery = $null
+    if ($sessionRecoveryExitCode -eq 0 -and $sessionRecoveryRaw) {
+        try {
+            $sessionRecovery = $sessionRecoveryRaw | ConvertFrom-Json
+        } catch {
+            Write-Warning "Session recovery returned non-JSON output; skipping post-session recovery guidance."
+        }
+    }
+
+    if ($sessionRecovery -and $sessionRecovery.found -and $sessionRecovery.recovery) {
+        $recommendedAction = [string]$sessionRecovery.recovery.recommended_action
+        if ($recommendedAction -and $recommendedAction -ne 'review_session_summary') {
+            Write-Host ""
+            Write-Host "Post-session recovery..." -ForegroundColor Cyan
+            if ($sessionRecovery.recovery.recovery_kind_display) {
+                Write-Host ("  Recovery kind:      {0}" -f $sessionRecovery.recovery.recovery_kind_display) -ForegroundColor DarkGray
+            }
+            if ($sessionRecovery.recovery.recommended_action_display) {
+                Write-Host ("  Recommended action: {0}" -f $sessionRecovery.recovery.recommended_action_display) -ForegroundColor DarkGray
+            }
+            if ($sessionRecovery.recovery.recommended_command) {
+                Write-Host ("  Recommended command: {0}" -f $sessionRecovery.recovery.recommended_command) -ForegroundColor DarkYellow
+            }
+            if ($sessionRecovery.recovery.recovery_primary_command) {
+                Write-Host ("  Recovery primary:   {0}" -f $sessionRecovery.recovery.recovery_primary_command) -ForegroundColor DarkYellow
+            }
+            if ($sessionRecovery.recovery.recovery_followup_command) {
+                Write-Host ("  Recovery followup:  {0}" -f $sessionRecovery.recovery.recovery_followup_command) -ForegroundColor DarkGray
+            }
+            if ($sessionRecovery.record -and $sessionRecovery.record.handoffs -and $sessionRecovery.record.handoffs.session_recovery) {
+                Write-Host ("  Session recovery:   {0}" -f $sessionRecovery.record.handoffs.session_recovery) -ForegroundColor DarkGray
+            }
+        }
+    }
 }

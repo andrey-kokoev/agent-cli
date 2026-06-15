@@ -2345,6 +2345,8 @@ assert.equal(windowsWrapperTemplate.includes("'--session-read-json'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-events'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-events-json'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-events-filter' $SessionEventsFilter '--session-events-count' $SessionEventsCount"), true);
+assert.equal(windowsWrapperTemplate.includes("& node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-events-json' '--session-events-filter' $SessionEventsFilter '--session-events-count' $SessionEventsCount"), true);
+assert.equal(windowsWrapperTemplate.includes("if ($McpPreflightJson) {"), true);
 assert.equal(windowsWrapperTemplate.includes("$preflightArgs = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-json')"), true);
 assert.equal(windowsWrapperTemplate.includes("& node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-read'"), true);
 assert.equal(windowsWrapperTemplate.includes("& node $AgentCliPath @preflightInventoryArgs"), true);
@@ -2362,6 +2364,11 @@ assert.equal(windowsWrapperTemplate.includes('MCP preflight reported degraded st
 assert.equal(windowsWrapperTemplate.includes('MCP state:'), true);
 assert.equal(windowsWrapperTemplate.includes('Recommended action:'), true);
 assert.equal(windowsWrapperTemplate.includes('Preflight review:'), true);
+assert.equal(windowsWrapperTemplate.includes("$sessionRecoveryArgs = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName, '--session-recovery-json')"), true);
+assert.equal(windowsWrapperTemplate.includes('Session recovery returned non-JSON output; skipping post-session recovery guidance.'), true);
+assert.equal(windowsWrapperTemplate.includes('Post-session recovery...'), true);
+assert.equal(windowsWrapperTemplate.includes('Recovery primary:'), true);
+assert.equal(windowsWrapperTemplate.includes('Session recovery:'), true);
 for (const [providerId, adapterId] of Object.entries(expectedAdapters)) {
   const support = resolveProviderSupportState(providerId, metadata[providerId], REQUEST_ADAPTERS);
   assert.equal(support.state, PROVIDER_SUPPORT_STATES.VERIFIED_SUPPORTED);
