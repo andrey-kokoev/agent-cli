@@ -66,6 +66,31 @@ function formatRuntimeMcpFaultEvent(event) {
   };
 }
 
+function formatWrapperStatusEvent(event) {
+  if (!event || (event.event !== 'session_started' && event.event !== 'session_status')) return null;
+  return {
+    schema: 'narada.agent_runtime_server.wrapper_event.v1',
+    event: 'session_status_snapshot',
+    timestamp: event.timestamp ?? new Date().toISOString(),
+    source_event: event.event,
+    request_id: event.request_id ?? null,
+    agent_id: event.agent_id ?? null,
+    session_id: event.session_id ?? null,
+    active_turn_state: event.active_turn_state ?? null,
+    active_turn_id: event.active_turn_id ?? null,
+    mcp_operational_state: event.mcp_operational_state ?? null,
+    mcp_startup_failure_count: event.mcp_startup_failure_count ?? 0,
+    mcp_startup_failure_summary: event.mcp_startup_failure_summary ?? '0',
+    mcp_runtime_fault_count: event.mcp_runtime_fault_count ?? 0,
+    mcp_runtime_fault_summary: event.mcp_runtime_fault_summary ?? '0',
+    mcp_preflight_operational_state: event.mcp_preflight_operational_state ?? null,
+    session_event_count: event.session_event_count ?? 0,
+    last_event_kind: event.last_event_kind ?? null,
+    last_event_at: event.last_event_at ?? null,
+    last_terminal_state: event.last_terminal_state ?? null,
+  };
+}
+
 async function main() {
   const requestedArgs = process.argv.slice(2);
   const wrapperEventsJsonl = requestedArgs.includes('--wrapper-events-jsonl');
@@ -91,11 +116,15 @@ async function main() {
       if (newlineIndex === -1) break;
       const line = stdoutBuffer.slice(0, newlineIndex).trim();
       stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
-      if (!line || startupSummaryPrinted) continue;
+      if (!line) continue;
       try {
         const event = JSON.parse(line);
+        if (wrapperEventsJsonl) {
+          const statusEvent = formatWrapperStatusEvent(event);
+          if (statusEvent) console.error(JSON.stringify(statusEvent));
+        }
         const summary = formatStartupMcpSummary(event);
-        if (summary) {
+        if (summary && !startupSummaryPrinted) {
           console.error(summary);
           if (wrapperEventsJsonl) {
             const wrapperEvent = formatStartupMcpEvent(event);
@@ -138,4 +167,4 @@ if (isEntrypoint) {
   });
 }
 
-export { formatStartupMcpEvent, formatStartupMcpSummary, formatRuntimeMcpFaultEvent, formatRuntimeMcpFaultSummary };
+export { formatStartupMcpEvent, formatStartupMcpSummary, formatRuntimeMcpFaultEvent, formatRuntimeMcpFaultSummary, formatWrapperStatusEvent };
