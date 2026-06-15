@@ -599,6 +599,9 @@ writeFileSync(join(inventorySessionsDir, 'healthy-session', 'heartbeat.json'), `
   status: 'alive',
   carrier_session_id: 'healthy-session',
   agent_id: 'narada.test',
+  runtime: 'agent-cli',
+  mode: 'server',
+  started_at: '2026-06-14T11:50:00.000Z',
   heartbeat_at: '2026-06-14T12:00:00.000Z',
 }, null, 2)}\n`, 'utf8');
 writeFileSync(join(inventorySessionsDir, 'faulted-session', 'heartbeat.json'), `${JSON.stringify({
@@ -606,6 +609,9 @@ writeFileSync(join(inventorySessionsDir, 'faulted-session', 'heartbeat.json'), `
   status: 'alive',
   carrier_session_id: 'faulted-session',
   agent_id: 'narada.test',
+  runtime: 'agent-cli',
+  mode: 'server',
+  started_at: '2026-06-14T11:40:00.000Z',
   heartbeat_at: '2026-06-14T11:59:00.000Z',
 }, null, 2)}\n`, 'utf8');
 writeFileSync(join(inventorySessionsDir, 'healthy-session', 'session.jsonl'), `${JSON.stringify(sessionEventEntry('mcp_preflight_artifact_linked', {
@@ -614,15 +620,22 @@ writeFileSync(join(inventorySessionsDir, 'healthy-session', 'session.jsonl'), `$
   mcp_operational_state: 'healthy',
   mcp_startup_failure_summary: '0',
   mcp_runtime_fault_summary: '0',
-}))}\n`, 'utf8');
+}))}\n${JSON.stringify({ event_kind: 'input_completed', timestamp: '2026-06-14T12:00:01.000Z', payload: { terminal_state: 'completed' } })}\n`, 'utf8');
 writeFileSync(join(inventorySessionsDir, 'faulted-session', 'session.jsonl'), [
   JSON.stringify({
     event_kind: 'carrier_diagnostic_recorded',
+    timestamp: '2026-06-14T11:58:30.000Z',
     payload: { server_name: 'degraded', diagnostic_code: 'mcp_stdout_pollution' },
   }),
   JSON.stringify({
     event_kind: 'carrier_diagnostic_recorded',
+    timestamp: '2026-06-14T11:59:30.000Z',
     payload: { server_name: 'runtime', diagnostic_code: 'mcp_runtime_fault', tool_name: 'fs_read_file' },
+  }),
+  JSON.stringify({
+    event_kind: 'input_completed',
+    timestamp: '2026-06-14T11:59:45.000Z',
+    payload: { terminal_state: 'failed' },
   }),
 ].join('\n') + '\n', 'utf8');
 writeFileSync(join(inventoryNaradaDir, 'runtime', 'agent-cli', 'mcp-preflight', 'healthy-session.json'), `${JSON.stringify({
@@ -638,10 +651,24 @@ writeFileSync(join(inventoryNaradaDir, 'runtime', 'agent-cli', 'mcp-preflight', 
 const inventoryEntries = readSessionInventory({ siteRoot: inventoryRoot, naradaDir: inventoryNaradaDir });
 assert.equal(inventoryEntries.length, 2);
 assert.equal(inventoryEntries[0].session, 'healthy-session');
+assert.equal(inventoryEntries[0].agent_id, 'narada.test');
+assert.equal(inventoryEntries[0].runtime, 'agent-cli');
+assert.equal(inventoryEntries[0].mode, 'server');
+assert.equal(inventoryEntries[0].started_at, '2026-06-14T11:50:00.000Z');
 assert.equal(inventoryEntries[0].mcp_operational_state, 'healthy');
+assert.equal(inventoryEntries[0].session_event_count, 2);
+assert.equal(inventoryEntries[0].last_event_kind, 'input_completed');
+assert.equal(inventoryEntries[0].last_event_at, '2026-06-14T12:00:01.000Z');
+assert.equal(inventoryEntries[0].last_terminal_state, 'completed');
 assert.equal(inventoryEntries[0].mcp_preflight_artifact_path, join(inventoryNaradaDir, 'runtime', 'agent-cli', 'mcp-preflight', 'healthy-session.json'));
 assert.equal(inventoryEntries[1].session, 'faulted-session');
+assert.equal(inventoryEntries[1].agent_id, 'narada.test');
+assert.equal(inventoryEntries[1].started_at, '2026-06-14T11:40:00.000Z');
 assert.equal(inventoryEntries[1].mcp_operational_state, 'runtime_faulted');
+assert.equal(inventoryEntries[1].session_event_count, 3);
+assert.equal(inventoryEntries[1].last_event_kind, 'input_completed');
+assert.equal(inventoryEntries[1].last_event_at, '2026-06-14T11:59:45.000Z');
+assert.equal(inventoryEntries[1].last_terminal_state, 'failed');
 assert.equal(inventoryEntries[1].mcp_startup_failure_summary, '1 (degraded:mcp_stdout_pollution)');
 assert.equal(inventoryEntries[1].mcp_runtime_fault_summary, '1 (runtime:fs_read_file)');
 const sessionInventoryRun = spawnSync(process.execPath, [
@@ -684,8 +711,12 @@ assert.equal(sessionInventoryJson.site_root, inventoryRoot);
 assert.equal(sessionInventoryJson.carrier_session_count, 2);
 assert.equal(Array.isArray(sessionInventoryJson.sessions), true);
 assert.equal(sessionInventoryJson.sessions[0].session, 'healthy-session');
+assert.equal(sessionInventoryJson.sessions[0].agent_id, 'narada.test');
+assert.equal(sessionInventoryJson.sessions[0].last_terminal_state, 'completed');
 assert.equal(sessionInventoryJson.sessions[0].mcp_operational_state, 'healthy');
 assert.equal(sessionInventoryJson.sessions[1].session, 'faulted-session');
+assert.equal(sessionInventoryJson.sessions[1].started_at, '2026-06-14T11:40:00.000Z');
+assert.equal(sessionInventoryJson.sessions[1].last_terminal_state, 'failed');
 assert.equal(sessionInventoryJson.sessions[1].mcp_operational_state, 'runtime_faulted');
 assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-scan-json-test')), false);
 rmSync(inventoryRoot, { recursive: true, force: true });

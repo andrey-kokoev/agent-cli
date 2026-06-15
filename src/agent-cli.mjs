@@ -670,8 +670,16 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
   const startupFailures = [];
   const runtimeDiagnostics = [];
   let linkedPreflight = null;
+  let lastEventKind = null;
+  let lastEventAt = null;
+  let lastTerminalState = null;
   for (const entry of entries) {
     if (entry?.event === 'mcp_preflight_artifact_linked') linkedPreflight = entry;
+    lastEventKind = entry?.event_kind ?? entry?.event ?? lastEventKind;
+    lastEventAt = entry?.timestamp ?? entry?.occurred_at ?? entry?.payload?.occurred_at ?? entry?.payload?.created_at ?? lastEventAt;
+    if (entry?.event_kind === 'input_completed' || entry?.event === 'input_event_completed') {
+      lastTerminalState = entry?.payload?.terminal_state ?? entry?.terminal_state ?? lastTerminalState;
+    }
     if (entry?.event_kind !== 'carrier_diagnostic_recorded') continue;
     const payload = entry.payload ?? {};
     if (payload.diagnostic_code === 'mcp_runtime_fault') {
@@ -697,8 +705,17 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
   return {
     session,
     session_path: join(sessionDir, 'session.jsonl'),
+    agent_id: heartbeat?.agent_id ?? null,
+    runtime: heartbeat?.runtime ?? null,
+    mode: heartbeat?.mode ?? null,
+    started_at: heartbeat?.started_at ?? null,
     heartbeat_at: heartbeat?.heartbeat_at ?? null,
+    heartbeat_status: heartbeat?.status ?? 'missing',
     heartbeat_display: heartbeat?.heartbeat_at ? `${heartbeat.status ?? 'unknown'} @ ${heartbeat.heartbeat_at}` : (heartbeat?.status ?? 'missing'),
+    session_event_count: entries.length,
+    last_event_kind: lastEventKind,
+    last_event_at: lastEventAt,
+    last_terminal_state: lastTerminalState,
     mcp_operational_state: mcpOperationalState,
     mcp_startup_failure_summary: startupFailures.length > 0
       ? formatMcpStartupFailureSummary(startupFailures)
