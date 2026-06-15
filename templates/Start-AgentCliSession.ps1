@@ -20,6 +20,11 @@ param(
 
     [switch]$SessionInventoryJson,
 
+    [ValidateSet('operational_posture', 'request_posture', 'mcp_state', 'heartbeat_status')]
+    [string]$SessionInventoryFilter,
+
+    [string]$SessionInventoryMatch,
+
     [switch]$SessionRead,
 
     [switch]$SessionReadJson,
@@ -233,13 +238,21 @@ No AI API key configured for provider '$IntelligenceProvider'. Set one of:
 if ($SessionInventory) {
     Write-Host "Session inventory..." -ForegroundColor Cyan
     Set-Location $WorkDir
-    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-inventory'
+    $inventoryArgs = @('--identity', $IdentityName, '--session', $SessionName, '--session-inventory')
+    if ($SessionInventoryFilter -and $SessionInventoryMatch) {
+        $inventoryArgs += @('--session-inventory-filter', $SessionInventoryFilter, '--session-inventory-match', $SessionInventoryMatch)
+    }
+    & node $AgentCliPath @inventoryArgs
     exit $LASTEXITCODE
 }
 
 if ($SessionInventoryJson) {
     Set-Location $WorkDir
-    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-inventory-json'
+    $inventoryJsonArgs = @('--identity', $IdentityName, '--session', $SessionName, '--session-inventory-json')
+    if ($SessionInventoryFilter -and $SessionInventoryMatch) {
+        $inventoryJsonArgs += @('--session-inventory-filter', $SessionInventoryFilter, '--session-inventory-match', $SessionInventoryMatch)
+    }
+    & node $AgentCliPath @inventoryJsonArgs
     exit $LASTEXITCODE
 }
 

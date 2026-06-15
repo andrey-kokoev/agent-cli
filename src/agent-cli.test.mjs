@@ -49,6 +49,7 @@ import {
   formatHeaderRows,
   formatKeyValueRows,
   filterPersistedSessionEvents,
+  filterSessionInventory,
   formatProgressStatus,
   formatTimestamp,
   formatToolResultContent,
@@ -683,6 +684,9 @@ writeFileSync(join(inventoryNaradaDir, 'runtime', 'agent-cli', 'mcp-preflight', 
 }, null, 2)}\n`, 'utf8');
 const inventoryEntries = readSessionInventory({ siteRoot: inventoryRoot, naradaDir: inventoryNaradaDir });
 assert.equal(inventoryEntries.length, 2);
+assert.equal(filterSessionInventory(inventoryEntries, { filterKey: 'operational_posture', filterValue: 'mcp_runtime_faulted' }).length, 1);
+assert.equal(filterSessionInventory(inventoryEntries, { filterKey: 'request_posture', filterValue: 'runtime_failures' }).length, 1);
+assert.equal(filterSessionInventory(inventoryEntries, { filterKey: 'mcp_state', filterValue: 'healthy' }).length, 1);
 assert.equal(inventoryEntries[0].session, 'healthy-session');
 assert.equal(inventoryEntries[0].agent_id, 'narada.test');
 assert.equal(inventoryEntries[0].runtime, 'agent-cli');
@@ -839,6 +843,76 @@ assert.equal(sessionInventoryJson.sessions[1].request_posture, 'runtime_failures
 assert.equal(sessionInventoryJson.sessions[1].request_posture_display, 'runtime_failures (4)');
 assert.equal(sessionInventoryJson.sessions[1].mcp_operational_state, 'runtime_faulted');
 assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-scan-json-test')), false);
+const filteredInventoryRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-inventory',
+  '--session-inventory-filter',
+  'operational_posture',
+  '--session-inventory-match',
+  'mcp_runtime_faulted',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'inventory-filter-test',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(filteredInventoryRun.status, 0);
+assert.equal(filteredInventoryRun.stdout.includes('Inventory filter'), true);
+assert.equal(filteredInventoryRun.stdout.includes('operational_posture:mcp_runtime_faulted'), true);
+assert.equal(filteredInventoryRun.stdout.includes('Matched sessions'), true);
+assert.equal(filteredInventoryRun.stdout.includes('faulted-session'), true);
+assert.equal(filteredInventoryRun.stdout.includes('healthy-session'), false);
+const filteredInventoryJsonRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-inventory-json',
+  '--session-inventory-filter',
+  'request_posture',
+  '--session-inventory-match',
+  'runtime_failures',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'inventory-filter-json-test',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(filteredInventoryJsonRun.status, 0);
+const filteredInventoryJson = JSON.parse(filteredInventoryJsonRun.stdout);
+assert.equal(filteredInventoryJson.schema, 'narada.agent_cli.session_inventory.v1');
+assert.equal(filteredInventoryJson.inventory_filter, 'request_posture:runtime_failures');
+assert.equal(filteredInventoryJson.carrier_session_count, 1);
+assert.equal(filteredInventoryJson.total_carrier_session_count, 2);
+assert.equal(filteredInventoryJson.sessions.length, 1);
+assert.equal(filteredInventoryJson.sessions[0].session, 'faulted-session');
+assert.deepEqual(filteredInventoryJson.summary.operational_posture_counts, { mcp_runtime_faulted: 1 });
+assert.deepEqual(filteredInventoryJson.summary.request_posture_counts, { runtime_failures: 1 });
+const filteredInventoryMissJsonRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-inventory-json',
+  '--session-inventory-filter',
+  'heartbeat_status',
+  '--session-inventory-match',
+  'missing',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'inventory-filter-miss-json-test',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(filteredInventoryMissJsonRun.status, 0);
+const filteredInventoryMissJson = JSON.parse(filteredInventoryMissJsonRun.stdout);
+assert.equal(filteredInventoryMissJson.inventory_filter, 'heartbeat_status:missing');
+assert.equal(filteredInventoryMissJson.carrier_session_count, 0);
+assert.equal(filteredInventoryMissJson.total_carrier_session_count, 2);
+assert.deepEqual(filteredInventoryMissJson.sessions, []);
 const sessionReadRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
   '--session-read',
@@ -1426,6 +1500,9 @@ assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-co
 assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_MODEL"), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventory'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventoryJson'), true);
+assert.equal(windowsWrapperTemplate.includes("[ValidateSet('operational_posture', 'request_posture', 'mcp_state', 'heartbeat_status')]"), true);
+assert.equal(windowsWrapperTemplate.includes('[string]$SessionInventoryFilter'), true);
+assert.equal(windowsWrapperTemplate.includes('[string]$SessionInventoryMatch'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionRead'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionReadJson'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionEvents'), true);
@@ -1436,6 +1513,7 @@ assert.equal(windowsWrapperTemplate.includes('[int]$SessionEventsCount = 20'), t
 assert.equal(windowsWrapperTemplate.includes('[switch]$McpPreflightJson'), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-json'"), true);
+assert.equal(windowsWrapperTemplate.includes("'--session-inventory-filter', $SessionInventoryFilter, '--session-inventory-match', $SessionInventoryMatch"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-read'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-read-json'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-events'"), true);
