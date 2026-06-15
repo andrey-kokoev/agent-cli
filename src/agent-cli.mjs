@@ -632,6 +632,7 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
     'Terminal states': inventoryRollup.last_terminal_state_summary,
     'Lifecycle states': inventoryRollup.last_lifecycle_state_summary,
     'Lifecycle outcomes': inventoryRollup.lifecycle_outcome_summary,
+    'Request posture': inventoryRollup.request_posture_summary,
     'Request outcomes': inventoryRollup.request_outcome_summary,
     'Request issues': inventoryRollup.request_issue_summary,
   };
@@ -646,6 +647,7 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
       Session: item.session,
       Heartbeat: item.heartbeat_display,
       'MCP state': item.mcp_operational_state,
+      'Request posture': item.request_posture_display,
       'MCP startup failures': item.mcp_startup_failure_summary,
       'MCP runtime faults': item.mcp_runtime_fault_summary,
       'Preflight artifact': item.mcp_preflight_artifact_path ?? 'none',
@@ -718,6 +720,7 @@ function summarizeSessionInventoryRollup(inventory = []) {
   const terminalStateCounts = {};
   const lifecycleStateCounts = {};
   const lifecycleOutcomeCounts = {};
+  const requestPostureCounts = {};
   const requestOutcomeCounts = {};
   const requestIssueCounts = {};
   for (const item of inventory) {
@@ -725,6 +728,7 @@ function summarizeSessionInventoryRollup(inventory = []) {
     incrementInventoryCounter(mcpStateCounts, item?.mcp_operational_state ?? 'unknown');
     incrementInventoryCounter(terminalStateCounts, item?.last_terminal_state ?? 'unknown');
     incrementInventoryCounter(lifecycleStateCounts, item?.last_lifecycle_state ?? 'unknown');
+    incrementInventoryCounter(requestPostureCounts, item?.request_posture ?? 'clean');
     mergeInventoryCounts(lifecycleOutcomeCounts, item?.lifecycle_state_counts ?? null);
     mergeInventoryCounts(requestOutcomeCounts, item?.request_outcome_counts ?? null);
     mergeInventoryCounts(requestIssueCounts, item?.request_issue_counts ?? null);
@@ -740,6 +744,8 @@ function summarizeSessionInventoryRollup(inventory = []) {
     last_lifecycle_state_summary: formatInventoryCounts(lifecycleStateCounts),
     lifecycle_outcome_counts: lifecycleOutcomeCounts,
     lifecycle_outcome_summary: formatInventoryCounts(lifecycleOutcomeCounts),
+    request_posture_counts: requestPostureCounts,
+    request_posture_summary: formatInventoryCounts(requestPostureCounts),
     request_outcome_counts: requestOutcomeCounts,
     request_outcome_summary: formatInventoryCounts(requestOutcomeCounts),
     request_issue_counts: requestIssueCounts,
@@ -807,6 +813,35 @@ function classifyPersistedSessionIssueOutcome(entry) {
   return 'request_error';
 }
 
+function summarizeRequestPosture(requestOutcomeCounts = {}) {
+  const counts = {
+    invalid_control_traffic: Number(requestOutcomeCounts?.invalid_request ?? 0),
+    closed_session_retries: Number(requestOutcomeCounts?.rejected_closed ?? 0),
+    runtime_failures:
+      Number(requestOutcomeCounts?.dispatch_failure ?? 0)
+      + Number(requestOutcomeCounts?.request_runtime_failure ?? 0)
+      + Number(requestOutcomeCounts?.interactive_runtime_failure ?? 0)
+      + Number(requestOutcomeCounts?.request_error ?? 0),
+  };
+  const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+  if (total === 0) {
+    return {
+      request_outcome_total: 0,
+      request_posture: 'clean',
+      request_posture_display: 'clean',
+    };
+  }
+  const postureOrder = ['runtime_failures', 'invalid_control_traffic', 'closed_session_retries'];
+  const [requestPosture] = postureOrder
+    .map((key) => [key, counts[key]])
+    .sort((left, right) => right[1] - left[1] || postureOrder.indexOf(left[0]) - postureOrder.indexOf(right[0]))[0];
+  return {
+    request_outcome_total: total,
+    request_posture: requestPosture,
+    request_posture_display: `${requestPosture} (${total})`,
+  };
+}
+
 function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, naradaDir = NARADA_DIR } = {}) {
   const heartbeat = readJsonFile(join(sessionDir, 'heartbeat.json'));
   const entries = readJsonlFile(join(sessionDir, 'session.jsonl'));
@@ -859,6 +894,7 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     identity: heartbeat?.agent_id ?? IDENTITY,
     siteRoot,
   });
+  const requestPosture = summarizeRequestPosture(requestOutcomeCounts);
   let mcpOperationalState = 'unknown';
   if (runtimeDiagnostics.length > 0) mcpOperationalState = 'runtime_faulted';
   else if (startupFailures.length > 0) mcpOperationalState = 'startup_degraded';
@@ -883,6 +919,9 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     last_lifecycle_state: lastLifecycleState,
     lifecycle_state_counts: lifecycleStateCounts,
     lifecycle_state_summary: formatInventoryCounts(lifecycleStateCounts),
+    request_outcome_total: requestPosture.request_outcome_total,
+    request_posture: requestPosture.request_posture,
+    request_posture_display: requestPosture.request_posture_display,
     request_outcome_counts: requestOutcomeCounts,
     request_outcome_summary: formatInventoryCounts(requestOutcomeCounts),
     request_issue_counts: requestIssueCounts,

@@ -695,6 +695,9 @@ assert.equal(inventoryEntries[0].last_lifecycle_at, '2026-06-14T12:00:05.000Z');
 assert.equal(inventoryEntries[0].last_lifecycle_state, 'closed');
 assert.deepEqual(inventoryEntries[0].lifecycle_state_counts, { completed: 1, closed: 1 });
 assert.equal(inventoryEntries[0].lifecycle_state_summary, '1 (closed), 1 (completed)');
+assert.equal(inventoryEntries[0].request_outcome_total, 0);
+assert.equal(inventoryEntries[0].request_posture, 'clean');
+assert.equal(inventoryEntries[0].request_posture_display, 'clean');
 assert.equal(inventoryEntries[0].mcp_preflight_artifact_path, join(inventoryNaradaDir, 'runtime', 'agent-cli', 'mcp-preflight', 'healthy-session.json'));
 assert.equal(inventoryEntries[1].session, 'faulted-session');
 assert.equal(inventoryEntries[1].agent_id, 'narada.test');
@@ -709,6 +712,9 @@ assert.equal(inventoryEntries[1].last_lifecycle_at, '2026-06-14T11:59:45.000Z');
 assert.equal(inventoryEntries[1].last_lifecycle_state, 'failed');
 assert.deepEqual(inventoryEntries[1].lifecycle_state_counts, { failed: 1 });
 assert.equal(inventoryEntries[1].lifecycle_state_summary, '1 (failed)');
+assert.equal(inventoryEntries[1].request_outcome_total, 4);
+assert.equal(inventoryEntries[1].request_posture, 'runtime_failures');
+assert.equal(inventoryEntries[1].request_posture_display, 'runtime_failures (4)');
 assert.deepEqual(inventoryEntries[1].request_outcome_counts, {
   dispatch_failure: 1,
   invalid_request: 1,
@@ -744,6 +750,7 @@ assert.equal(sessionInventoryRun.stdout.includes('MCP states'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Terminal states'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Lifecycle states'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Lifecycle outcomes'), true);
+assert.equal(sessionInventoryRun.stdout.includes('Request posture'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Request outcomes'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Request issues'), true);
 assert.equal(sessionInventoryRun.stdout.includes('healthy-session'), true);
@@ -781,6 +788,8 @@ assert.deepEqual(sessionInventoryJson.summary, {
   last_lifecycle_state_summary: '1 (closed), 1 (failed)',
   lifecycle_outcome_counts: { closed: 1, completed: 1, failed: 1 },
   lifecycle_outcome_summary: '1 (closed), 1 (completed), 1 (failed)',
+  request_posture_counts: { clean: 1, runtime_failures: 1 },
+  request_posture_summary: '1 (clean), 1 (runtime_failures)',
   request_outcome_counts: {
     dispatch_failure: 1,
     invalid_request: 1,
@@ -802,12 +811,18 @@ assert.equal(sessionInventoryJson.sessions[0].agent_id, 'narada.test');
 assert.equal(sessionInventoryJson.sessions[0].last_terminal_state, 'completed');
 assert.equal(sessionInventoryJson.sessions[0].last_lifecycle_state, 'closed');
 assert.equal(sessionInventoryJson.sessions[0].last_lifecycle_event_kind, 'session_closed');
+assert.equal(sessionInventoryJson.sessions[0].request_outcome_total, 0);
+assert.equal(sessionInventoryJson.sessions[0].request_posture, 'clean');
+assert.equal(sessionInventoryJson.sessions[0].request_posture_display, 'clean');
 assert.equal(sessionInventoryJson.sessions[0].mcp_operational_state, 'healthy');
 assert.equal(sessionInventoryJson.sessions[1].session, 'faulted-session');
 assert.equal(sessionInventoryJson.sessions[1].started_at, '2026-06-14T11:40:00.000Z');
 assert.equal(sessionInventoryJson.sessions[1].last_terminal_state, 'failed');
 assert.equal(sessionInventoryJson.sessions[1].last_lifecycle_state, 'failed');
 assert.equal(sessionInventoryJson.sessions[1].last_lifecycle_event_kind, 'input_completed');
+assert.equal(sessionInventoryJson.sessions[1].request_outcome_total, 4);
+assert.equal(sessionInventoryJson.sessions[1].request_posture, 'runtime_failures');
+assert.equal(sessionInventoryJson.sessions[1].request_posture_display, 'runtime_failures (4)');
 assert.equal(sessionInventoryJson.sessions[1].mcp_operational_state, 'runtime_faulted');
 assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-scan-json-test')), false);
 rmSync(inventoryRoot, { recursive: true, force: true });
