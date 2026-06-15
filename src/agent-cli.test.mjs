@@ -94,6 +94,7 @@ import {
 } from './agent-cli.mjs';
 
 const metadata = JSON.parse(readFileSync(new URL('./intelligence-providers.json', import.meta.url), 'utf8')).providers;
+const windowsWrapperTemplate = readFileSync(new URL('../templates/Start-AgentCliSession.ps1', import.meta.url), 'utf8');
 const naradaToolCallEnvelope = JSON.parse(readFileSync(new URL('../../narada/packages/carrier-provider-contract/contracts/narada-tool-call-envelope.json', import.meta.url), 'utf8'));
 const transcriptProjectionCases = JSON.parse(readFileSync(new URL('../../narada/packages/carrier-protocol/fixtures/transcript-projection-cases.json', import.meta.url), 'utf8'));
 const inputPipelineCases = JSON.parse(readFileSync(new URL('../../narada/packages/carrier-protocol/fixtures/carrier-input-pipeline-cases.json', import.meta.url), 'utf8'));
@@ -731,6 +732,10 @@ const expectedAdapters = {
   'anthropic-api': 'anthropic-messages',
   'codex-subscription': 'codex-mcp-server',
 };
+assert.equal(windowsWrapperTemplate.includes("[ValidateSet('openai-api', 'kimi-api', 'kimi-code-api', 'anthropic-api', 'codex-subscription')]"), true);
+assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_API_BASE_URL"), true);
+assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_MODEL"), true);
+assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and -not $env:NARADA_AI_API_KEY -and $env:KIMI_CODE_API_KEY"), true);
 for (const [providerId, adapterId] of Object.entries(expectedAdapters)) {
   const support = resolveProviderSupportState(providerId, metadata[providerId], REQUEST_ADAPTERS);
   assert.equal(support.state, PROVIDER_SUPPORT_STATES.VERIFIED_SUPPORTED);

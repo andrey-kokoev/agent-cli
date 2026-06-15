@@ -13,7 +13,7 @@ param(
 
     [string]$SessionName = ($IdentityName -replace '\.', '-'),
 
-    [ValidateSet('openai-api', 'kimi-api', 'anthropic-api', 'codex-subscription')]
+    [ValidateSet('openai-api', 'kimi-api', 'kimi-code-api', 'anthropic-api', 'codex-subscription')]
     [string]$IntelligenceProvider = 'kimi-api',
 
     [switch]$AutoApprove
@@ -161,17 +161,26 @@ if ($EffectiveConfigPath) {
 $Host.UI.RawUI.WindowTitle = $IdentityName
 
 if (-not $env:NARADA_AI_BASE_URL) {
-    $env:NARADA_AI_BASE_URL = $providerDefault.base_url
+    if ($IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_API_BASE_URL) {
+        $env:NARADA_AI_BASE_URL = $env:NARADA_KIMI_CODE_API_BASE_URL
+    } else {
+        $env:NARADA_AI_BASE_URL = $providerDefault.base_url
+    }
 }
 if (-not $env:NARADA_AI_MODEL) {
     if ($IntelligenceProvider -eq 'kimi-api' -and $env:NARADA_KIMI_MODEL) {
         $env:NARADA_AI_MODEL = $env:NARADA_KIMI_MODEL
+    } elseif ($IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_MODEL) {
+        $env:NARADA_AI_MODEL = $env:NARADA_KIMI_CODE_MODEL
     } else {
         $env:NARADA_AI_MODEL = $providerDefault.default_model
     }
 }
 if ($IntelligenceProvider -eq 'kimi-api' -and -not $env:NARADA_AI_API_KEY -and $env:NARADA_KIMI_API_KEY) {
     $env:NARADA_AI_API_KEY = $env:NARADA_KIMI_API_KEY
+}
+if ($IntelligenceProvider -eq 'kimi-code-api' -and -not $env:NARADA_AI_API_KEY -and $env:KIMI_CODE_API_KEY) {
+    $env:NARADA_AI_API_KEY = $env:KIMI_CODE_API_KEY
 }
 if ($IntelligenceProvider -eq 'anthropic-api' -and -not $env:NARADA_AI_API_KEY -and $env:ANTHROPIC_API_KEY) {
     $env:NARADA_AI_API_KEY = $env:ANTHROPIC_API_KEY
