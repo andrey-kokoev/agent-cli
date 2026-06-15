@@ -690,6 +690,8 @@ assert.equal(inventoryEntries[0].session_event_count, 3);
 assert.equal(inventoryEntries[0].last_event_kind, 'session_closed');
 assert.equal(inventoryEntries[0].last_event_at, '2026-06-14T12:00:05.000Z');
 assert.equal(inventoryEntries[0].last_terminal_state, 'completed');
+assert.equal(inventoryEntries[0].operational_posture, 'healthy');
+assert.equal(inventoryEntries[0].operational_posture_display, 'healthy');
 assert.equal(inventoryEntries[0].last_lifecycle_event_kind, 'session_closed');
 assert.equal(inventoryEntries[0].last_lifecycle_at, '2026-06-14T12:00:05.000Z');
 assert.equal(inventoryEntries[0].last_lifecycle_state, 'closed');
@@ -707,6 +709,8 @@ assert.equal(inventoryEntries[1].session_event_count, 7);
 assert.equal(inventoryEntries[1].last_event_kind, 'input_completed');
 assert.equal(inventoryEntries[1].last_event_at, '2026-06-14T11:59:45.000Z');
 assert.equal(inventoryEntries[1].last_terminal_state, 'failed');
+assert.equal(inventoryEntries[1].operational_posture, 'mcp_runtime_faulted');
+assert.equal(inventoryEntries[1].operational_posture_display, 'mcp_runtime_faulted [mcp=runtime_faulted; request=runtime_failures; lifecycle=failed]');
 assert.equal(inventoryEntries[1].last_lifecycle_event_kind, 'input_completed');
 assert.equal(inventoryEntries[1].last_lifecycle_at, '2026-06-14T11:59:45.000Z');
 assert.equal(inventoryEntries[1].last_lifecycle_state, 'failed');
@@ -746,6 +750,7 @@ const sessionInventoryRun = spawnSync(process.execPath, [
 assert.equal(sessionInventoryRun.status, 0);
 assert.equal(sessionInventoryRun.stdout.includes('Carrier sessions'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Heartbeat states'), true);
+assert.equal(sessionInventoryRun.stdout.includes('Operational posture'), true);
 assert.equal(sessionInventoryRun.stdout.includes('MCP states'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Terminal states'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Lifecycle states'), true);
@@ -780,6 +785,8 @@ assert.equal(sessionInventoryJson.carrier_session_count, 2);
 assert.deepEqual(sessionInventoryJson.summary, {
   heartbeat_status_counts: { alive: 2 },
   heartbeat_status_summary: '2 (alive)',
+  operational_posture_counts: { healthy: 1, mcp_runtime_faulted: 1 },
+  operational_posture_summary: '1 (healthy), 1 (mcp_runtime_faulted)',
   mcp_operational_state_counts: { healthy: 1, runtime_faulted: 1 },
   mcp_operational_state_summary: '1 (healthy), 1 (runtime_faulted)',
   last_terminal_state_counts: { completed: 1, failed: 1 },
@@ -809,6 +816,8 @@ assert.equal(Array.isArray(sessionInventoryJson.sessions), true);
 assert.equal(sessionInventoryJson.sessions[0].session, 'healthy-session');
 assert.equal(sessionInventoryJson.sessions[0].agent_id, 'narada.test');
 assert.equal(sessionInventoryJson.sessions[0].last_terminal_state, 'completed');
+assert.equal(sessionInventoryJson.sessions[0].operational_posture, 'healthy');
+assert.equal(sessionInventoryJson.sessions[0].operational_posture_display, 'healthy');
 assert.equal(sessionInventoryJson.sessions[0].last_lifecycle_state, 'closed');
 assert.equal(sessionInventoryJson.sessions[0].last_lifecycle_event_kind, 'session_closed');
 assert.equal(sessionInventoryJson.sessions[0].request_outcome_total, 0);
@@ -818,6 +827,8 @@ assert.equal(sessionInventoryJson.sessions[0].mcp_operational_state, 'healthy');
 assert.equal(sessionInventoryJson.sessions[1].session, 'faulted-session');
 assert.equal(sessionInventoryJson.sessions[1].started_at, '2026-06-14T11:40:00.000Z');
 assert.equal(sessionInventoryJson.sessions[1].last_terminal_state, 'failed');
+assert.equal(sessionInventoryJson.sessions[1].operational_posture, 'mcp_runtime_faulted');
+assert.equal(sessionInventoryJson.sessions[1].operational_posture_display, 'mcp_runtime_faulted [mcp=runtime_faulted; request=runtime_failures; lifecycle=failed]');
 assert.equal(sessionInventoryJson.sessions[1].last_lifecycle_state, 'failed');
 assert.equal(sessionInventoryJson.sessions[1].last_lifecycle_event_kind, 'input_completed');
 assert.equal(sessionInventoryJson.sessions[1].request_outcome_total, 4);

@@ -628,6 +628,7 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
     SiteRoot: siteRoot,
     'Carrier sessions': inventory.length,
     'Heartbeat states': inventoryRollup.heartbeat_status_summary,
+    'Operational posture': inventoryRollup.operational_posture_summary,
     'MCP states': inventoryRollup.mcp_operational_state_summary,
     'Terminal states': inventoryRollup.last_terminal_state_summary,
     'Lifecycle states': inventoryRollup.last_lifecycle_state_summary,
@@ -646,6 +647,7 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
     blocks.push(formatKeyValueRows({
       Session: item.session,
       Heartbeat: item.heartbeat_display,
+      'Operational posture': item.operational_posture_display,
       'MCP state': item.mcp_operational_state,
       'Request posture': item.request_posture_display,
       'MCP startup failures': item.mcp_startup_failure_summary,
@@ -716,6 +718,7 @@ function readSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DIR } =
 
 function summarizeSessionInventoryRollup(inventory = []) {
   const heartbeatCounts = {};
+  const operationalPostureCounts = {};
   const mcpStateCounts = {};
   const terminalStateCounts = {};
   const lifecycleStateCounts = {};
@@ -725,6 +728,7 @@ function summarizeSessionInventoryRollup(inventory = []) {
   const requestIssueCounts = {};
   for (const item of inventory) {
     incrementInventoryCounter(heartbeatCounts, item?.heartbeat_status ?? 'unknown');
+    incrementInventoryCounter(operationalPostureCounts, item?.operational_posture ?? 'unknown');
     incrementInventoryCounter(mcpStateCounts, item?.mcp_operational_state ?? 'unknown');
     incrementInventoryCounter(terminalStateCounts, item?.last_terminal_state ?? 'unknown');
     incrementInventoryCounter(lifecycleStateCounts, item?.last_lifecycle_state ?? 'unknown');
@@ -736,6 +740,8 @@ function summarizeSessionInventoryRollup(inventory = []) {
   return {
     heartbeat_status_counts: heartbeatCounts,
     heartbeat_status_summary: formatInventoryCounts(heartbeatCounts),
+    operational_posture_counts: operationalPostureCounts,
+    operational_posture_summary: formatInventoryCounts(operationalPostureCounts),
     mcp_operational_state_counts: mcpStateCounts,
     mcp_operational_state_summary: formatInventoryCounts(mcpStateCounts),
     last_terminal_state_counts: terminalStateCounts,
@@ -842,6 +848,27 @@ function summarizeRequestPosture(requestOutcomeCounts = {}) {
   };
 }
 
+function summarizeOperationalPosture({ mcpOperationalState = 'unknown', requestPosture = 'clean', lastLifecycleState = null } = {}) {
+  let operationalPosture = 'healthy';
+  if (mcpOperationalState === 'runtime_faulted') operationalPosture = 'mcp_runtime_faulted';
+  else if (mcpOperationalState === 'startup_degraded') operationalPosture = 'mcp_startup_degraded';
+  else if (requestPosture === 'runtime_failures') operationalPosture = 'request_runtime_failures';
+  else if (requestPosture === 'invalid_control_traffic') operationalPosture = 'request_invalid_control_traffic';
+  else if (requestPosture === 'closed_session_retries') operationalPosture = 'request_closed_session_retries';
+  else if (lastLifecycleState === 'failed' || lastLifecycleState === 'interactive_loop_error') operationalPosture = 'lifecycle_failed';
+  if (operationalPosture === 'healthy') {
+    return {
+      operational_posture: 'healthy',
+      operational_posture_display: 'healthy',
+    };
+  }
+  const lifecycleLabel = lastLifecycleState ?? 'none';
+  return {
+    operational_posture: operationalPosture,
+    operational_posture_display: `${operationalPosture} [mcp=${mcpOperationalState}; request=${requestPosture}; lifecycle=${lifecycleLabel}]`,
+  };
+}
+
 function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, naradaDir = NARADA_DIR } = {}) {
   const heartbeat = readJsonFile(join(sessionDir, 'heartbeat.json'));
   const entries = readJsonlFile(join(sessionDir, 'session.jsonl'));
@@ -900,6 +927,11 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
   else if (startupFailures.length > 0) mcpOperationalState = 'startup_degraded';
   else if (linkedPreflight?.mcp_operational_state) mcpOperationalState = linkedPreflight.mcp_operational_state;
   else if (preflightArtifact?.mcp_operational_state) mcpOperationalState = preflightArtifact.mcp_operational_state;
+  const operationalPosture = summarizeOperationalPosture({
+    mcpOperationalState,
+    requestPosture: requestPosture.request_posture,
+    lastLifecycleState,
+  });
   return {
     session,
     session_path: join(sessionDir, 'session.jsonl'),
@@ -914,6 +946,8 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     last_event_kind: lastEventKind,
     last_event_at: lastEventAt,
     last_terminal_state: lastTerminalState,
+    operational_posture: operationalPosture.operational_posture,
+    operational_posture_display: operationalPosture.operational_posture_display,
     last_lifecycle_event_kind: lastLifecycleEventKind,
     last_lifecycle_at: lastLifecycleAt,
     last_lifecycle_state: lastLifecycleState,
