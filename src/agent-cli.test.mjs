@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
+import { formatRuntimeMcpFaultSummary, formatStartupMcpSummary } from '../bin/agent-runtime-server.mjs';
 import { commandTokens } from '@narada2/carrier-command-contract';
 import {
   classifyCarrierInputHold,
@@ -616,6 +617,29 @@ const interactiveHeaderRows = stripAnsiForTest(formatHeaderRows(createInteractiv
 assert.equal(interactiveHeaderRows.includes('MCP state            runtime_faulted'), true);
 assert.equal(interactiveHeaderRows.includes('MCP startup failures 1 (polluted:mcp_stdout_pollution)'), true);
 assert.equal(interactiveHeaderRows.includes('MCP runtime faults   1 (narada:fs_read_file)'), true);
+assert.equal(formatStartupMcpSummary({ event: 'session_started', mcp_operational_state: 'healthy' }), null);
+assert.equal(
+  formatStartupMcpSummary({
+    event: 'session_started',
+    mcp_operational_state: 'startup_degraded',
+    mcp_startup_failure_count: 1,
+    mcp_startup_failure_summary: '1 (degraded:mcp_stdout_pollution)',
+    mcp_runtime_fault_count: 0,
+    mcp_runtime_fault_summary: '0',
+  }),
+  '[agent-runtime-server] MCP state=startup_degraded | startup=1 (degraded:mcp_stdout_pollution)',
+);
+assert.equal(
+  formatRuntimeMcpFaultSummary({
+    event: 'carrier_diagnostic_recorded',
+    diagnostic_code: 'mcp_runtime_fault',
+    server_name: 'reset',
+    tool_name: 'fs_stat',
+    error_code: 'ECONNRESET',
+  }),
+  '[agent-runtime-server] MCP runtime fault reset:fs_stat ECONNRESET',
+);
+assert.equal(formatRuntimeMcpFaultSummary({ event: 'carrier_diagnostic_recorded', diagnostic_code: 'other' }), null);
 assert.deepEqual(createMcpStatusSnapshot(Object.assign(Object.create(null), {
   narada: { tools: [{ name: 'fs_read_file' }] },
   __mcp_startup_failures: [{ server_name: 'polluted', code: 'mcp_stdout_pollution' }],

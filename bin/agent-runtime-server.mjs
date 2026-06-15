@@ -2,10 +2,14 @@
 
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const carrierPath = join(__dirname, '..', 'src', 'agent-cli.mjs');
+
+const isEntrypoint = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
 
 function formatStartupMcpSummary(event) {
   if (!event || event.event !== 'session_started') return null;
@@ -20,6 +24,15 @@ function formatStartupMcpSummary(event) {
   return `[agent-runtime-server] ${parts.join(' | ')}`;
 }
 
+function formatRuntimeMcpFaultSummary(event) {
+  if (!event || event.event !== 'carrier_diagnostic_recorded') return null;
+  if (event.diagnostic_code !== 'mcp_runtime_fault') return null;
+  const serverName = event.server_name ?? 'unknown';
+  const toolName = event.tool_name ?? '<missing>';
+  const errorCode = event.error_code ? ` ${event.error_code}` : '';
+  return `[agent-runtime-server] MCP runtime fault ${serverName}:${toolName}${errorCode}`;
+}
+
 async function main() {
   const requestedArgs = process.argv.slice(2);
   const args = requestedArgs.includes('--server') ? requestedArgs : ['--server', ...requestedArgs];
@@ -31,6 +44,7 @@ async function main() {
   });
 
   let startupSummaryPrinted = false;
+  const runtimeFaultSummaries = new Set();
   let stdoutBuffer = '';
 
   child.stdout.on('data', (chunk) => {
@@ -49,6 +63,11 @@ async function main() {
         if (summary) {
           console.error(summary);
           startupSummaryPrinted = true;
+        }
+        const runtimeFaultSummary = formatRuntimeMcpFaultSummary(event);
+        if (runtimeFaultSummary && !runtimeFaultSummaries.has(runtimeFaultSummary)) {
+          console.error(runtimeFaultSummary);
+          runtimeFaultSummaries.add(runtimeFaultSummary);
         }
       } catch {}
     }
@@ -69,9 +88,11 @@ async function main() {
   process.exit(exitCode);
 }
 
-main().catch((error) => {
-  console.error(`[agent-runtime-server] failed to start carrier: ${error instanceof Error ? error.message : String(error)}`);
-  process.exit(1);
-});
+if (isEntrypoint) {
+  main().catch((error) => {
+    console.error(`[agent-runtime-server] failed to start carrier: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  });
+}
 
-export { formatStartupMcpSummary };
+export { formatStartupMcpSummary, formatRuntimeMcpFaultSummary };
