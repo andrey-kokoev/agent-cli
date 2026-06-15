@@ -749,7 +749,7 @@ assert.equal(inventoryEntries[1].request_outcome_total, 4);
 assert.equal(inventoryEntries[1].request_posture, 'runtime_failures');
 assert.equal(inventoryEntries[1].request_posture_display, 'runtime_failures (4)');
 assert.equal(inventoryEntries[1].recommended_action, 'review_runtime_diagnostics');
-assert.equal(inventoryEntries[1].recommended_command, 'narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20');
+assert.equal(inventoryEntries[1].recommended_command, 'narada-agent-cli --identity narada.test --session faulted-session --session-recovery');
 assert.equal(inventoryEntries[1].recovery_kind, 'diagnostic_review');
 assert.equal(inventoryEntries[1].recovery_primary_command, 'narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20');
 assert.equal(inventoryEntries[1].recovery_followup_command, 'narada-agent-cli --identity narada.test --session faulted-session --session-read');
@@ -799,6 +799,7 @@ assert.equal(sessionInventoryRun.stdout.includes('runtime_faulted'), true);
 assert.equal(sessionInventoryRun.stdout.includes('MCP startup failures  1 (degraded:mcp_stdout_pollution)'), true);
 assert.equal(sessionInventoryRun.stdout.includes('MCP runtime faults    1 (runtime:fs_read_file)'), true);
 assert.equal(sessionInventoryRun.stdout.includes('review runtime diagnostics'), true);
+assert.equal(sessionInventoryRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-recovery'), true);
 assert.equal(sessionInventoryRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20'), true);
 assert.equal(sessionInventoryRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-read'), true);
 assert.equal(sessionInventoryRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter issues --session-events-count 20'), true);
@@ -880,6 +881,7 @@ assert.equal(sessionInventoryJson.sessions[1].request_posture, 'runtime_failures
 assert.equal(sessionInventoryJson.sessions[1].request_posture_display, 'runtime_failures (4)');
 assert.equal(sessionInventoryJson.sessions[1].mcp_operational_state, 'runtime_faulted');
 assert.equal(sessionInventoryJson.sessions[1].recommended_action, 'review_runtime_diagnostics');
+assert.equal(sessionInventoryJson.sessions[1].recommended_command, 'narada-agent-cli --identity narada.test --session faulted-session --session-recovery');
 assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-scan-json-test')), false);
 const sessionInventoryActionsRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
@@ -897,6 +899,7 @@ assert.equal(sessionInventoryActionsRun.status, 0);
 assert.equal(sessionInventoryActionsRun.stdout.includes('Action queue'), true);
 assert.equal(sessionInventoryActionsRun.stdout.includes('Recommended actions'), true);
 assert.equal(sessionInventoryActionsRun.stdout.includes('review runtime diagnostics'), true);
+assert.equal(sessionInventoryActionsRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-recovery'), true);
 assert.equal(sessionInventoryActionsRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20'), true);
 assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-actions-test')), false);
 const sessionInventoryActionsJsonRun = spawnSync(process.execPath, [
@@ -928,6 +931,7 @@ assert.equal(sessionInventoryActionsJson.actions[0].session, 'healthy-session');
 assert.equal(sessionInventoryActionsJson.actions[0].recommended_action, 'review_session_summary');
 assert.equal(sessionInventoryActionsJson.actions[1].session, 'faulted-session');
 assert.equal(sessionInventoryActionsJson.actions[1].recommended_action, 'review_runtime_diagnostics');
+assert.equal(sessionInventoryActionsJson.actions[1].recommended_command, 'narada-agent-cli --identity narada.test --session faulted-session --session-recovery');
 assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-actions-json-test')), false);
 const sessionInventoryRecoveryRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),

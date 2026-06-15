@@ -238,46 +238,47 @@ function summarizePersistedSessionRecommendedAction({
   requestPosture = 'clean',
   handoffs = {},
 } = {}) {
+  const recoveryCommand = handoffs.session_recovery ?? null;
   if (mcpOperationalState === 'runtime_faulted') {
     return {
       recommended_action: 'review_runtime_diagnostics',
       recommended_action_display: 'review runtime diagnostics',
-      recommended_command: handoffs.session_events_diagnostics ?? null,
+      recommended_command: recoveryCommand,
     };
   }
   if (mcpOperationalState === 'startup_degraded') {
     return {
       recommended_action: 'review_startup_diagnostics',
       recommended_action_display: 'review startup diagnostics',
-      recommended_command: handoffs.session_events_diagnostics ?? null,
+      recommended_command: recoveryCommand,
     };
   }
   if (requestPosture === 'runtime_failures') {
     return {
       recommended_action: 'review_request_issues',
       recommended_action_display: 'review request issues',
-      recommended_command: handoffs.session_events_issues ?? null,
+      recommended_command: recoveryCommand,
     };
   }
   if (requestPosture === 'invalid_control_traffic') {
     return {
       recommended_action: 'review_invalid_control_traffic',
       recommended_action_display: 'review invalid control traffic',
-      recommended_command: handoffs.session_events_issues ?? null,
+      recommended_command: recoveryCommand,
     };
   }
   if (requestPosture === 'closed_session_retries') {
     return {
       recommended_action: 'review_closed_session_retries',
       recommended_action_display: 'review closed session retries',
-      recommended_command: handoffs.session_events_issues ?? null,
+      recommended_command: recoveryCommand,
     };
   }
   if (operationalPosture === 'lifecycle_failed') {
     return {
       recommended_action: 'review_session_events',
       recommended_action_display: 'review session events',
-      recommended_command: handoffs.session_events ?? null,
+      recommended_command: recoveryCommand,
     };
   }
   return {
