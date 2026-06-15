@@ -5751,10 +5751,35 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
 
 function isConcurrentServerRequestLine(line) {
   try {
-    return classifyCarrierControlRequest(JSON.parse(line)).concurrent_allowed;
+    const request = JSON.parse(line);
+    if (request?.method === 'session.recovery') return false;
+    return classifyCarrierControlRequest(request).concurrent_allowed;
   } catch {
     return false;
   }
+}
+
+function serverRecovery({ requestId, state, mcpServers, mcpPreflightArtifact = readMcpPreflightArtifact() }) {
+  const mcpStatus = createMcpStatusSnapshot(mcpServers);
+  const mcpPreflightSnapshot = createMcpPreflightArtifactSnapshot(mcpPreflightArtifact);
+  const sessionActivity = createSessionActivitySnapshot(state);
+  const operationalPosture = createOperationalPostureSnapshot({
+    state,
+    mcpOperationalState: mcpStatus.mcp_operational_state,
+  });
+  return {
+    request_id: requestId,
+    transport: 'jsonl_stdio',
+    event: 'session_recovery',
+    active_turn_state: state.activeTurn ? 'running' : 'idle',
+    active_turn_id: state.activeTurn?.turnId ?? null,
+    ...mcpStatus,
+    ...mcpPreflightSnapshot,
+    ...sessionActivity,
+    ...operationalPosture,
+    session_path: SESSION_PATH,
+    events_path: EVENTS_PATH,
+  };
 }
 
 async function handleServerRequestLine(line, context) {
@@ -5774,6 +5799,12 @@ async function handleServerRequestLine(line, context) {
 }
 
 async function handleServerRequest(request, { state, messages, allTools, mcpServers, mcpPreflightArtifact, emit, callChatApiFn }) {
+  if (request?.method === 'session.recovery') {
+    const requestId = request?.id ?? null;
+    noteSessionActivity(state, 'session_recovery_requested');
+    emit('session_recovery', serverRecovery({ requestId, state, mcpServers, mcpPreflightArtifact }));
+    return;
+  }
   const controlRequest = classifyCarrierControlRequest(request);
   const requestId = controlRequest.request_id;
   try {
