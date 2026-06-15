@@ -29,13 +29,19 @@ param(
     [switch]$SessionInventoryRecoveryJson,
 
     [switch]$SessionInventoryEvents,
-
     [switch]$SessionInventoryEventsJson,
+
+    [ValidateSet('mcp_state', 'recommended_action', 'recovery_kind')]
+    [string]$McpPreflightFilter,
+
+    [string]$McpPreflightMatch,
 
     [ValidateSet('operational_posture', 'request_posture', 'mcp_state', 'heartbeat_status', 'recommended_action', 'recovery_kind')]
     [string]$SessionInventoryFilter,
 
     [string]$SessionInventoryMatch,
+
+    [string]$SessionInventoryFilter,
 
     [ValidateSet('all', 'lifecycle', 'issues', 'diagnostics')]
     [string]$SessionInventoryEventsFilter = 'all',
@@ -395,7 +401,6 @@ if ($McpPreflightJson) {
     & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-json'
     exit $LASTEXITCODE
 }
-
 if ($McpPreflightRead) {
     Write-Host "MCP preflight review..." -ForegroundColor Cyan
     Set-Location $WorkDir
@@ -412,27 +417,45 @@ if ($McpPreflightReadJson) {
 if ($McpPreflightInventory) {
     Write-Host "MCP preflight inventory..." -ForegroundColor Cyan
     Set-Location $WorkDir
-    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-inventory'
+    $preflightInventoryArgs = @('--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-inventory')
+    if ($McpPreflightFilter -and $McpPreflightMatch) {
+        $preflightInventoryArgs += @('--mcp-preflight-filter', $McpPreflightFilter, '--mcp-preflight-match', $McpPreflightMatch)
+    }
+    & node $AgentCliPath @preflightInventoryArgs
     exit $LASTEXITCODE
 }
 
 if ($McpPreflightInventoryJson) {
     Set-Location $WorkDir
-    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-inventory-json'
+    $preflightInventoryJsonArgs = @('--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-inventory-json')
+    if ($McpPreflightFilter -and $McpPreflightMatch) {
+        $preflightInventoryJsonArgs += @('--mcp-preflight-filter', $McpPreflightFilter, '--mcp-preflight-match', $McpPreflightMatch)
+    }
+    & node $AgentCliPath @preflightInventoryJsonArgs
     exit $LASTEXITCODE
 }
 
 if ($McpPreflightRecovery) {
     Write-Host "MCP preflight recovery..." -ForegroundColor Cyan
     Set-Location $WorkDir
-    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-recovery'
+    $preflightRecoveryArgs = @('--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-recovery')
+    if ($McpPreflightFilter -and $McpPreflightMatch) {
+        $preflightRecoveryArgs += @('--mcp-preflight-filter', $McpPreflightFilter, '--mcp-preflight-match', $McpPreflightMatch)
+    }
+    & node $AgentCliPath @preflightRecoveryArgs
     exit $LASTEXITCODE
 }
 
 if ($McpPreflightRecoveryJson) {
     Set-Location $WorkDir
-    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-recovery-json'
+    $preflightRecoveryJsonArgs = @('--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-recovery-json')
+    if ($McpPreflightFilter -and $McpPreflightMatch) {
+        $preflightRecoveryJsonArgs += @('--mcp-preflight-filter', $McpPreflightFilter, '--mcp-preflight-match', $McpPreflightMatch)
+    }
+    & node $AgentCliPath @preflightRecoveryJsonArgs
     exit $LASTEXITCODE
+}
+
 }
 
 $argList = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName)
