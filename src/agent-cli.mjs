@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { createInterface } from 'node:readline';
+import { createInterface, emitKeypressEvents } from 'node:readline';
 import { StringDecoder } from 'node:string_decoder';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { resolve, join, basename } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { request as httpsRequest } from 'node:https';
 import { request as httpRequest } from 'node:http';
@@ -152,6 +152,9 @@ const CHILD_PROCESS_ENV_ALLOWLIST = Object.freeze([
   'NARADA_AI_API_KEY',
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',
+  'KIMI_CODE_API_KEY',
+  'NARADA_KIMI_CODE_API_BASE_URL',
+  'NARADA_KIMI_CODE_MODEL',
 ]);
 
 function buildChildProcessEnv(extra = {}, baseEnv = process.env) {
@@ -193,13 +196,14 @@ const terminalStyle = createTerminalStyle({
 
 // Session persistence
 const PC_RUNTIME = resolve('C:/ProgramData/Narada/sites/pc/desktop-sunroom-2/runtime');
+const NARADA_DIR = basename(SITE_ROOT) === '.narada' ? SITE_ROOT : join(SITE_ROOT, '.narada');
 const SESSION_DIR = SERVER_MODE
-  ? join(SITE_ROOT, '.narada', 'crew', 'nars-sessions', SESSION)
+  ? join(NARADA_DIR, 'crew', 'nars-sessions', SESSION)
   : (existsSync(PC_RUNTIME) ? join(PC_RUNTIME, 'agent-sessions') : resolve(SITE_ROOT, '.ai', 'runtime', 'agent-sessions'));
 if (!existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
 const SESSION_PATH = SERVER_MODE ? join(SESSION_DIR, 'session.jsonl') : join(SESSION_DIR, `${SESSION}.jsonl`);
 const EVENTS_PATH = join(SESSION_DIR, 'events.jsonl');
-const CARRIER_SESSION_DIR = join(SITE_ROOT, '.narada', 'crew', 'nars-sessions', SESSION);
+const CARRIER_SESSION_DIR = join(NARADA_DIR, 'crew', 'nars-sessions', SESSION);
 if (!existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
 const HEARTBEAT_PATH = join(CARRIER_SESSION_DIR, 'heartbeat.json');
 const HEARTBEAT_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_HEARTBEAT_ENABLE, true);
@@ -259,6 +263,30 @@ async function main() {
   if (messages.length === 0 && rolePrompt) {
     messages.push({ role: 'system', content: rolePrompt });
   }
+
+  if (process.stdin.isTTY) {
+    emitKeypressEvents(process.stdin, rl);
+    process.stdin.on('keypress', (str, key) => {
+      if (!key) return;
+      if (key.ctrl && key.name === 'o') {
+        const lastAssistant = messages.slice().reverse().find((m) => m.role === 'assistant');
+        if (lastAssistant) {
+          const content = typeof lastAssistant.content === 'string'
+            ? lastAssistant.content
+            : JSON.stringify(lastAssistant.content);
+          if (copyToClipboard(content)) {
+            printCliMessage('Copied last assistant message to clipboard.');
+          } else {
+            printCliMessage('Failed to copy to clipboard.');
+          }
+        } else {
+          printCliMessage('No assistant message to copy.');
+        }
+      }
+    });
+    process.stdout.write('\x1b[?2004h');
+  }
+
   const inputQueue = createInputQueue({
     drain: (event) => submitUserInput({
       input: event,
@@ -312,35 +340,54 @@ async function main() {
   }
 
   while (true) {
-    const promptLabel = `operator -> ${IDENTITY}`;
-    promptState.active = true;
-    const userInput = await question(rl, `${styleInputRouteLabel(promptLabel)}${terminalStyle.muted('>')} `);
-    promptState.active = false;
-    if (userInput === '__READLINE_CLOSED__') break;
-    rewriteSubmittedPrompt(promptLabel, userInput);
-    const slashCommand = await handleSlashCommand(userInput, { mcpServers, allTools, inputQueue });
-    if (slashCommand === 'exit') break;
-    if (slashCommand === 'handled') {
-      await inputQueue.drainUntilIdle();
-      continue;
-    }
-    const hostCommand = classifyCarrierHostCommandInput(userInput);
-    if (hostCommand.is_host_command) {
-      await executeCarrierHostCommand(hostCommand);
-      await inputQueue.drainUntilIdle();
-      continue;
-    }
-    if (userInput.trim().length === 0) {
-      await inputQueue.drainUntilIdle();
-      continue;
-    }
+    try {
+      const promptLabel = `operator -> ${IDENTITY}`;
+      promptState.active = true;
+      const userInput = await question(rl, `${styleInputRouteLabel(promptLabel)}${terminalStyle.muted('>')} `);
+      promptState.active = false;
+      if (userInput === '__READLINE_CLOSED__') break;
+      rewriteSubmittedPrompt(promptLabel, userInput);
+      const slashCommand = await handleSlashCommand(userInput, { mcpServers, allTools, inputQueue, executeGoalOnSet: true });
+      if (slashCommand === 'exit') break;
+      if (slashCommand && typeof slashCommand === 'object' && slashCommand.action === 'dispatch_goal') {
+        await inputQueue.enqueue(normalizeInputEvent(
+          { content: slashCommand.content, source: 'manual_operator' },
+          { transport: 'terminal' },
+        ), { drain: true });
+        continue;
+      }
+      if (slashCommand === 'handled') {
+        await inputQueue.drainUntilIdle();
+        continue;
+      }
+      const hostCommand = classifyCarrierHostCommandInput(userInput);
+      if (hostCommand.is_host_command) {
+        await executeCarrierHostCommand(hostCommand);
+        await inputQueue.drainUntilIdle();
+        continue;
+      }
+      if (userInput.trim().length === 0) {
+        await inputQueue.drainUntilIdle();
+        continue;
+      }
 
-    await inputQueue.enqueue(normalizeInputEvent(
-      { content: userInput, source: 'manual_operator' },
-      { transport: 'terminal' },
-    ), { drain: true });
+      await inputQueue.enqueue(normalizeInputEvent(
+        { content: userInput, source: 'manual_operator' },
+        { transport: 'terminal' },
+      ), { drain: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      printCliMessage(`Turn failed: ${message}`);
+      appendSession(SESSION_PATH, carrierSessionEventEntry('interactive_loop_error', {
+        error_message: message,
+        error_stack: error instanceof Error ? error.stack : null,
+      }));
+    }
   }
 
+  if (process.stdin.isTTY) {
+    process.stdout.write('\x1b[?2004l');
+  }
   rl.close();
   inputQueue.finalizeSession();
   controlWatcher?.stop();
@@ -417,6 +464,11 @@ async function handleInteractiveControlLine(line, { inputQueue }) {
 function normalizeAgentCliControlRecord(request) {
   if (request?.schema === 'narada.carrier.control.input_event.v1') {
     return normalizeControlInputRecord(request, { transport: 'control_jsonl' });
+  }
+  if (request?.method === 'carrier.input.deliver') {
+    const input = request?.params?.input;
+    if (!input) throw new Error('carrier.input.deliver requires params.input');
+    return normalizeControlInputRecord(input, { transport: 'control_jsonl' });
   }
   if (request?.method !== 'system_directive.deliver') {
     throw new Error(`unsupported_control_method:${request?.method ?? '<missing>'}`);
@@ -693,6 +745,7 @@ async function handleSlashCommand(input, {
   statsRunner = runCodexTranscriptStats,
   displaySettings = transcriptDisplaySettings,
   carrierSessionSettings = sessionSettings,
+  executeGoalOnSet = false,
 }) {
   const trimmed = String(input ?? '').trim();
   if (!trimmed) return 'none';
@@ -748,6 +801,9 @@ async function handleSlashCommand(input, {
       status: result.goal.status,
       action: result.action,
     }));
+    if (executeGoalOnSet && result.action === 'set' && result.goal.value) {
+      return { action: 'dispatch_goal', content: result.goal.value, goal: result.goal };
+    }
     return 'handled';
   }
   if (command === '/tool-output' || command === '/tool-outputs') {
@@ -1647,8 +1703,10 @@ async function runConversationTurn(messages, tools, mcpServers, rl, options = {}
         recordTurnTerminal('turn_interrupted');
         return { terminal_state: 'interrupted' };
       }
-      recordTurnTerminal('turn_failed', { error_summary: error instanceof Error ? error.message : String(error) });
-      throw error;
+      const errorSummary = error instanceof Error ? error.message : String(error);
+      recordTurnTerminal('turn_failed', { error_summary: errorSummary });
+      if (!emit) printHeader(`Provider call failed: ${errorSummary}`, { level: 'warn' });
+      return { terminal_state: 'failed', reason: errorSummary };
     }
     if (turn?.interruptRequested) {
       emit?.('turn_interrupted', { turn_id: turn.turnId, terminal_state: 'interrupted' });
@@ -1914,7 +1972,7 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
       id: randomId(),
       method: 'tools/call',
       params: { name, arguments: args },
-    });
+    }, turn?.abortSignal);
 
     // Handle shell server approval_required fallback
     if (result.content?.[0]?.text) {
@@ -1929,7 +1987,7 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
               id: randomId(),
               method: 'tools/call',
               params: { name, arguments: { ...args, __auto_approved: true } },
-            });
+            }, turn?.abortSignal);
             const autoContent = autoResult.content?.[0]?.text ?? JSON.stringify(autoResult);
             turn?.clearStatus?.();
             if (shouldDisplayToolOutputs()) printToolResultLine(`ok ${name} in ${formatDuration(Date.now() - startedAt)} · ${formatToolResultContent(autoContent)}`);
@@ -2100,6 +2158,22 @@ async function discoverAndStartMcpServers(siteRoot) {
       let buffer = '';
       const stdoutPollution = [];
       const stderrDiagnostics = [];
+      let disconnectedError = null;
+      const pending = new Map();
+      const rejectPending = (error) => {
+        for (const request of pending.values()) {
+          clearTimeout(request.timeout);
+          request.reject(error);
+        }
+        pending.clear();
+      };
+      const markDisconnected = (error) => {
+        const normalizedError = error instanceof Error
+          ? error
+          : new Error(String(error ?? `MCP server ${serverName} disconnected`));
+        if (!disconnectedError) disconnectedError = normalizedError;
+        rejectPending(normalizedError);
+      };
       proc.stdout.setEncoding('utf-8');
       proc.stderr.setEncoding('utf-8');
       proc.stderr.on('data', (d) => {
@@ -2109,7 +2183,14 @@ async function discoverAndStartMcpServers(siteRoot) {
         if (msg) process.stderr.write(`[${serverName}] ${msg}\n`);
       });
 
-      const pending = new Map();
+      proc.on('error', (error) => markDisconnected(error));
+      proc.on('exit', (code, signal) => {
+        markDisconnected(new Error(`MCP server ${serverName} exited${code === null ? '' : ` with code ${code}`}${signal ? ` signal ${signal}` : ''}`));
+      });
+      proc.stdin.on('error', (error) => markDisconnected(error));
+      proc.stdout.on('error', (error) => markDisconnected(error));
+      proc.stderr.on('error', (error) => markDisconnected(error));
+
       proc.stdout.on('data', (chunk) => {
         buffer += chunk;
         const lines = buffer.split(/\r?\n/);
@@ -2131,11 +2212,37 @@ async function discoverAndStartMcpServers(siteRoot) {
       });
 
       const startupTimeoutMs = Math.max(1, Number(serverConfig.startup_timeout_sec ?? 10) * 1000);
-      const send = (req, timeoutMs = 15000, timeoutCode = 'mcp_request_timeout') => new Promise((resolve, reject) => {
+      const requestTimeoutMs = Math.max(1, Number(serverConfig.request_timeout_ms ?? 15000));
+      const send = (req, timeoutMs = requestTimeoutMs, timeoutCode = 'mcp_request_timeout', abortSignal = null) => new Promise((resolve, reject) => {
+        if (disconnectedError) {
+          reject(disconnectedError);
+          return;
+        }
+        if (abortSignal?.aborted) {
+          reject(new Error('agent_cli_interrupt_requested'));
+          return;
+        }
+        let settled = false;
+        const settle = (fn, value) => {
+          if (settled) return;
+          settled = true;
+          abortSignal?.removeEventListener?.('abort', onAbort);
+          fn(value);
+        };
+        const resolveWrapped = (value) => settle(resolve, value);
+        const rejectWrapped = (value) => settle(reject, value);
+        const onAbort = () => {
+          if (pending.has(req.id)) {
+            clearTimeout(timeout);
+            pending.delete(req.id);
+          }
+          rejectWrapped(new Error('agent_cli_interrupt_requested'));
+        };
+        abortSignal?.addEventListener('abort', onAbort, { once: true });
         const timeout = setTimeout(() => {
           if (pending.has(req.id)) {
             pending.delete(req.id);
-            reject(createMcpStartupError(timeoutCode, `MCP request timeout after ${timeoutMs}ms`, {
+            rejectWrapped(createMcpStartupError(timeoutCode, `MCP request timeout after ${timeoutMs}ms`, {
               phase: req.method,
               server_name: serverName,
               timeout_ms: timeoutMs,
@@ -2144,8 +2251,25 @@ async function discoverAndStartMcpServers(siteRoot) {
             }));
           }
         }, timeoutMs);
-        pending.set(req.id, { resolve, reject, timeout });
-        proc.stdin.write(`${JSON.stringify(req)}\n`);
+        pending.set(req.id, { resolve: resolveWrapped, reject: rejectWrapped, timeout });
+        try {
+          proc.stdin.write(`${JSON.stringify(req)}\n`, (error) => {
+            if (!error || !pending.has(req.id)) return;
+            const request = pending.get(req.id);
+            clearTimeout(request.timeout);
+            pending.delete(req.id);
+            markDisconnected(error);
+            request.reject(error);
+          });
+        } catch (error) {
+          if (pending.has(req.id)) {
+            const request = pending.get(req.id);
+            clearTimeout(request.timeout);
+            pending.delete(req.id);
+            request.reject(error);
+          }
+          markDisconnected(error);
+        }
       });
 
       // Initialize with timeout
@@ -2309,8 +2433,11 @@ function findToolBinding(name, mcpServers) {
   return null;
 }
 
-async function sendMcpRequest(server, request) {
-  const response = await server.send(request);
+async function sendMcpRequest(server, request, abortSignal = null) {
+  if (abortSignal?.aborted) {
+    throw new Error('agent_cli_interrupt_requested');
+  }
+  const response = await server.send(request, undefined, undefined, abortSignal);
   if (response.error) throw new Error(response.error.message);
   return response.result;
 }
@@ -3398,7 +3525,7 @@ function assertApiKeyConfigured(provider, apiKey) {
 
 function normalizeThinkingLevel(value) {
   const normalized = String(value ?? 'medium').trim().toLowerCase();
-  if (['none', 'low', 'medium', 'high'].includes(normalized)) return normalized;
+  if (['none', 'low', 'medium', 'high', 'xhigh'].includes(normalized)) return normalized;
   return 'medium';
 }
 
@@ -3586,22 +3713,33 @@ function extractJsonObject(text) {
 }
 
 function buildOpenAiChatRequest(messages, tools, { baseUrl = BASE_URL, model = MODEL, apiKey = API_KEY, thinking = THINKING_LEVEL } = {}) {
+  const isKimiProvider = INTELLIGENCE_PROVIDER === 'kimi-api' || INTELLIGENCE_PROVIDER === 'kimi-code-api';
   const body = {
     model,
     messages: cleanOpenAiMessages(messages),
     tools: tools.length > 0 ? tools : undefined,
     tool_choice: tools.length > 0 ? 'auto' : undefined,
-    temperature: INTELLIGENCE_PROVIDER === 'kimi-api' ? 1 : 0.2,
+    temperature: isKimiProvider ? 1 : 0.2,
   };
   const effort = reasoningEffort(thinking);
   if (effort && INTELLIGENCE_PROVIDER === 'openai-api') body.reasoning_effort = effort;
+  if (INTELLIGENCE_PROVIDER === 'deepseek-api') {
+    body.thinking = { type: thinking === 'none' ? 'disabled' : 'enabled' };
+    if (thinking !== 'none') {
+      body.reasoning_effort = thinking === 'xhigh' ? 'max' : 'high';
+    }
+  }
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${apiKey}`,
+  };
+  if (INTELLIGENCE_PROVIDER === 'kimi-code-api') {
+    headers['User-Agent'] = 'KimiCLI/1.0';
+  }
   return {
-    url: new URL('/v1/chat/completions', baseUrl),
+    url: new URL('v1/chat/completions', baseUrl),
     body,
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
+    headers,
   };
 }
 
@@ -3615,7 +3753,7 @@ function cleanOpenAiMessages(messages) {
       clean.content = m.content ?? null;
       if (m.tool_calls && m.tool_calls.length > 0) {
         clean.tool_calls = m.tool_calls;
-        if (INTELLIGENCE_PROVIDER === 'kimi-api') {
+        if (INTELLIGENCE_PROVIDER === 'kimi-api' || INTELLIGENCE_PROVIDER === 'kimi-code-api' || INTELLIGENCE_PROVIDER === 'deepseek-api') {
           clean.reasoning_content = m.reasoning_content ?? '';
         }
       }
@@ -3736,7 +3874,6 @@ function sendProviderRequest({ url, body, headers }, settings = {}) {
         port: url.port || (isHttps ? 443 : 80),
         path: url.pathname + url.search,
         method: 'POST',
-        signal: settings.abortSignal,
         headers: {
           ...headers,
           'Content-Length': Buffer.byteLength(serializedBody),
@@ -3762,9 +3899,14 @@ function sendProviderRequest({ url, body, headers }, settings = {}) {
             reject(new Error(`Invalid JSON from API: ${data.slice(0, 200)}`));
           }
         });
+        res.on('error', (error) => {
+          reject(isAbortError(error) ? new Error('agent_cli_interrupt_requested') : error);
+        });
       }
     );
-    req.on('error', reject);
+    req.on('error', (error) => {
+      reject(isAbortError(error) ? new Error('agent_cli_interrupt_requested') : error);
+    });
     settings.abortSignal?.addEventListener('abort', () => {
       req.destroy(new Error('agent_cli_interrupt_requested'));
     }, { once: true });
@@ -4256,7 +4398,7 @@ function createTerminalStyle({ enabled = true } = {}) {
     prompt: (text) => color('1;32', text),
     progress: (text) => color('2;33', text),
     warn: (text) => color('33', text),
-    error: (text) => color('31', text),
+    error: (text) => color('38;5;167', text),
   };
 }
 
@@ -4366,6 +4508,22 @@ function printCliMessage(text) {
     labelStyle: terminalStyle.tool,
     bodyStyle: (value) => value,
   });
+}
+
+function copyToClipboard(text, spawnSyncFn = spawnSync, platform = process.platform) {
+  try {
+    let result;
+    if (platform === 'win32') {
+      result = spawnSyncFn('clip', [], { input: text, stdio: ['pipe', 'ignore', 'ignore'] });
+    } else if (platform === 'darwin') {
+      result = spawnSyncFn('pbcopy', [], { input: text, stdio: ['pipe', 'ignore', 'ignore'] });
+    } else {
+      result = spawnSyncFn('xclip', ['-selection', 'clipboard'], { input: text, stdio: ['pipe', 'ignore', 'ignore'] });
+    }
+    return !result?.error && (result?.status == null || result.status === 0);
+  } catch {
+    return false;
+  }
 }
 
 function printHostCommandResult(result = {}) {
@@ -4564,6 +4722,10 @@ function formatToolResultContent(content) {
     const parsed = JSON.parse(text);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const keys = Object.keys(parsed);
+      // If the JSON is compact enough, show it inline so operators and the AI can actually read it.
+      const compact = JSON.stringify(parsed);
+      if (compact.length <= 240) return compact;
+
       const status = typeof parsed.status === 'string' ? `${parsed.status}` : null;
       const schema = typeof parsed.schema === 'string' ? parsed.schema : null;
       const count = typeof parsed.directive_count === 'number'
@@ -4571,16 +4733,22 @@ function formatToolResultContent(content) {
         : typeof parsed.directiveCount === 'number'
           ? `directives=${parsed.directiveCount}`
           : null;
+      const outputRef = typeof parsed.output_ref === 'string' ? `output_ref=${parsed.output_ref}` : null;
+      const readerTool = typeof parsed.reader_tool === 'string' ? `reader_tool=${parsed.reader_tool}` : null;
+      const error = typeof parsed.error === 'string' ? `error=${parsed.error}` : null;
       const shownKeys = keys.slice(0, 8);
       const keySummary = shownKeys.length
         ? `keys: ${shownKeys.join(', ')}${keys.length > shownKeys.length ? ', ...' : ''}`
         : null;
       return [
-        [status, schema, count].filter(Boolean).join(' · '),
+        [status, schema, count, outputRef, readerTool, error].filter(Boolean).join(' · '),
         keySummary,
       ].filter(Boolean).join('\n');
     }
-    if (Array.isArray(parsed)) return `array(${parsed.length})`;
+    if (Array.isArray(parsed)) {
+      const compact = JSON.stringify(parsed);
+      return compact.length <= 240 ? compact : `array(${parsed.length})`;
+    }
   } catch {
     // Fall through to text summary.
   }
@@ -4641,15 +4809,45 @@ function question(rl, prompt) {
     }
     const onClose = () => resolve('__READLINE_CLOSED__');
     rl.once('close', onClose);
-    try {
-      rl.question(prompt, (answer) => {
-        rl.removeListener('close', onClose);
-        resolve(answer);
-      });
-    } catch {
+    rl.setPrompt(prompt);
+    rl.prompt();
+
+    let accumulated = '';
+    let lastLineTime = 0;
+    let settleTimer = null;
+    let completed = false;
+
+    const cleanup = () => {
+      completed = true;
+      clearTimeout(settleTimer);
+      rl.removeListener('line', onLine);
       rl.removeListener('close', onClose);
-      resolve('__READLINE_CLOSED__');
-    }
+    };
+
+    const commit = () => {
+      if (completed) return;
+      cleanup();
+      resolve(accumulated.trimEnd());
+    };
+
+    const onLine = (line) => {
+      const now = performance.now();
+      const gap = lastLineTime ? now - lastLineTime : Infinity;
+      lastLineTime = now;
+
+      accumulated += (accumulated ? '\n' : '') + line;
+      clearTimeout(settleTimer);
+
+      if (gap < 25) {
+        settleTimer = setTimeout(commit, 60);
+      } else if (accumulated.includes('\n')) {
+        settleTimer = setTimeout(commit, 60);
+      } else {
+        settleTimer = setTimeout(commit, 10);
+      }
+    };
+
+    rl.on('line', onLine);
   });
 }
 
@@ -4820,6 +5018,7 @@ export {
   printAgentMessage,
   printHostCommandResult,
   printCliMessage,
+  copyToClipboard,
   printInputRecord,
   printOperatorMessage,
   printInlineEvent,

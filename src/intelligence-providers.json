@@ -30,6 +30,16 @@
       "model_env_names": ["NARADA_KIMI_MODEL", "NARADA_AI_MODEL"],
       "credential_env_names": ["NARADA_KIMI_API_KEY", "NARADA_AI_API_KEY"]
     },
+    "kimi-code-api": {
+      "meaning": "Kimi Code API via OpenAI-compatible chat completions; uses KIMI_CODE_API_KEY against api.kimi.com/coding/v1.",
+      "base_url": "https://api.kimi.com/coding/",
+      "default_model": "kimi-k2.6",
+      "adapter_kind": "openai-compatible-chat-completions",
+      "support_state": "verified_supported",
+      "base_url_env_names": ["NARADA_KIMI_CODE_API_BASE_URL", "NARADA_AI_BASE_URL"],
+      "model_env_names": ["NARADA_KIMI_CODE_MODEL", "NARADA_AI_MODEL"],
+      "credential_env_names": ["KIMI_CODE_API_KEY", "NARADA_AI_API_KEY"]
+    },
     "anthropic-api": {
       "meaning": "Anthropic API via the Anthropic Messages API.",
       "base_url": "https://api.anthropic.com",

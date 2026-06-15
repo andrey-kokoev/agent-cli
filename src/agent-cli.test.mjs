@@ -27,6 +27,7 @@ import {
   codexExecMcpToolEventSummary,
   buildOpenAiChatRequest,
   codexExecEventText,
+  copyToClipboard,
   consumeOperatorDirectiveInputText,
   createCarrierDirectiveEmitter,
   createInputQueue,
@@ -579,8 +580,11 @@ assert.equal(createTerminalStyle({ enabled: true }).prompt('narada> ').includes(
 assert.equal(stripAnsiForTest(styleInputRouteLabel('operator -> narada.architect')), 'operator -> narada.architect');
 assert.equal(styleInputRouteLabel('operator -> narada.architect').includes('\x1b[1;32moperator\x1b[0m'), true);
 assert.equal(styleInputRouteLabel('operator -> narada.architect').includes('\x1b[1;36mnarada.architect\x1b[0m'), true);
-assert.equal(formatToolResultContent('{"status":"success","schema":"narada.test.v1","directive_count":2,"extra":true}'), 'success · narada.test.v1 · directives=2\nkeys: status, schema, directive_count, extra');
-assert.equal(formatToolResultContent({ content: [{ type: 'text', text: 'ok' }] }), 'keys: content');
+assert.equal(formatToolResultContent('{"status":"success","schema":"narada.test.v1","directive_count":2,"extra":true}'), '{"status":"success","schema":"narada.test.v1","directive_count":2,"extra":true}');
+assert.equal(formatToolResultContent({ content: [{ type: 'text', text: 'ok' }] }), '{"content":[{"type":"text","text":"ok"}]}');
+assert.equal(copyToClipboard('hello', () => ({ status: 0 }), 'win32'), true);
+assert.equal(copyToClipboard('hello', () => ({ status: 1 }), 'win32'), false);
+assert.equal(copyToClipboard('hello', () => ({ error: new Error('missing') }), 'linux'), false);
 assert.equal(formatKeyValueRows({ A: 1, Longer: 'two' }), 'A       1\nLonger  two');
 assert.equal(formatDuration(1250), '1s');
 assert.equal(formatDuration(65000), '1m 5s');
@@ -723,6 +727,7 @@ rmSync(tempDir, { recursive: true, force: true });
 const expectedAdapters = {
   'openai-api': 'openai-compatible-chat-completions',
   'kimi-api': 'openai-compatible-chat-completions',
+  'kimi-code-api': 'openai-compatible-chat-completions',
   'anthropic-api': 'anthropic-messages',
   'codex-subscription': 'codex-mcp-server',
 };
@@ -1144,6 +1149,21 @@ assert.equal(printedGoalMessages.some((message) => message.includes('Carrier ses
 assert.equal(printedGoalMessages.some((message) => message.includes('Carrier session goal paused: finish cross-carrier command')), true);
 assert.equal(printedGoalMessages.some((message) => message.includes('Carrier session goal resumed: finish cross-carrier command')), true);
 assert.equal(printedGoalMessages.some((message) => message.includes('Current goal (active): finish cross-carrier command')), true);
+process.stdout.write = (value = '') => { printedGoalMessages.push(stripAnsiForTest(String(value))); return true; };
+try {
+  assert.deepEqual(await handleSlashCommand('/goal execute this goal', {
+    mcpServers: {},
+    allTools: [],
+    carrierSessionSettings: goalSettings,
+    executeGoalOnSet: true,
+  }), {
+    action: 'dispatch_goal',
+    content: 'execute this goal',
+    goal: { value: 'execute this goal', status: 'active' },
+  });
+} finally {
+  process.stdout.write = originalSlashStdoutWrite;
+}
 const printedToolsMessages = [];
 const toolsFixtureServers = {
   'local-filesystem': {
@@ -1366,6 +1386,38 @@ const interruptedResult = await runConversationTurn(
 assert.equal(interruptedResult.terminal_state, 'interrupted');
 assert.equal(emitted.some((event) => event.event === 'turn_interrupted' && event.turn_id === 'turn_interrupt'), true);
 assert.equal(interruptedAbortController.signal.aborted, true);
+
+// MCP tool call should respect abort signal
+const mcpAbortController = new AbortController();
+const mcpAbortTurn = {
+  turnId: 'turn_mcp_abort',
+  interruptRequested: false,
+  abortSignal: mcpAbortController.signal,
+  requestInterrupt() {
+    this.interruptRequested = true;
+    mcpAbortController.abort(new Error('agent_cli_interrupt_requested'));
+  },
+};
+const mcpAbortStart = Date.now();
+setTimeout(() => mcpAbortTurn.requestInterrupt(), 20);
+const mcpAbortResult = await executeMcpTool(
+  { id: 'call_abort', type: 'function', function: { name: 'fs_read_file', arguments: '{}' } },
+  {
+    fixture: {
+      tools: [{ name: 'fs_read_file' }],
+      send: async (_req, _timeoutMs, _timeoutCode, abortSignal) => new Promise((_resolve, rejectDelay) => {
+        abortSignal?.addEventListener('abort', () => rejectDelay(new Error('agent_cli_interrupt_requested')), { once: true });
+        setTimeout(() => _resolve({ result: { content: [{ text: 'late' }] } }), 200);
+      }),
+      config: {},
+    },
+  },
+  null,
+  { turn: mcpAbortTurn, turnId: 'turn_mcp_abort' },
+);
+assert.equal(Date.now() - mcpAbortStart < 100, true, 'MCP tool abort should resolve quickly, not wait for timeout');
+const mcpAbortContent = JSON.parse(mcpAbortResult.content);
+assert.equal(mcpAbortContent.error, 'agent_cli_interrupt_requested');
 
 const admissionEvents = [];
 let mutatingToolSendCalled = false;
@@ -1723,6 +1775,63 @@ try {
 } finally {
   await Promise.all(Object.values(discoveredServers).map((server) => stopChildProcess(server.process)));
   rmSync(discoveredSite, { recursive: true, force: true });
+}
+
+const resetAfterTimeoutSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-mcp-reset-after-timeout-'));
+mkdirSync(join(resetAfterTimeoutSite, '.ai', 'mcp'), { recursive: true });
+const resetAfterTimeoutServerPath = join(resetAfterTimeoutSite, 'reset-after-timeout-mcp-server.mjs');
+writeFileSync(resetAfterTimeoutServerPath, `
+import readline from 'node:readline';
+const rl = readline.createInterface({ input: process.stdin });
+rl.on('line', (line) => {
+  const request = JSON.parse(line);
+  if (request.method === 'initialize') {
+    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05' } }));
+    return;
+  }
+  if (request.method === 'tools/list') {
+    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { tools: [
+      { name: 'fs_stat', description: 'stat', inputSchema: { type: 'object', properties: { path: { type: 'string' } } } }
+    ] } }));
+  }
+});
+setInterval(() => {}, 1000);
+`, 'utf8');
+writeFileSync(join(resetAfterTimeoutSite, '.ai', 'mcp', 'reset-after-timeout-mcp.json'), `${JSON.stringify({
+  mcpServers: {
+    reset: {
+      transport: 'stdio',
+      command: 'node',
+      args: [resetAfterTimeoutServerPath],
+    },
+  },
+}, null, 2)}\n`, 'utf8');
+const resetServers = await discoverAndStartMcpServers(resetAfterTimeoutSite);
+try {
+  await assert.rejects(
+    () => resetServers.reset.send({
+      jsonrpc: '2.0',
+      id: 'call_reset_timeout',
+      method: 'tools/call',
+      params: { name: 'fs_stat', arguments: { path: 'decks/customer-data-analysis/node_modules' } },
+    }, 20),
+    /MCP request timeout after 20ms/,
+  );
+  assert.equal(resetServers.reset.process.stdin.emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })), true);
+  const afterReset = await executeMcpTool(
+    {
+      id: 'call_after_reset',
+      type: 'function',
+      function: { name: 'fs_stat', arguments: '{"path":"package.json"}' },
+    },
+    resetServers,
+    null,
+    { turnId: 'turn_after_reset' },
+  );
+  assert.equal(JSON.parse(afterReset.content).error, 'read ECONNRESET');
+} finally {
+  await Promise.all(Object.values(resetServers).map((server) => stopChildProcess(server.process)));
+  rmSync(resetAfterTimeoutSite, { recursive: true, force: true });
 }
 
 const serverSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-server-'));
