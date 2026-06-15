@@ -1338,6 +1338,19 @@ async function runSessionInventoryEvents({ siteRoot = SITE_ROOT, naradaDir = NAR
   return 0;
 }
 
+function createSessionRecoveryPayload(sessionRecord) {
+  if (!sessionRecord) return null;
+  return {
+    recovery_kind: sessionRecord.recovery_kind,
+    recovery_kind_display: sessionRecord.recovery_kind_display,
+    recovery_primary_command: sessionRecord.recovery_primary_command,
+    recovery_followup_command: sessionRecord.recovery_followup_command,
+    recommended_action: sessionRecord.recommended_action,
+    recommended_action_display: sessionRecord.recommended_action_display,
+    recommended_command: sessionRecord.recommended_command,
+  };
+}
+
 async function runSessionRecovery({ session = SESSION, siteRoot = SITE_ROOT, naradaDir = NARADA_DIR, jsonOutput = false } = {}) {
   const sessionRecord = readPersistedSession({ session, siteRoot, naradaDir });
   if (!sessionRecord) {
@@ -1363,15 +1376,7 @@ async function runSessionRecovery({ session = SESSION, siteRoot = SITE_ROOT, nar
       site_root: siteRoot,
       session,
       found: true,
-      recovery: {
-        recovery_kind: sessionRecord.recovery_kind,
-        recovery_kind_display: sessionRecord.recovery_kind_display,
-        recovery_primary_command: sessionRecord.recovery_primary_command,
-        recovery_followup_command: sessionRecord.recovery_followup_command,
-        recommended_action: sessionRecord.recommended_action,
-        recommended_action_display: sessionRecord.recommended_action_display,
-        recommended_command: sessionRecord.recommended_command,
-      },
+      recovery: createSessionRecoveryPayload(sessionRecord),
       record: sessionRecord,
     }, null, 2)}\n`);
     return 0;
@@ -1433,6 +1438,7 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
       event_count: filteredEvents.length,
       total_event_count: events.length,
       recent_events: recentEvents,
+      recovery: createSessionRecoveryPayload(sessionRecord),
       record: sessionRecord,
     }, null, 2)}\n`);
     return 0;
@@ -1449,6 +1455,9 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
     'Request posture': sessionRecord.request_posture_display,
     'Lifecycle outcomes': sessionRecord.lifecycle_state_summary,
     'Request issues': sessionRecord.request_issue_summary,
+    'Recovery kind': sessionRecord.recovery_kind_display ?? 'none',
+    'Recovery primary': sessionRecord.recovery_primary_command ?? 'none',
+    'Recovery followup': sessionRecord.recovery_followup_command ?? 'none',
     'Recommended action': sessionRecord.recommended_action_display,
     'Recommended command': sessionRecord.recommended_command ?? 'none',
     'Session recovery': sessionRecord?.handoffs?.session_recovery ?? 'none',
@@ -1489,6 +1498,7 @@ async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaD
       site_root: siteRoot,
       session,
       found: true,
+      recovery: createSessionRecoveryPayload(sessionRecord),
       record: sessionRecord,
     }, null, 2)}\n`);
     return 0;
@@ -1516,6 +1526,9 @@ async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaD
     'MCP startup failures': sessionRecord.mcp_startup_failure_summary,
     'MCP runtime faults': sessionRecord.mcp_runtime_fault_summary,
     'Preflight artifact': sessionRecord.mcp_preflight_artifact_path ?? 'none',
+    'Recovery kind': sessionRecord.recovery_kind_display ?? 'none',
+    'Recovery primary': sessionRecord.recovery_primary_command ?? 'none',
+    'Recovery followup': sessionRecord.recovery_followup_command ?? 'none',
     'Recommended action': sessionRecord.recommended_action_display,
     'Recommended command': sessionRecord.recommended_command ?? 'none',
     'Session recovery': sessionRecord?.handoffs?.session_recovery ?? 'none',

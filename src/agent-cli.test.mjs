@@ -1311,6 +1311,10 @@ assert.equal(sessionReadRun.stdout.includes('mcp_runtime_faulted [mcp=runtime_fa
 assert.equal(sessionReadRun.stdout.includes('runtime_failures (4)'), true);
 assert.equal(sessionReadRun.stdout.includes('failed'), true);
 assert.equal(sessionReadRun.stdout.includes('1 (invalid_json), 1 (request_dispatch_failed), 1 (request_failed), 1 (session_closed)'), true);
+assert.equal(sessionReadRun.stdout.includes('Recovery kind'), true);
+assert.equal(sessionReadRun.stdout.includes('diagnostic review'), true);
+assert.equal(sessionReadRun.stdout.includes('Recovery primary'), true);
+assert.equal(sessionReadRun.stdout.includes('Recovery followup'), true);
 assert.equal(sessionReadRun.stdout.includes('review runtime diagnostics'), true);
 assert.equal(sessionReadRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20'), true);
 assert.equal(sessionReadRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-recovery'), true);
@@ -1376,6 +1380,9 @@ assert.equal(sessionReadJson.site_root, inventoryRoot);
 assert.equal(sessionReadJson.session, 'healthy-session');
 assert.equal(sessionReadJson.found, true);
 assert.equal(sessionReadJson.record.session, 'healthy-session');
+assert.equal(sessionReadJson.recovery.recovery_kind, 'no_recovery');
+assert.equal(sessionReadJson.recovery.recovery_primary_command, 'narada-agent-cli --identity narada.test --session healthy-session --session-read');
+assert.equal(sessionReadJson.recovery.recovery_followup_command, null);
 assert.equal(sessionReadJson.record.operational_posture, 'healthy');
 assert.equal(sessionReadJson.record.last_lifecycle_state, 'closed');
 assert.equal(sessionReadJson.record.request_posture, 'clean');
@@ -1402,6 +1409,9 @@ const sessionEventsRun = spawnSync(process.execPath, [
 });
 assert.equal(sessionEventsRun.status, 0);
 assert.equal(sessionEventsRun.stdout.includes('Event count'), true);
+assert.equal(sessionEventsRun.stdout.includes('Recovery kind'), true);
+assert.equal(sessionEventsRun.stdout.includes('Recovery primary'), true);
+assert.equal(sessionEventsRun.stdout.includes('Recovery followup'), true);
 assert.equal(sessionEventsRun.stdout.includes('Recent events:'), true);
 assert.equal(sessionEventsRun.stdout.includes('carrier_diagnostic_recorded'), true);
 assert.equal(sessionEventsRun.stdout.includes('input_completed [terminal=failed]'), true);
@@ -1428,6 +1438,9 @@ const sessionEventsLifecycleJson = JSON.parse(sessionEventsLifecycleJsonRun.stdo
 assert.equal(sessionEventsLifecycleJson.event_filter, 'lifecycle');
 assert.equal(sessionEventsLifecycleJson.event_count, 1);
 assert.equal(sessionEventsLifecycleJson.total_event_count, 7);
+assert.equal(sessionEventsLifecycleJson.recovery.recovery_kind, 'diagnostic_review');
+assert.equal(sessionEventsLifecycleJson.recovery.recovery_primary_command, 'narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20');
+assert.equal(sessionEventsLifecycleJson.recovery.recovery_followup_command, 'narada-agent-cli --identity narada.test --session faulted-session --session-read');
 assert.equal(sessionEventsLifecycleJson.recent_events.length, 1);
 assert.equal(sessionEventsLifecycleJson.recent_events[0].event_kind, 'input_completed');
 const sessionEventsIssuesRun = spawnSync(process.execPath, [
