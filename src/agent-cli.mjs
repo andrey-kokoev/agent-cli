@@ -631,6 +631,7 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
     'MCP states': inventoryRollup.mcp_operational_state_summary,
     'Terminal states': inventoryRollup.last_terminal_state_summary,
     'Lifecycle states': inventoryRollup.last_lifecycle_state_summary,
+    'Lifecycle outcomes': inventoryRollup.lifecycle_outcome_summary,
   };
   if (inventory.length === 0) {
     summary.Status = 'no persisted carrier sessions';
@@ -714,11 +715,13 @@ function summarizeSessionInventoryRollup(inventory = []) {
   const mcpStateCounts = {};
   const terminalStateCounts = {};
   const lifecycleStateCounts = {};
+  const lifecycleOutcomeCounts = {};
   for (const item of inventory) {
     incrementInventoryCounter(heartbeatCounts, item?.heartbeat_status ?? 'unknown');
     incrementInventoryCounter(mcpStateCounts, item?.mcp_operational_state ?? 'unknown');
     incrementInventoryCounter(terminalStateCounts, item?.last_terminal_state ?? 'unknown');
     incrementInventoryCounter(lifecycleStateCounts, item?.last_lifecycle_state ?? 'unknown');
+    mergeInventoryCounts(lifecycleOutcomeCounts, item?.lifecycle_state_counts ?? null);
   }
   return {
     heartbeat_status_counts: heartbeatCounts,
@@ -729,11 +732,20 @@ function summarizeSessionInventoryRollup(inventory = []) {
     last_terminal_state_summary: formatInventoryCounts(terminalStateCounts),
     last_lifecycle_state_counts: lifecycleStateCounts,
     last_lifecycle_state_summary: formatInventoryCounts(lifecycleStateCounts),
+    lifecycle_outcome_counts: lifecycleOutcomeCounts,
+    lifecycle_outcome_summary: formatInventoryCounts(lifecycleOutcomeCounts),
   };
 }
 
 function incrementInventoryCounter(counts, key) {
   counts[key] = (counts[key] ?? 0) + 1;
+}
+
+function mergeInventoryCounts(targetCounts, sourceCounts) {
+  if (!sourceCounts || typeof sourceCounts !== 'object') return;
+  for (const [key, count] of Object.entries(sourceCounts)) {
+    targetCounts[key] = (targetCounts[key] ?? 0) + Number(count ?? 0);
+  }
 }
 
 function formatInventoryCounts(counts) {
@@ -762,6 +774,7 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
   const startupFailures = [];
   const runtimeDiagnostics = [];
   let linkedPreflight = null;
+  const lifecycleStateCounts = {};
   let lastEventKind = null;
   let lastEventAt = null;
   let lastTerminalState = null;
@@ -776,6 +789,7 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     const lifecycleOccurredAt = entry?.timestamp ?? entry?.occurred_at ?? entry?.payload?.occurred_at ?? entry?.payload?.created_at ?? null;
     const lifecycleState = classifyPersistedSessionLifecycleState(entry);
     if (lifecycleState) {
+      incrementInventoryCounter(lifecycleStateCounts, lifecycleState);
       lastLifecycleEventKind = lifecycleEventKind ?? lastLifecycleEventKind;
       lastLifecycleAt = lifecycleOccurredAt ?? lastLifecycleAt;
       lastLifecycleState = lifecycleState;
@@ -822,6 +836,8 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     last_lifecycle_event_kind: lastLifecycleEventKind,
     last_lifecycle_at: lastLifecycleAt,
     last_lifecycle_state: lastLifecycleState,
+    lifecycle_state_counts: lifecycleStateCounts,
+    lifecycle_state_summary: formatInventoryCounts(lifecycleStateCounts),
     mcp_operational_state: mcpOperationalState,
     mcp_startup_failure_summary: startupFailures.length > 0
       ? formatMcpStartupFailureSummary(startupFailures)
