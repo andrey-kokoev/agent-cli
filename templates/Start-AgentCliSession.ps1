@@ -20,6 +20,8 @@ param(
 
     [switch]$SessionInventoryJson,
 
+    [switch]$McpPreflightJson,
+
     [switch]$AutoApprove
 )
 
@@ -225,6 +227,12 @@ if ($SessionInventory) {
 if ($SessionInventoryJson) {
     Set-Location $WorkDir
     & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-inventory-json'
+    exit $LASTEXITCODE
+}
+
+if ($McpPreflightJson) {
+    Set-Location $WorkDir
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-json'
     exit $LASTEXITCODE
 }
 

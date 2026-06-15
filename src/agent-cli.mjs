@@ -87,6 +87,7 @@ const AUTO_APPROVE = true;
 const PROGRAMMATIC_INPUTS = buildProgrammaticInputs(options);
 const EXIT_AFTER_PROGRAMMATIC_INPUT = PROGRAMMATIC_INPUTS.length > 0 && options.interactiveAfterMessage !== true;
 const MCP_PREFLIGHT_MODE = options.mcpPreflight === true;
+const MCP_PREFLIGHT_JSON_MODE = options.mcpPreflightJson === true;
 const SESSION_INVENTORY_MODE = options.sessionInventory === true;
 const SESSION_INVENTORY_JSON_MODE = options.sessionInventoryJson === true;
 const SERVER_MODE = options.server === true;
@@ -359,11 +360,11 @@ const NARADA_DIR = basename(SITE_ROOT) === '.narada' ? SITE_ROOT : join(SITE_ROO
 const SESSION_DIR = SERVER_MODE
   ? join(NARADA_DIR, 'crew', 'nars-sessions', SESSION)
   : (existsSync(PC_RUNTIME) ? join(PC_RUNTIME, 'agent-sessions') : resolve(SITE_ROOT, '.ai', 'runtime', 'agent-sessions'));
-if (!MCP_PREFLIGHT_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
 const SESSION_PATH = SERVER_MODE ? join(SESSION_DIR, 'session.jsonl') : join(SESSION_DIR, `${SESSION}.jsonl`);
 const EVENTS_PATH = join(SESSION_DIR, 'events.jsonl');
 const CARRIER_SESSION_DIR = join(NARADA_DIR, 'crew', 'nars-sessions', SESSION);
-if (!MCP_PREFLIGHT_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
 const HEARTBEAT_PATH = join(CARRIER_SESSION_DIR, 'heartbeat.json');
 const MCP_PREFLIGHT_ARTIFACT_DIR = join(NARADA_DIR, 'runtime', 'agent-cli', 'mcp-preflight');
 const HEARTBEAT_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_HEARTBEAT_ENABLE, true);
@@ -381,6 +382,10 @@ let activeOperationHeartbeatDirectiveEmitter = null;
 async function main() {
   if (MCP_PREFLIGHT_MODE) {
     process.exitCode = await runMcpPreflight();
+    return;
+  }
+  if (MCP_PREFLIGHT_JSON_MODE) {
+    process.exitCode = await runMcpPreflight({ jsonOutput: true });
     return;
   }
   if (SESSION_INVENTORY_MODE) {
@@ -563,7 +568,7 @@ async function main() {
   printHeader('Session saved. Goodbye.', { before: true });
 }
 
-async function runMcpPreflight() {
+async function runMcpPreflight({ jsonOutput = false } = {}) {
   const mcpServers = await discoverAndStartMcpServers(SITE_ROOT);
   try {
     const allTools = aggregateTools(mcpServers);
@@ -576,17 +581,30 @@ async function runMcpPreflight() {
       mcpServers,
       allTools,
     });
-    console.log(formatKeyValueRows({
-      Identity: IDENTITY,
-      Session: SESSION,
-      SiteRoot: SITE_ROOT,
-      'MCP servers': Object.keys(mcpServers).length,
-      'MCP state': mcpStatus.mcp_operational_state,
-      ...(mcpStatus.mcp_startup_failure_count > 0 ? { 'MCP startup failures': mcpStatus.mcp_startup_failure_summary } : {}),
-      ...(mcpStatus.mcp_runtime_fault_count > 0 ? { 'MCP runtime faults': mcpStatus.mcp_runtime_fault_summary } : {}),
-      Tools: allTools.length,
-      Artifact: artifactPath,
-    }));
+    if (jsonOutput) {
+      console.log(`${JSON.stringify({
+        schema: 'narada.agent_cli.mcp_preflight.v1',
+        identity: IDENTITY,
+        session: SESSION,
+        site_root: SITE_ROOT,
+        mcp_server_count: Object.keys(mcpServers).length,
+        tool_count: allTools.length,
+        artifact_path: artifactPath,
+        ...mcpStatus,
+      }, null, 2)}\n`);
+    } else {
+      console.log(formatKeyValueRows({
+        Identity: IDENTITY,
+        Session: SESSION,
+        SiteRoot: SITE_ROOT,
+        'MCP servers': Object.keys(mcpServers).length,
+        'MCP state': mcpStatus.mcp_operational_state,
+        ...(mcpStatus.mcp_startup_failure_count > 0 ? { 'MCP startup failures': mcpStatus.mcp_startup_failure_summary } : {}),
+        ...(mcpStatus.mcp_runtime_fault_count > 0 ? { 'MCP runtime faults': mcpStatus.mcp_runtime_fault_summary } : {}),
+        Tools: allTools.length,
+        Artifact: artifactPath,
+      }));
+    }
     return mcpStatus.mcp_operational_state === 'healthy' ? 0 : 2;
   } finally {
     closeMcpServers(mcpServers);
@@ -5370,6 +5388,8 @@ function parseArgs(argv) {
       opts.server = true;
     } else if (argv[i] === '--mcp-preflight') {
       opts.mcpPreflight = true;
+    } else if (argv[i] === '--mcp-preflight-json') {
+      opts.mcpPreflightJson = true;
     } else if (argv[i] === '--session-inventory') {
       opts.sessionInventory = true;
     } else if (argv[i] === '--session-inventory-json') {

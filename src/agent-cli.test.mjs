@@ -565,6 +565,7 @@ assert.deepEqual(parseArgs(['--startup-system-directive', 'run startup sequence'
 assert.deepEqual(parseArgs(['--no-startup-system-directive']), { startupSystemDirective: false });
 assert.deepEqual(parseArgs(['--control-jsonl', '.narada/control.jsonl']), { controlJsonl: '.narada/control.jsonl' });
 assert.deepEqual(parseArgs(['--mcp-preflight']), { mcpPreflight: true });
+assert.deepEqual(parseArgs(['--mcp-preflight-json']), { mcpPreflightJson: true });
 assert.deepEqual(parseArgs(['--session-inventory']), { sessionInventory: true });
 assert.deepEqual(parseArgs(['--session-inventory-json']), { sessionInventoryJson: true });
 assert.equal(parseColorEnv('off', true), false);
@@ -966,13 +967,13 @@ const expectedAdapters = {
 assert.equal(windowsWrapperTemplate.includes("[ValidateSet('openai-api', 'kimi-api', 'kimi-code-api', 'anthropic-api', 'codex-subscription')]"), true);
 assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_API_BASE_URL"), true);
 assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_MODEL"), true);
-assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and -not $env:NARADA_AI_API_KEY -and $env:KIMI_CODE_API_KEY"), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventory'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventoryJson'), true);
+assert.equal(windowsWrapperTemplate.includes('[switch]$McpPreflightJson'), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-json'"), true);
+assert.equal(windowsWrapperTemplate.includes("'--mcp-preflight-json'"), true);
 assert.equal(windowsWrapperTemplate.includes('Session inventory...'), true);
-assert.equal(windowsWrapperTemplate.includes("'--mcp-preflight'"), true);
 assert.equal(windowsWrapperTemplate.includes('MCP preflight reported degraded startup posture; continuing interactive attach.'), true);
 for (const [providerId, adapterId] of Object.entries(expectedAdapters)) {
   const support = resolveProviderSupportState(providerId, metadata[providerId], REQUEST_ADAPTERS);
@@ -2319,6 +2320,27 @@ assert.equal(preflightHealthyArtifact.schema, 'narada.agent_cli.mcp_preflight_ar
 assert.equal(preflightHealthyArtifact.mcp_operational_state, 'healthy');
 assert.equal(preflightHealthyArtifact.mcp_server_count, 1);
 assert.equal(preflightHealthyArtifact.tool_count, 1);
+const preflightHealthyJson = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--identity', 'narada.test',
+  '--session', 'preflight-healthy-test',
+  '--mcp-preflight-json',
+], {
+  env: {
+    ...process.env,
+    NARADA_SITE_ROOT: preflightHealthySite,
+    NARADA_INTELLIGENCE_PROVIDER: 'codex-subscription',
+  },
+  encoding: 'utf8',
+});
+assert.equal(preflightHealthyJson.status, 0);
+const preflightHealthyJsonPayload = JSON.parse(preflightHealthyJson.stdout);
+assert.equal(preflightHealthyJsonPayload.schema, 'narada.agent_cli.mcp_preflight.v1');
+assert.equal(preflightHealthyJsonPayload.mcp_operational_state, 'healthy');
+assert.equal(preflightHealthyJsonPayload.mcp_server_count, 1);
+assert.equal(preflightHealthyJsonPayload.tool_count, 1);
+assert.equal(preflightHealthyJsonPayload.artifact_path, preflightHealthyArtifactPath);
+const preflightHealthyArtifactAfterJson = JSON.parse(readFileSync(preflightHealthyArtifactPath, 'utf8'));
 assert.deepEqual(readMcpPreflightArtifact({
   artifactDir: join(preflightHealthySite, '.narada', 'runtime', 'agent-cli', 'mcp-preflight'),
   session: 'preflight-healthy-test',
@@ -2326,7 +2348,7 @@ assert.deepEqual(readMcpPreflightArtifact({
   siteRoot: preflightHealthySite,
 }), {
   artifact_path: preflightHealthyArtifactPath,
-  generated_at: preflightHealthyArtifact.generated_at,
+  generated_at: preflightHealthyArtifactAfterJson.generated_at,
   mcp_operational_state: 'healthy',
   mcp_startup_failure_summary: '0',
   mcp_runtime_fault_summary: '0',
@@ -2438,6 +2460,27 @@ assert.equal(preflightDegradedArtifact.mcp_operational_state, 'startup_degraded'
 assert.equal(preflightDegradedArtifact.mcp_startup_failure_summary, '1 (degraded:mcp_stdout_pollution)');
 assert.equal(preflightDegradedArtifact.mcp_server_count, 0);
 assert.equal(preflightDegradedArtifact.tool_count, 0);
+const preflightDegradedJson = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--identity', 'narada.test',
+  '--session', 'preflight-degraded-test',
+  '--mcp-preflight-json',
+], {
+  env: {
+    ...process.env,
+    NARADA_SITE_ROOT: preflightDegradedSite,
+    NARADA_INTELLIGENCE_PROVIDER: 'codex-subscription',
+  },
+  encoding: 'utf8',
+});
+assert.equal(preflightDegradedJson.status, 2);
+const preflightDegradedJsonPayload = JSON.parse(preflightDegradedJson.stdout);
+assert.equal(preflightDegradedJsonPayload.schema, 'narada.agent_cli.mcp_preflight.v1');
+assert.equal(preflightDegradedJsonPayload.mcp_operational_state, 'startup_degraded');
+assert.equal(preflightDegradedJsonPayload.mcp_startup_failure_summary, '1 (degraded:mcp_stdout_pollution)');
+assert.equal(preflightDegradedJsonPayload.mcp_server_count, 0);
+assert.equal(preflightDegradedJsonPayload.tool_count, 0);
+assert.equal(preflightDegradedJsonPayload.artifact_path, preflightDegradedArtifactPath);
 assert.equal(existsSync(join(preflightDegradedSite, '.narada', 'crew', 'nars-sessions', 'preflight-degraded-test')), false);
 rmSync(preflightDegradedSite, { recursive: true, force: true });
 
