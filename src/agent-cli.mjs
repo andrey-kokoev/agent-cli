@@ -630,6 +630,7 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
     'Heartbeat states': inventoryRollup.heartbeat_status_summary,
     'MCP states': inventoryRollup.mcp_operational_state_summary,
     'Terminal states': inventoryRollup.last_terminal_state_summary,
+    'Lifecycle states': inventoryRollup.last_lifecycle_state_summary,
   };
   if (inventory.length === 0) {
     summary.Status = 'no persisted carrier sessions';
@@ -712,10 +713,12 @@ function summarizeSessionInventoryRollup(inventory = []) {
   const heartbeatCounts = {};
   const mcpStateCounts = {};
   const terminalStateCounts = {};
+  const lifecycleStateCounts = {};
   for (const item of inventory) {
     incrementInventoryCounter(heartbeatCounts, item?.heartbeat_status ?? 'unknown');
     incrementInventoryCounter(mcpStateCounts, item?.mcp_operational_state ?? 'unknown');
     incrementInventoryCounter(terminalStateCounts, item?.last_terminal_state ?? 'unknown');
+    incrementInventoryCounter(lifecycleStateCounts, item?.last_lifecycle_state ?? 'unknown');
   }
   return {
     heartbeat_status_counts: heartbeatCounts,
@@ -724,6 +727,8 @@ function summarizeSessionInventoryRollup(inventory = []) {
     mcp_operational_state_summary: formatInventoryCounts(mcpStateCounts),
     last_terminal_state_counts: terminalStateCounts,
     last_terminal_state_summary: formatInventoryCounts(terminalStateCounts),
+    last_lifecycle_state_counts: lifecycleStateCounts,
+    last_lifecycle_state_summary: formatInventoryCounts(lifecycleStateCounts),
   };
 }
 
@@ -740,6 +745,17 @@ function formatInventoryCounts(counts) {
     .join(', ');
 }
 
+function classifyPersistedSessionLifecycleState(entry) {
+  const eventKind = entry?.event ?? entry?.event_kind ?? null;
+  const terminalState = entry?.payload?.terminal_state ?? entry?.terminal_state ?? null;
+  if (eventKind === 'session_closed') return terminalState ?? 'closed';
+  if (eventKind === 'turn_failed') return terminalState ?? 'failed';
+  if (eventKind === 'turn_complete') return terminalState ?? 'completed';
+  if (eventKind === 'input_completed' || eventKind === 'input_event_completed') return terminalState ?? 'completed';
+  if (eventKind === 'interactive_loop_error') return 'interactive_loop_error';
+  return null;
+}
+
 function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, naradaDir = NARADA_DIR } = {}) {
   const heartbeat = readJsonFile(join(sessionDir, 'heartbeat.json'));
   const entries = readJsonlFile(join(sessionDir, 'session.jsonl'));
@@ -749,10 +765,21 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
   let lastEventKind = null;
   let lastEventAt = null;
   let lastTerminalState = null;
+  let lastLifecycleEventKind = null;
+  let lastLifecycleAt = null;
+  let lastLifecycleState = null;
   for (const entry of entries) {
     if (entry?.event === 'mcp_preflight_artifact_linked') linkedPreflight = entry;
     lastEventKind = entry?.event_kind ?? entry?.event ?? lastEventKind;
     lastEventAt = entry?.timestamp ?? entry?.occurred_at ?? entry?.payload?.occurred_at ?? entry?.payload?.created_at ?? lastEventAt;
+    const lifecycleEventKind = entry?.event ?? entry?.event_kind ?? null;
+    const lifecycleOccurredAt = entry?.timestamp ?? entry?.occurred_at ?? entry?.payload?.occurred_at ?? entry?.payload?.created_at ?? null;
+    const lifecycleState = classifyPersistedSessionLifecycleState(entry);
+    if (lifecycleState) {
+      lastLifecycleEventKind = lifecycleEventKind ?? lastLifecycleEventKind;
+      lastLifecycleAt = lifecycleOccurredAt ?? lastLifecycleAt;
+      lastLifecycleState = lifecycleState;
+    }
     if (entry?.event_kind === 'input_completed' || entry?.event === 'input_event_completed') {
       lastTerminalState = entry?.payload?.terminal_state ?? entry?.terminal_state ?? lastTerminalState;
     }
@@ -792,6 +819,9 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     last_event_kind: lastEventKind,
     last_event_at: lastEventAt,
     last_terminal_state: lastTerminalState,
+    last_lifecycle_event_kind: lastLifecycleEventKind,
+    last_lifecycle_at: lastLifecycleAt,
+    last_lifecycle_state: lastLifecycleState,
     mcp_operational_state: mcpOperationalState,
     mcp_startup_failure_summary: startupFailures.length > 0
       ? formatMcpStartupFailureSummary(startupFailures)
