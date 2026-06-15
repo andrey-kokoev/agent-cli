@@ -647,7 +647,7 @@ writeFileSync(join(inventorySessionsDir, 'healthy-session', 'session.jsonl'), `$
   mcp_operational_state: 'healthy',
   mcp_startup_failure_summary: '0',
   mcp_runtime_fault_summary: '0',
-}))}\n${JSON.stringify({ event_kind: 'input_completed', timestamp: '2026-06-14T12:00:01.000Z', payload: { terminal_state: 'completed' } })}\n${JSON.stringify({ event: 'session_closed', timestamp: '2026-06-14T12:00:05.000Z', request_id: 'close-healthy-1', terminal_state: 'closed' })}\n`, 'utf8');
+}))}\n${JSON.stringify({ event_kind: 'carrier_host_command_requested', timestamp: '2026-06-14T11:59:00.000Z', payload: { command_id: 'host_command_inventory_1', command_summary: 'git status' } })}\n${JSON.stringify({ event_kind: 'carrier_host_command_admitted', timestamp: '2026-06-14T11:59:01.000Z', payload: { command_id: 'host_command_inventory_1', command_summary: 'git status' } })}\n${JSON.stringify({ event_kind: 'carrier_host_command_started', timestamp: '2026-06-14T11:59:02.000Z', payload: { command_id: 'host_command_inventory_1', command_summary: 'git status' } })}\n${JSON.stringify({ event_kind: 'carrier_host_command_completed', timestamp: '2026-06-14T11:59:03.000Z', payload: { command_id: 'host_command_inventory_1', command_summary: 'git status', terminal_state: 'completed', output_ref: { payload_ref: 'mcp_payload:carrier_host_command_output:host_command_inventory_1@v1', reader_tool: 'carrier_host_command_output_read' } } })}\n${JSON.stringify({ event_kind: 'input_completed', timestamp: '2026-06-14T12:00:01.000Z', payload: { terminal_state: 'completed' } })}\n${JSON.stringify({ event: 'session_closed', timestamp: '2026-06-14T12:00:05.000Z', request_id: 'close-healthy-1', terminal_state: 'closed' })}\n`, 'utf8');
 writeFileSync(join(inventorySessionsDir, 'faulted-session', 'session.jsonl'), [
   JSON.stringify({
     event_kind: 'carrier_diagnostic_recorded',
@@ -719,7 +719,7 @@ assert.equal(inventoryEntries[0].runtime, 'agent-cli');
 assert.equal(inventoryEntries[0].mode, 'server');
 assert.equal(inventoryEntries[0].started_at, '2026-06-14T11:50:00.000Z');
 assert.equal(inventoryEntries[0].mcp_operational_state, 'healthy');
-assert.equal(inventoryEntries[0].session_event_count, 3);
+assert.equal(inventoryEntries[0].session_event_count, 7);
 assert.equal(inventoryEntries[0].last_event_kind, 'session_closed');
 assert.equal(inventoryEntries[0].last_event_at, '2026-06-14T12:00:05.000Z');
 assert.equal(inventoryEntries[0].last_terminal_state, 'completed');
@@ -733,6 +733,13 @@ assert.equal(inventoryEntries[0].lifecycle_state_summary, '1 (closed), 1 (comple
 assert.equal(inventoryEntries[0].request_outcome_total, 0);
 assert.equal(inventoryEntries[0].request_posture, 'clean');
 assert.equal(inventoryEntries[0].request_posture_display, 'clean');
+assert.equal(inventoryEntries[0].host_command_event_count, 4);
+assert.deepEqual(inventoryEntries[0].host_command_terminal_state_counts, { completed: 1 });
+assert.equal(inventoryEntries[0].host_command_terminal_state_summary, '1 (completed)');
+assert.equal(inventoryEntries[0].last_host_command_id, 'host_command_inventory_1');
+assert.equal(inventoryEntries[0].last_host_command_summary, 'git status');
+assert.equal(inventoryEntries[0].last_host_command_terminal_state, 'completed');
+assert.equal(inventoryEntries[0].last_host_command_output_ref, 'mcp_payload:carrier_host_command_output:host_command_inventory_1@v1');
 assert.equal(inventoryEntries[0].mcp_preflight_artifact_path, join(inventoryNaradaDir, 'runtime', 'agent-cli', 'mcp-preflight', 'healthy-session.json'));
 assert.equal(inventoryEntries[0].mcp_preflight_operational_state, 'healthy');
 assert.equal(inventoryEntries[0].mcp_preflight_recommended_action, 'start_session');
@@ -809,6 +816,7 @@ assert.equal(sessionInventoryRun.stdout.includes('Lifecycle outcomes'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Request posture'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Request outcomes'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Request issues'), true);
+assert.equal(sessionInventoryRun.stdout.includes('Host command states'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Recommended actions'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Recommended commands'), true);
 assert.equal(sessionInventoryRun.stdout.includes('Recovery primary commands'), true);
@@ -872,6 +880,8 @@ assert.deepEqual(sessionInventoryJson.summary, {
     session_closed: 1,
   },
   request_issue_summary: '1 (invalid_json), 1 (request_dispatch_failed), 1 (request_failed), 1 (session_closed)',
+  host_command_terminal_state_counts: { completed: 1 },
+  host_command_terminal_state_summary: '1 (completed)',
   recommended_action_counts: {
     review_runtime_diagnostics: 1,
     review_session_summary: 1,
@@ -924,6 +934,11 @@ assert.equal(sessionInventoryJson.sessions[0].request_outcome_total, 0);
 assert.equal(sessionInventoryJson.sessions[0].request_posture, 'clean');
 assert.equal(sessionInventoryJson.sessions[0].request_posture_display, 'clean');
 assert.equal(sessionInventoryJson.sessions[0].mcp_operational_state, 'healthy');
+assert.equal(sessionInventoryJson.sessions[0].host_command_event_count, 4);
+assert.equal(sessionInventoryJson.sessions[0].host_command_terminal_state_summary, '1 (completed)');
+assert.equal(sessionInventoryJson.sessions[0].last_host_command_summary, 'git status');
+assert.equal(sessionInventoryJson.sessions[0].last_host_command_terminal_state, 'completed');
+assert.equal(sessionInventoryJson.sessions[0].last_host_command_output_ref, 'mcp_payload:carrier_host_command_output:host_command_inventory_1@v1');
 assert.equal(sessionInventoryJson.sessions[0].handoffs.session_events, 'narada-agent-cli --identity narada.test --session healthy-session --session-events --session-events-filter all --session-events-count 20');
 assert.equal(sessionInventoryJson.sessions[0].recommended_action, 'review_session_summary');
 assert.equal(sessionInventoryJson.sessions[1].session, 'faulted-session');
@@ -1428,17 +1443,21 @@ assert.equal(sessionRecoveryJson.recovery.recovery_followup_command, null);
 assert.equal(sessionRecoveryJson.preflight.operational_state, 'healthy');
 assert.equal(sessionRecoveryJson.preflight.recommended_action, 'start_session');
 assert.equal(sessionRecoveryJson.preflight.handoffs.mcp_preflight_diagnostics, 'narada-agent-cli --identity narada.test --session healthy-session --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all');
-assert.equal(sessionRecoveryJson.event_summary.event_count, 3);
+assert.equal(sessionRecoveryJson.event_summary.event_count, 7);
 assert.deepEqual(sessionRecoveryJson.event_summary.event_kind_counts, {
+  carrier_host_command_admitted: 1,
+  carrier_host_command_completed: 1,
+  carrier_host_command_requested: 1,
+  carrier_host_command_started: 1,
   input_completed: 1,
   mcp_preflight_artifact_linked: 1,
   session_closed: 1,
 });
-assert.equal(sessionRecoveryJson.event_summary.event_kind_summary, '1 (input_completed), 1 (mcp_preflight_artifact_linked), 1 (session_closed)');
+assert.equal(sessionRecoveryJson.event_summary.event_kind_summary, '1 (carrier_host_command_admitted), 1 (carrier_host_command_completed), 1 (carrier_host_command_requested), 1 (carrier_host_command_started), 1 (input_completed), 1 (mcp_preflight_artifact_linked), 1 (session_closed)');
 assert.deepEqual(sessionRecoveryJson.event_summary.issue_code_counts, {});
 assert.equal(sessionRecoveryJson.event_summary.issue_code_summary, '0');
-assert.deepEqual(sessionRecoveryJson.event_summary.terminal_state_counts, { completed: 1, closed: 1 });
-assert.equal(sessionRecoveryJson.event_summary.terminal_state_summary, '1 (closed), 1 (completed)');
+assert.deepEqual(sessionRecoveryJson.event_summary.terminal_state_counts, { completed: 2, closed: 1 });
+assert.equal(sessionRecoveryJson.event_summary.terminal_state_summary, '2 (completed), 1 (closed)');
 assert.deepEqual(sessionRecoveryJson.event_summary.recommended_action_counts, { review_session_summary: 1 });
 assert.equal(sessionRecoveryJson.event_summary.recommended_action_summary, '1 (review_session_summary)');
 assert.deepEqual(sessionRecoveryJson.event_summary.recommended_command_counts, {
@@ -1473,17 +1492,21 @@ assert.equal(sessionReadJson.recovery.recovery_followup_command, null);
 assert.equal(sessionReadJson.preflight.operational_state, 'healthy');
 assert.equal(sessionReadJson.preflight.recommended_action_display, 'start session');
 assert.equal(sessionReadJson.preflight.handoffs.mcp_preflight_diagnostics, 'narada-agent-cli --identity narada.test --session healthy-session --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all');
-assert.equal(sessionReadJson.event_summary.event_count, 3);
+assert.equal(sessionReadJson.event_summary.event_count, 7);
 assert.deepEqual(sessionReadJson.event_summary.event_kind_counts, {
+  carrier_host_command_admitted: 1,
+  carrier_host_command_completed: 1,
+  carrier_host_command_requested: 1,
+  carrier_host_command_started: 1,
   input_completed: 1,
   mcp_preflight_artifact_linked: 1,
   session_closed: 1,
 });
-assert.equal(sessionReadJson.event_summary.event_kind_summary, '1 (input_completed), 1 (mcp_preflight_artifact_linked), 1 (session_closed)');
+assert.equal(sessionReadJson.event_summary.event_kind_summary, '1 (carrier_host_command_admitted), 1 (carrier_host_command_completed), 1 (carrier_host_command_requested), 1 (carrier_host_command_started), 1 (input_completed), 1 (mcp_preflight_artifact_linked), 1 (session_closed)');
 assert.deepEqual(sessionReadJson.event_summary.issue_code_counts, {});
 assert.equal(sessionReadJson.event_summary.issue_code_summary, '0');
-assert.deepEqual(sessionReadJson.event_summary.terminal_state_counts, { completed: 1, closed: 1 });
-assert.equal(sessionReadJson.event_summary.terminal_state_summary, '1 (closed), 1 (completed)');
+assert.deepEqual(sessionReadJson.event_summary.terminal_state_counts, { completed: 2, closed: 1 });
+assert.equal(sessionReadJson.event_summary.terminal_state_summary, '2 (completed), 1 (closed)');
 assert.deepEqual(sessionReadJson.event_summary.recommended_action_counts, { review_session_summary: 1 });
 assert.equal(sessionReadJson.event_summary.recommended_action_summary, '1 (review_session_summary)');
 assert.deepEqual(sessionReadJson.event_summary.recommended_command_counts, {
@@ -1495,6 +1518,9 @@ assert.equal(sessionReadJson.event_summary.workflow_groups.review_session_summar
 assert.equal(sessionReadJson.record.operational_posture, 'healthy');
 assert.equal(sessionReadJson.record.last_lifecycle_state, 'closed');
 assert.equal(sessionReadJson.record.request_posture, 'clean');
+assert.equal(sessionReadJson.record.host_command_terminal_state_summary, '1 (completed)');
+assert.equal(sessionReadJson.record.last_host_command_summary, 'git status');
+assert.equal(sessionReadJson.record.last_host_command_output_ref, 'mcp_payload:carrier_host_command_output:host_command_inventory_1@v1');
 assert.equal(sessionReadJson.record.handoffs.session_read_json, 'narada-agent-cli --identity narada.test --session healthy-session --session-read-json');
 assert.equal(sessionReadJson.record.handoffs.session_recovery, 'narada-agent-cli --identity narada.test --session healthy-session --session-recovery');
 assert.equal(sessionReadJson.record.recommended_action, 'review_session_summary');
@@ -1623,7 +1649,7 @@ assert.equal(sessionEventsJson.schema, 'narada.agent_cli.session_events_read.v1'
 assert.equal(sessionEventsJson.site_root, inventoryRoot);
 assert.equal(sessionEventsJson.session, 'healthy-session');
 assert.equal(sessionEventsJson.found, true);
-assert.equal(sessionEventsJson.event_count, 3);
+assert.equal(sessionEventsJson.event_count, 7);
 assert.equal(Array.isArray(sessionEventsJson.recent_events), true);
 assert.equal(sessionEventsJson.recent_events.at(-1).event, 'session_closed');
 assert.equal(sessionEventsJson.preflight.operational_state, 'healthy');

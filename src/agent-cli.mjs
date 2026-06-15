@@ -1893,6 +1893,7 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
     'Request posture': filteredInventoryRollup.request_posture_summary,
     'Request outcomes': filteredInventoryRollup.request_outcome_summary,
     'Request issues': filteredInventoryRollup.request_issue_summary,
+    'Host command states': filteredInventoryRollup.host_command_terminal_state_summary,
     'Recommended actions': actionQueue.recommended_action_summary,
     'Recommended commands': actionQueue.recommended_command_summary,
     'Recovery primary commands': actionQueue.recovery_primary_summary,
@@ -1913,6 +1914,9 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
       'Request posture': item.request_posture_display,
       'MCP startup failures': item.mcp_startup_failure_summary,
       'MCP runtime faults': item.mcp_runtime_fault_summary,
+      'Host command states': item.host_command_terminal_state_summary,
+      'Last host command': item.last_host_command_summary ?? 'none',
+      'Last host command state': item.last_host_command_terminal_state ?? 'none',
       'Preflight artifact': item.mcp_preflight_artifact_path ?? 'none',
       'Preflight state': item.mcp_preflight_operational_state ?? 'none',
       'Preflight action': item.mcp_preflight_recommended_action_display ?? 'none',
@@ -2204,6 +2208,9 @@ async function runSessionRecovery({ session = SESSION, siteRoot = SITE_ROOT, nar
     'Operational posture': sessionRecord.operational_posture_display,
     'MCP state': sessionRecord.mcp_operational_state,
     'Request posture': sessionRecord.request_posture_display,
+    'Host command states': sessionRecord.host_command_terminal_state_summary,
+    'Last host command': sessionRecord.last_host_command_summary ?? 'none',
+    'Last host command state': sessionRecord.last_host_command_terminal_state ?? 'none',
     'Recovery kind': sessionRecord.recovery_kind_display ?? 'none',
     'Recovery primary': sessionRecord.recovery_primary_command ?? 'none',
     'Recovery followup': sessionRecord.recovery_followup_command ?? 'none',
@@ -2295,6 +2302,9 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
     'Event kinds': sessionEventSummary.event_kind_summary,
     'Issue codes': sessionEventSummary.issue_code_summary,
     'Terminal states': sessionEventSummary.terminal_state_summary,
+    'Host command states': sessionRecord.host_command_terminal_state_summary,
+    'Last host command': sessionRecord.last_host_command_summary ?? 'none',
+    'Last host command state': sessionRecord.last_host_command_terminal_state ?? 'none',
     'Last event': sessionRecord.last_event_kind ?? 'none',
     'Last event at': sessionRecord.last_event_at ?? 'unknown',
     'Operational posture': sessionRecord.operational_posture_display,
@@ -2376,6 +2386,10 @@ async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaD
     'Lifecycle outcomes': sessionRecord.lifecycle_state_summary,
     'Request outcomes': sessionRecord.request_outcome_summary,
     'Request issues': sessionRecord.request_issue_summary,
+    'Host command states': sessionRecord.host_command_terminal_state_summary,
+    'Last host command': sessionRecord.last_host_command_summary ?? 'none',
+    'Last host command state': sessionRecord.last_host_command_terminal_state ?? 'none',
+    'Last host command output': sessionRecord.last_host_command_output_ref ?? 'none',
     'Event count': sessionEventSummary.event_count,
     'Event kinds': sessionEventSummary.event_kind_summary,
     'Issue codes': sessionEventSummary.issue_code_summary,
@@ -2650,6 +2664,7 @@ function summarizeSessionInventoryRollup(inventory = []) {
   const requestPostureCounts = {};
   const requestOutcomeCounts = {};
   const requestIssueCounts = {};
+  const hostCommandTerminalStateCounts = {};
   for (const item of inventory) {
     incrementInventoryCounter(heartbeatCounts, item?.heartbeat_status ?? 'unknown');
     incrementInventoryCounter(operationalPostureCounts, item?.operational_posture ?? 'unknown');
@@ -2660,6 +2675,7 @@ function summarizeSessionInventoryRollup(inventory = []) {
     mergeInventoryCounts(lifecycleOutcomeCounts, item?.lifecycle_state_counts ?? null);
     mergeInventoryCounts(requestOutcomeCounts, item?.request_outcome_counts ?? null);
     mergeInventoryCounts(requestIssueCounts, item?.request_issue_counts ?? null);
+    mergeInventoryCounts(hostCommandTerminalStateCounts, item?.host_command_terminal_state_counts ?? null);
   }
   return {
     heartbeat_status_counts: heartbeatCounts,
@@ -2680,6 +2696,8 @@ function summarizeSessionInventoryRollup(inventory = []) {
     request_outcome_summary: formatInventoryCounts(requestOutcomeCounts),
     request_issue_counts: requestIssueCounts,
     request_issue_summary: formatInventoryCounts(requestIssueCounts),
+    host_command_terminal_state_counts: hostCommandTerminalStateCounts,
+    host_command_terminal_state_summary: formatInventoryCounts(hostCommandTerminalStateCounts),
   };
 }
 
@@ -2701,6 +2719,48 @@ function formatInventoryCounts(counts) {
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
     .map(([key, count]) => `${count} (${key})`)
     .join(', ');
+}
+
+function summarizePersistedHostCommandLifecycle(entries = []) {
+  const hostCommandEventCounts = {};
+  const hostCommandTerminalStateCounts = {};
+  let lastHostCommand = null;
+  for (const entry of entries) {
+    const eventKind = entry?.event_kind ?? entry?.event ?? null;
+    if (!String(eventKind ?? '').startsWith('carrier_host_command_')) continue;
+    incrementInventoryCounter(hostCommandEventCounts, eventKind);
+    const payload = entry?.payload ?? {};
+    const terminalState = payload.terminal_state ?? null;
+    if (terminalState) incrementInventoryCounter(hostCommandTerminalStateCounts, terminalState);
+    if (!payload.command_id) continue;
+    const occurredAt = entry?.timestamp ?? entry?.occurred_at ?? payload?.occurred_at ?? payload?.created_at ?? null;
+    const candidate = {
+      command_id: payload.command_id,
+      command_summary: payload.command_summary ?? payload.command_text ?? null,
+      terminal_state: terminalState,
+      output_ref: payload?.output_ref?.payload_ref ?? null,
+      output_reader_tool: payload?.output_ref?.reader_tool ?? null,
+      event_kind: eventKind,
+      occurred_at: occurredAt,
+    };
+    if (!lastHostCommand || String(candidate.occurred_at ?? '').localeCompare(String(lastHostCommand.occurred_at ?? '')) >= 0) {
+      lastHostCommand = candidate;
+    }
+  }
+  return {
+    host_command_event_count: Object.values(hostCommandEventCounts).reduce((sum, count) => sum + Number(count ?? 0), 0),
+    host_command_event_counts: hostCommandEventCounts,
+    host_command_event_summary: formatInventoryCounts(hostCommandEventCounts),
+    host_command_terminal_state_counts: hostCommandTerminalStateCounts,
+    host_command_terminal_state_summary: formatInventoryCounts(hostCommandTerminalStateCounts),
+    last_host_command_id: lastHostCommand?.command_id ?? null,
+    last_host_command_summary: lastHostCommand?.command_summary ?? null,
+    last_host_command_terminal_state: lastHostCommand?.terminal_state ?? null,
+    last_host_command_output_ref: lastHostCommand?.output_ref ?? null,
+    last_host_command_output_reader_tool: lastHostCommand?.output_reader_tool ?? null,
+    last_host_command_event_kind: lastHostCommand?.event_kind ?? null,
+    last_host_command_at: lastHostCommand?.occurred_at ?? null,
+  };
 }
 
 function classifyPersistedSessionLifecycleState(entry) {
@@ -2853,6 +2913,7 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     requestPosture: requestPosture.request_posture,
     handoffs,
   });
+  const hostCommandLifecycle = summarizePersistedHostCommandLifecycle(entries);
   return {
     session,
     session_path: join(sessionDir, 'session.jsonl'),
@@ -2888,6 +2949,18 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     request_outcome_summary: formatInventoryCounts(requestOutcomeCounts),
     request_issue_counts: requestIssueCounts,
     request_issue_summary: formatInventoryCounts(requestIssueCounts),
+    host_command_event_count: hostCommandLifecycle.host_command_event_count,
+    host_command_event_counts: hostCommandLifecycle.host_command_event_counts,
+    host_command_event_summary: hostCommandLifecycle.host_command_event_summary,
+    host_command_terminal_state_counts: hostCommandLifecycle.host_command_terminal_state_counts,
+    host_command_terminal_state_summary: hostCommandLifecycle.host_command_terminal_state_summary,
+    last_host_command_id: hostCommandLifecycle.last_host_command_id,
+    last_host_command_summary: hostCommandLifecycle.last_host_command_summary,
+    last_host_command_terminal_state: hostCommandLifecycle.last_host_command_terminal_state,
+    last_host_command_output_ref: hostCommandLifecycle.last_host_command_output_ref,
+    last_host_command_output_reader_tool: hostCommandLifecycle.last_host_command_output_reader_tool,
+    last_host_command_event_kind: hostCommandLifecycle.last_host_command_event_kind,
+    last_host_command_at: hostCommandLifecycle.last_host_command_at,
     mcp_operational_state: mcpOperationalState,
     mcp_startup_failure_summary: startupFailures.length > 0
       ? formatMcpStartupFailureSummary(startupFailures)
