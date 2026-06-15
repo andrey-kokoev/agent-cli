@@ -262,6 +262,7 @@ async function main() {
   }
 
   const mcpServers = await discoverAndStartMcpServers(SITE_ROOT);
+  recordMcpStartupFailures(mcpServers);
   const allTools = aggregateTools(mcpServers);
   const rolePrompt = loadRolePrompt(IDENTITY, SITE_ROOT);
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -530,6 +531,25 @@ function recordCarrierDiagnostic(level, message, extra = {}) {
     message,
     ...extra,
   }));
+}
+
+function recordMcpStartupFailures(mcpServers, { emit = null } = {}) {
+  const failures = getMcpStartupFailures(mcpServers);
+  for (const failure of failures) {
+    const payload = {
+      level: 'warn',
+      message: `MCP startup degraded: ${failure.server_name ?? 'unknown'} ${failure.code ?? 'error'}`,
+      diagnostic_code: failure.code ?? null,
+      server_name: failure.server_name ?? null,
+      diagnostic: failure,
+    };
+    recordCarrierDiagnostic(payload.level, payload.message, {
+      diagnostic_code: payload.diagnostic_code,
+      server_name: payload.server_name,
+      diagnostic: payload.diagnostic,
+    });
+    emit?.('carrier_diagnostic_recorded', payload);
+  }
 }
 
 function classifyCarrierHostCommandInput(input, { enabled = HOST_COMMANDS_ENABLED, approvalMode = 'execute' } = {}) {
@@ -3005,6 +3025,7 @@ function buildProgrammaticInputs(opts) {
 async function runServerMode({ input = process.stdin, output = process.stdout, callChatApiFn = callChatApi } = {}) {
   const mcpServers = await discoverAndStartMcpServers(SITE_ROOT);
   const allTools = aggregateTools(mcpServers);
+  const startupFailures = getMcpStartupFailures(mcpServers);
   const rolePrompt = loadRolePrompt(IDENTITY, SITE_ROOT);
   const state = {
     activeTurn: null,
@@ -3056,10 +3077,12 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
     model: sessionSettings.model,
     thinking: sessionSettings.thinking,
     mcp_server_count: Object.keys(mcpServers).length,
+    mcp_startup_failure_count: startupFailures.length,
     tool_count: allTools.length,
     session_path: SESSION_PATH,
     events_path: EVENTS_PATH,
   });
+  recordMcpStartupFailures(mcpServers, { emit });
 
   if (OPERATION_HEARTBEAT_DIRECTIVE_ENABLED) {
     activeOperationHeartbeatDirectiveEmitter = createOperationHeartbeatDirectiveEmitter({

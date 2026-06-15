@@ -1907,6 +1907,67 @@ assert.equal(stdout.includes('[agent-cli]'), false);
 assert.equal(stderr.includes('Fatal error'), false);
 rmSync(serverSite, { recursive: true, force: true });
 
+const degradedServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-degraded-server-'));
+mkdirSync(join(degradedServerSite, '.ai', 'mcp'), { recursive: true });
+const degradedServerPath = join(degradedServerSite, 'degraded-mcp-server.mjs');
+writeFileSync(degradedServerPath, `
+import readline from 'node:readline';
+console.log('startup banner');
+const rl = readline.createInterface({ input: process.stdin });
+rl.on('line', (line) => {
+  const request = JSON.parse(line);
+  if (request.method === 'initialize') {
+    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05' } }));
+    return;
+  }
+  if (request.method === 'tools/list') {
+    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { tools: [] } }));
+  }
+});
+`, 'utf8');
+writeFileSync(join(degradedServerSite, '.ai', 'mcp', 'degraded-mcp.json'), `${JSON.stringify({
+  mcpServers: {
+    degraded: {
+      transport: 'stdio',
+      command: 'node',
+      args: [degradedServerPath],
+    },
+  },
+}, null, 2)}\n`, 'utf8');
+const degradedChild = spawn(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--server',
+  '--identity', 'narada.test',
+  '--session', 'degraded-server-test',
+], {
+  env: {
+    ...process.env,
+    NARADA_SITE_ROOT: degradedServerSite,
+    NARADA_INTELLIGENCE_PROVIDER: 'codex-subscription',
+  },
+  stdio: ['pipe', 'pipe', 'pipe'],
+});
+let degradedStdout = '';
+degradedChild.stdout.setEncoding('utf8');
+degradedChild.stdout.on('data', (chunk) => { degradedStdout += chunk; });
+degradedChild.stdin.write(`${JSON.stringify({ id: 'status-degraded-1', method: 'session.status', params: {} })}\n`);
+degradedChild.stdin.write(`${JSON.stringify({ id: 'close-degraded-1', method: 'session.close', params: {} })}\n`);
+degradedChild.stdin.end();
+const degradedExitCode = await new Promise((resolveExit) => degradedChild.on('exit', resolveExit));
+assert.equal(degradedExitCode, 0);
+const degradedEvents = degradedStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+assert.equal(degradedEvents[0].event, 'session_started');
+assert.equal(degradedEvents[0].mcp_startup_failure_count, 1);
+assert.equal(degradedEvents.some((event) => event.event === 'carrier_diagnostic_recorded' && event.server_name === 'degraded' && event.diagnostic_code === 'mcp_stdout_pollution'), true);
+assert.equal(degradedEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-degraded-1' && event.mcp_startup_failure_count === 1), true);
+const degradedSessionEntries = readFileSync(join(degradedServerSite, '.narada', 'crew', 'nars-sessions', 'degraded-server-test', 'session.jsonl'), 'utf8')
+  .trim()
+  .split(/\r?\n/)
+  .filter(Boolean)
+  .map((line) => JSON.parse(line));
+assert.equal(degradedSessionEntries.some((entry) => entry.event_kind === 'carrier_diagnostic_recorded' && entry.payload?.server_name === 'degraded' && entry.payload?.diagnostic_code === 'mcp_stdout_pollution'), true);
+rmSync(degradedServerSite, { recursive: true, force: true });
+
 const directiveServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-directive-server-'));
 mkdirSync(join(directiveServerSite, '.ai', 'mcp'), { recursive: true });
 const previousSiteRoot = process.env.NARADA_SITE_ROOT;
