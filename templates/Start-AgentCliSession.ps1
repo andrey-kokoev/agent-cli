@@ -57,6 +57,12 @@ param(
 
     [switch]$SessionReadJson,
 
+    [switch]$HostCommandOutputRead,
+
+    [switch]$HostCommandOutputReadJson,
+
+    [string]$HostCommandOutputRef,
+
     [switch]$SessionEvents,
 
     [switch]$SessionEventsJson,
@@ -389,6 +395,27 @@ if ($SessionRecoveryJson) {
 if ($SessionReadJson) {
     Set-Location $WorkDir
     & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-read-json'
+    exit $LASTEXITCODE
+}
+
+if ($HostCommandOutputRead) {
+    Write-Host "Host command output..." -ForegroundColor Cyan
+    Set-Location $WorkDir
+    $hostCommandOutputArgs = @('--identity', $IdentityName, '--session', $SessionName, '--host-command-output-read')
+    if ($HostCommandOutputRef) {
+        $hostCommandOutputArgs += @('--host-command-output-ref', $HostCommandOutputRef)
+    }
+    & node $AgentCliPath @hostCommandOutputArgs
+    exit $LASTEXITCODE
+}
+
+if ($HostCommandOutputReadJson) {
+    Set-Location $WorkDir
+    $hostCommandOutputJsonArgs = @('--identity', $IdentityName, '--session', $SessionName, '--host-command-output-read-json')
+    if ($HostCommandOutputRef) {
+        $hostCommandOutputJsonArgs += @('--host-command-output-ref', $HostCommandOutputRef)
+    }
+    & node $AgentCliPath @hostCommandOutputJsonArgs
     exit $LASTEXITCODE
 }
 

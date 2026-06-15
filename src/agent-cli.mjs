@@ -119,6 +119,9 @@ const SESSION_RECOVERY_MODE = options.sessionRecovery === true;
 const SESSION_RECOVERY_JSON_MODE = options.sessionRecoveryJson === true;
 const SESSION_READ_MODE = options.sessionRead === true;
 const SESSION_READ_JSON_MODE = options.sessionReadJson === true;
+const HOST_COMMAND_OUTPUT_READ_MODE = options.hostCommandOutputRead === true;
+const HOST_COMMAND_OUTPUT_READ_JSON_MODE = options.hostCommandOutputReadJson === true;
+const HOST_COMMAND_OUTPUT_REF = String(options.hostCommandOutputRef ?? '').trim() || null;
 const SESSION_EVENTS_MODE = options.sessionEvents === true;
 const SESSION_EVENTS_JSON_MODE = options.sessionEventsJson === true;
 const SESSION_EVENTS_FILTER = normalizeSessionEventsFilter(options.sessionEventsFilter);
@@ -242,6 +245,18 @@ function buildPersistedSessionHandoffs({ session, identity = IDENTITY, eventCoun
     session_events: `${base} --session-events --session-events-filter all --session-events-count ${eventCount}`,
     session_events_issues: `${base} --session-events --session-events-filter issues --session-events-count ${eventCount}`,
     session_events_diagnostics: `${base} --session-events --session-events-filter diagnostics --session-events-count ${eventCount}`,
+  };
+}
+
+function buildPersistedHostCommandOutputHandoffs({ session, identity = IDENTITY, outputRef = null } = {}) {
+  const normalizedSession = String(session ?? '').trim();
+  const normalizedIdentity = String(identity ?? IDENTITY).trim() || IDENTITY;
+  const normalizedOutputRef = String(outputRef ?? '').trim();
+  if (!normalizedSession || !normalizedOutputRef) return {};
+  const base = `narada-agent-cli --identity ${normalizedIdentity} --session ${normalizedSession}`;
+  return {
+    host_command_output_read: `${base} --host-command-output-read --host-command-output-ref ${normalizedOutputRef}`,
+    host_command_output_read_json: `${base} --host-command-output-read-json --host-command-output-ref ${normalizedOutputRef}`,
   };
 }
 
@@ -719,6 +734,7 @@ function renderSessionInventoryActions(actions = []) {
     'Session recovery': item?.handoffs?.session_recovery ?? 'none',
     'Session issues': item?.handoffs?.session_events_issues ?? 'none',
     'Session diagnostics': item?.handoffs?.session_events_diagnostics ?? 'none',
+    'Host command output review': item?.handoffs?.host_command_output_read ?? 'none',
   }));
 }
 
@@ -1096,11 +1112,11 @@ const NARADA_DIR = basename(SITE_ROOT) === '.narada' ? SITE_ROOT : join(SITE_ROO
 const SESSION_DIR = SERVER_MODE
   ? join(NARADA_DIR, 'crew', 'nars-sessions', SESSION)
   : (existsSync(PC_RUNTIME) ? join(PC_RUNTIME, 'agent-sessions') : resolve(SITE_ROOT, '.ai', 'runtime', 'agent-sessions'));
-if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !HOST_COMMAND_OUTPUT_READ_MODE && !HOST_COMMAND_OUTPUT_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
 const SESSION_PATH = SERVER_MODE ? join(SESSION_DIR, 'session.jsonl') : join(SESSION_DIR, `${SESSION}.jsonl`);
 const EVENTS_PATH = join(SESSION_DIR, 'events.jsonl');
 const CARRIER_SESSION_DIR = join(NARADA_DIR, 'crew', 'nars-sessions', SESSION);
-if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !HOST_COMMAND_OUTPUT_READ_MODE && !HOST_COMMAND_OUTPUT_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
 const HEARTBEAT_PATH = join(CARRIER_SESSION_DIR, 'heartbeat.json');
 const MCP_PREFLIGHT_ARTIFACT_DIR = join(NARADA_DIR, 'runtime', 'agent-cli', 'mcp-preflight');
 const HEARTBEAT_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_HEARTBEAT_ENABLE, true);
@@ -1210,6 +1226,14 @@ async function main() {
   }
   if (SESSION_READ_JSON_MODE) {
     process.exitCode = await runSessionRead({ jsonOutput: true });
+    return;
+  }
+  if (HOST_COMMAND_OUTPUT_READ_MODE) {
+    process.exitCode = await runHostCommandOutputRead();
+    return;
+  }
+  if (HOST_COMMAND_OUTPUT_READ_JSON_MODE) {
+    process.exitCode = await runHostCommandOutputRead({ jsonOutput: true });
     return;
   }
   if (SESSION_EVENTS_MODE) {
@@ -1927,6 +1951,7 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
       'Session read': item?.handoffs?.session_read ?? 'none',
       'Session issues': item?.handoffs?.session_events_issues ?? 'none',
       'Session diagnostics': item?.handoffs?.session_events_diagnostics ?? 'none',
+      'Host command output review': item?.handoffs?.host_command_output_read ?? 'none',
       'Session path': item.session_path,
     }));
   }
@@ -2103,6 +2128,7 @@ async function runSessionInventoryEvents({ siteRoot = SITE_ROOT, naradaDir = NAR
       'Session recovery': item?.handoffs?.session_recovery ?? 'none',
       'Session issues': item?.handoffs?.session_events_issues ?? 'none',
       'Session diagnostics': item?.handoffs?.session_events_diagnostics ?? 'none',
+      'Host command output review': item?.handoffs?.host_command_output_read ?? 'none',
     }));
   }
   if (inventoryEventSummary.recent_events.length > 0) {
@@ -2142,6 +2168,21 @@ function createSessionPreflightPayload(sessionRecord) {
     recovery_primary_command: sessionRecord.mcp_preflight_recovery_primary_command ?? null,
     recovery_followup_command: sessionRecord.mcp_preflight_recovery_followup_command ?? null,
     handoffs: sessionRecord.mcp_preflight_handoffs ?? null,
+  };
+}
+
+function createSessionHostCommandOutputPayload(sessionRecord) {
+  if (!sessionRecord) return null;
+  return {
+    output_ref: sessionRecord.last_host_command_output_ref ?? null,
+    reader_tool: sessionRecord.last_host_command_output_reader_tool ?? null,
+    command_id: sessionRecord.last_host_command_id ?? null,
+    command_summary: sessionRecord.last_host_command_summary ?? null,
+    terminal_state: sessionRecord.last_host_command_terminal_state ?? null,
+    handoffs: {
+      host_command_output_read: sessionRecord?.handoffs?.host_command_output_read ?? null,
+      host_command_output_read_json: sessionRecord?.handoffs?.host_command_output_read_json ?? null,
+    },
   };
 }
 
@@ -2197,6 +2238,7 @@ async function runSessionRecovery({ session = SESSION, siteRoot = SITE_ROOT, nar
       found: true,
       recovery: createSessionRecoveryPayload(sessionRecord),
       preflight: createSessionPreflightPayload(sessionRecord),
+      host_command_output: createSessionHostCommandOutputPayload(sessionRecord),
       event_summary: sessionEventSummary,
       record: sessionRecord,
     }, null, 2)}\n`);
@@ -2220,6 +2262,7 @@ async function runSessionRecovery({ session = SESSION, siteRoot = SITE_ROOT, nar
     'Event kinds': sessionEventSummary.event_kind_summary,
     'Issue codes': sessionEventSummary.issue_code_summary,
     'Terminal states': sessionEventSummary.terminal_state_summary,
+    'Host command output review': sessionRecord?.handoffs?.host_command_output_read ?? 'none',
     'Preflight state': sessionRecord.mcp_preflight_operational_state ?? 'none',
     'Preflight action': sessionRecord.mcp_preflight_recommended_action_display ?? 'none',
     'Preflight command': sessionRecord.mcp_preflight_recommended_command ?? 'none',
@@ -2289,6 +2332,7 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
       recent_events: recentEvents,
       recovery: createSessionRecoveryPayload(sessionRecord),
       preflight: createSessionPreflightPayload(sessionRecord),
+      host_command_output: createSessionHostCommandOutputPayload(sessionRecord),
       record: sessionRecord,
     }, null, 2)}\n`);
     return 0;
@@ -2324,6 +2368,7 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
     'Session read': sessionRecord?.handoffs?.session_read ?? 'none',
     'Session issues': sessionRecord?.handoffs?.session_events_issues ?? 'none',
     'Session diagnostics': sessionRecord?.handoffs?.session_events_diagnostics ?? 'none',
+    'Host command output review': sessionRecord?.handoffs?.host_command_output_read ?? 'none',
     'Session path': sessionRecord.session_path,
   })];
   if (recentEvents.length > 0) {
@@ -2361,6 +2406,7 @@ async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaD
       found: true,
       recovery: createSessionRecoveryPayload(sessionRecord),
       preflight: createSessionPreflightPayload(sessionRecord),
+      host_command_output: createSessionHostCommandOutputPayload(sessionRecord),
       event_summary: sessionEventSummary,
       record: sessionRecord,
     }, null, 2)}\n`);
@@ -2390,6 +2436,7 @@ async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaD
     'Last host command': sessionRecord.last_host_command_summary ?? 'none',
     'Last host command state': sessionRecord.last_host_command_terminal_state ?? 'none',
     'Last host command output': sessionRecord.last_host_command_output_ref ?? 'none',
+    'Host command output review': sessionRecord?.handoffs?.host_command_output_read ?? 'none',
     'Event count': sessionEventSummary.event_count,
     'Event kinds': sessionEventSummary.event_kind_summary,
     'Issue codes': sessionEventSummary.issue_code_summary,
@@ -2410,8 +2457,98 @@ async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaD
     'Session events': sessionRecord?.handoffs?.session_events ?? 'none',
     'Session issues': sessionRecord?.handoffs?.session_events_issues ?? 'none',
     'Session diagnostics': sessionRecord?.handoffs?.session_events_diagnostics ?? 'none',
+    'Host command output review': sessionRecord?.handoffs?.host_command_output_read ?? 'none',
     'Session path': sessionRecord.session_path,
   }));
+  return 0;
+}
+
+async function runHostCommandOutputRead({ session = SESSION, siteRoot = SITE_ROOT, naradaDir = NARADA_DIR, outputRef = HOST_COMMAND_OUTPUT_REF, jsonOutput = false } = {}) {
+  const sessionRecord = readPersistedSession({ session, siteRoot, naradaDir });
+  const resolvedOutputRef = String(outputRef ?? '').trim() || sessionRecord?.last_host_command_output_ref || null;
+  const outputDir = join(naradaDir, 'crew', 'nars-sessions', session, 'host-command-output');
+  if (!resolvedOutputRef) {
+    if (jsonOutput) {
+      console.log(`${JSON.stringify({
+        schema: 'narada.agent_cli.host_command_output_read.v1',
+        site_root: siteRoot,
+        session,
+        found: false,
+        output_ref: null,
+      }, null, 2)}\n`);
+    } else {
+      console.log(formatKeyValueRows({
+        SiteRoot: siteRoot,
+        Session: session,
+        Status: 'host command output not found',
+      }));
+    }
+    return 0;
+  }
+  let outputPayload = null;
+  try {
+    outputPayload = readCarrierHostCommandOutputRef(resolvedOutputRef, { outputDir });
+  } catch {
+    outputPayload = null;
+  }
+  if (!outputPayload) {
+    if (jsonOutput) {
+      console.log(`${JSON.stringify({
+        schema: 'narada.agent_cli.host_command_output_read.v1',
+        site_root: siteRoot,
+        session,
+        found: false,
+        output_ref: resolvedOutputRef,
+      }, null, 2)}\n`);
+    } else {
+      console.log(formatKeyValueRows({
+        SiteRoot: siteRoot,
+        Session: session,
+        'Output ref': resolvedOutputRef,
+        Status: 'host command output not found',
+      }));
+    }
+    return 0;
+  }
+  const payload = {
+    schema: 'narada.agent_cli.host_command_output_read.v1',
+    site_root: siteRoot,
+    session,
+    found: true,
+    output_ref: resolvedOutputRef,
+    reader_tool: sessionRecord?.last_host_command_output_reader_tool ?? 'carrier_host_command_output_read',
+    command_id: sessionRecord?.last_host_command_id ?? outputPayload.command_id ?? null,
+    command_summary: sessionRecord?.last_host_command_summary ?? null,
+    terminal_state: sessionRecord?.last_host_command_terminal_state ?? null,
+    output_truncated: outputPayload.output_truncated ?? false,
+    stdout: outputPayload.stdout ?? '',
+    stderr: outputPayload.stderr ?? '',
+    handoffs: {
+      session_read: sessionRecord?.handoffs?.session_read ?? null,
+      session_recovery: sessionRecord?.handoffs?.session_recovery ?? null,
+      host_command_output_read_json: sessionRecord?.handoffs?.host_command_output_read_json ?? null,
+    },
+  };
+  if (jsonOutput) {
+    console.log(`${JSON.stringify(payload, null, 2)}\n`);
+    return 0;
+  }
+  console.log([
+    formatKeyValueRows({
+      SiteRoot: siteRoot,
+      Session: session,
+      'Command id': payload.command_id ?? 'unknown',
+      'Command summary': payload.command_summary ?? 'unknown',
+      'Terminal state': payload.terminal_state ?? 'unknown',
+      'Output ref': payload.output_ref,
+      'Reader tool': payload.reader_tool,
+      'Output truncated': payload.output_truncated ? 'yes' : 'no',
+      'Session recovery': payload.handoffs.session_recovery ?? 'none',
+      'Session read': payload.handoffs.session_read ?? 'none',
+    }),
+    ['Stdout:', payload.stdout || '(empty)'].join('\n'),
+    ['Stderr:', payload.stderr || '(empty)'].join('\n'),
+  ].join('\n\n'));
   return 0;
 }
 
@@ -2889,8 +3026,16 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     identity: heartbeat?.agent_id ?? IDENTITY,
     siteRoot,
   });
+  const hostCommandLifecycle = summarizePersistedHostCommandLifecycle(entries);
   const requestPosture = summarizeRequestPosture(requestOutcomeCounts);
-  const handoffs = buildPersistedSessionHandoffs({ session, identity: heartbeat?.agent_id ?? IDENTITY });
+  const handoffs = {
+    ...buildPersistedSessionHandoffs({ session, identity: heartbeat?.agent_id ?? IDENTITY }),
+    ...buildPersistedHostCommandOutputHandoffs({
+      session,
+      identity: heartbeat?.agent_id ?? IDENTITY,
+      outputRef: hostCommandLifecycle.last_host_command_output_ref,
+    }),
+  };
   let mcpOperationalState = 'unknown';
   if (runtimeDiagnostics.length > 0) mcpOperationalState = 'runtime_faulted';
   else if (startupFailures.length > 0) mcpOperationalState = 'startup_degraded';
@@ -2913,7 +3058,6 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     requestPosture: requestPosture.request_posture,
     handoffs,
   });
-  const hostCommandLifecycle = summarizePersistedHostCommandLifecycle(entries);
   return {
     session,
     session_path: join(sessionDir, 'session.jsonl'),
@@ -7784,6 +7928,13 @@ function parseArgs(argv) {
       opts.sessionRead = true;
     } else if (argv[i] === '--session-read-json') {
       opts.sessionReadJson = true;
+    } else if (argv[i] === '--host-command-output-read') {
+      opts.hostCommandOutputRead = true;
+    } else if (argv[i] === '--host-command-output-read-json') {
+      opts.hostCommandOutputReadJson = true;
+    } else if (argv[i] === '--host-command-output-ref' && i + 1 < argv.length) {
+      opts.hostCommandOutputRef = argv[i + 1];
+      i++;
     } else if (argv[i] === '--session-events') {
       opts.sessionEvents = true;
     } else if (argv[i] === '--session-events-json') {

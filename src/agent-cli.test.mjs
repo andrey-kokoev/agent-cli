@@ -620,6 +620,7 @@ const inventoryNaradaDir = join(inventoryRoot, '.narada');
 const inventorySessionsDir = join(inventoryNaradaDir, 'crew', 'nars-sessions');
 mkdirSync(join(inventorySessionsDir, 'healthy-session'), { recursive: true });
 mkdirSync(join(inventorySessionsDir, 'faulted-session'), { recursive: true });
+mkdirSync(join(inventorySessionsDir, 'healthy-session', 'host-command-output'), { recursive: true });
 mkdirSync(join(inventoryNaradaDir, 'runtime', 'agent-cli', 'mcp-preflight'), { recursive: true });
 writeFileSync(join(inventorySessionsDir, 'healthy-session', 'heartbeat.json'), `${JSON.stringify({
   schema: 'narada.carrier_heartbeat.v1',
@@ -648,6 +649,13 @@ writeFileSync(join(inventorySessionsDir, 'healthy-session', 'session.jsonl'), `$
   mcp_startup_failure_summary: '0',
   mcp_runtime_fault_summary: '0',
 }))}\n${JSON.stringify({ event_kind: 'carrier_host_command_requested', timestamp: '2026-06-14T11:59:00.000Z', payload: { command_id: 'host_command_inventory_1', command_summary: 'git status' } })}\n${JSON.stringify({ event_kind: 'carrier_host_command_admitted', timestamp: '2026-06-14T11:59:01.000Z', payload: { command_id: 'host_command_inventory_1', command_summary: 'git status' } })}\n${JSON.stringify({ event_kind: 'carrier_host_command_started', timestamp: '2026-06-14T11:59:02.000Z', payload: { command_id: 'host_command_inventory_1', command_summary: 'git status' } })}\n${JSON.stringify({ event_kind: 'carrier_host_command_completed', timestamp: '2026-06-14T11:59:03.000Z', payload: { command_id: 'host_command_inventory_1', command_summary: 'git status', terminal_state: 'completed', output_ref: { payload_ref: 'mcp_payload:carrier_host_command_output:host_command_inventory_1@v1', reader_tool: 'carrier_host_command_output_read' } } })}\n${JSON.stringify({ event_kind: 'input_completed', timestamp: '2026-06-14T12:00:01.000Z', payload: { terminal_state: 'completed' } })}\n${JSON.stringify({ event: 'session_closed', timestamp: '2026-06-14T12:00:05.000Z', request_id: 'close-healthy-1', terminal_state: 'closed' })}\n`, 'utf8');
+writeFileSync(join(inventorySessionsDir, 'healthy-session', 'host-command-output', 'host_command_inventory_1.json'), `${JSON.stringify({
+  schema: 'narada.carrier.host_command_output.v1',
+  command_id: 'host_command_inventory_1',
+  output_truncated: false,
+  stdout: 'On branch main',
+  stderr: '',
+}, null, 2)}\n`, 'utf8');
 writeFileSync(join(inventorySessionsDir, 'faulted-session', 'session.jsonl'), [
   JSON.stringify({
     event_kind: 'carrier_diagnostic_recorded',
@@ -749,6 +757,7 @@ assert.equal(inventoryEntries[0].mcp_preflight_handoffs.mcp_preflight_diagnostic
 assert.equal(inventoryEntries[0].handoffs.session_read, 'narada-agent-cli --identity narada.test --session healthy-session --session-read');
 assert.equal(inventoryEntries[0].handoffs.session_recovery, 'narada-agent-cli --identity narada.test --session healthy-session --session-recovery');
 assert.equal(inventoryEntries[0].handoffs.session_recovery_json, 'narada-agent-cli --identity narada.test --session healthy-session --session-recovery-json');
+assert.equal(inventoryEntries[0].handoffs.host_command_output_read, 'narada-agent-cli --identity narada.test --session healthy-session --host-command-output-read --host-command-output-ref mcp_payload:carrier_host_command_output:host_command_inventory_1@v1');
 assert.equal(inventoryEntries[0].recommended_action, 'review_session_summary');
 assert.equal(inventoryEntries[0].recommended_command, 'narada-agent-cli --identity narada.test --session healthy-session --session-read');
 assert.equal(inventoryEntries[0].recovery_kind, 'no_recovery');
@@ -1391,6 +1400,7 @@ assert.equal(sessionReadRun.stdout.includes('Event count'), true);
 assert.equal(sessionReadRun.stdout.includes('Event kinds'), true);
 assert.equal(sessionReadRun.stdout.includes('Issue codes'), true);
 assert.equal(sessionReadRun.stdout.includes('Terminal states'), true);
+assert.equal(sessionReadRun.stdout.includes('Host command output review'), true);
 assert.equal(sessionReadRun.stdout.includes('review runtime diagnostics'), true);
 assert.equal(sessionReadRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20'), true);
 assert.equal(sessionReadRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-recovery'), true);
@@ -1521,6 +1531,9 @@ assert.equal(sessionReadJson.record.request_posture, 'clean');
 assert.equal(sessionReadJson.record.host_command_terminal_state_summary, '1 (completed)');
 assert.equal(sessionReadJson.record.last_host_command_summary, 'git status');
 assert.equal(sessionReadJson.record.last_host_command_output_ref, 'mcp_payload:carrier_host_command_output:host_command_inventory_1@v1');
+assert.equal(sessionReadJson.record.handoffs.host_command_output_read, 'narada-agent-cli --identity narada.test --session healthy-session --host-command-output-read --host-command-output-ref mcp_payload:carrier_host_command_output:host_command_inventory_1@v1');
+assert.equal(sessionReadJson.host_command_output.output_ref, 'mcp_payload:carrier_host_command_output:host_command_inventory_1@v1');
+assert.equal(sessionReadJson.host_command_output.handoffs.host_command_output_read_json, 'narada-agent-cli --identity narada.test --session healthy-session --host-command-output-read-json --host-command-output-ref mcp_payload:carrier_host_command_output:host_command_inventory_1@v1');
 assert.equal(sessionReadJson.record.handoffs.session_read_json, 'narada-agent-cli --identity narada.test --session healthy-session --session-read-json');
 assert.equal(sessionReadJson.record.handoffs.session_recovery, 'narada-agent-cli --identity narada.test --session healthy-session --session-recovery');
 assert.equal(sessionReadJson.record.recommended_action, 'review_session_summary');
@@ -1656,6 +1669,32 @@ assert.equal(sessionEventsJson.preflight.operational_state, 'healthy');
 assert.equal(sessionEventsJson.preflight.recommended_action, 'start_session');
 assert.equal(sessionEventsJson.preflight.handoffs.mcp_preflight_diagnostics, 'narada-agent-cli --identity narada.test --session healthy-session --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all');
 assert.equal(sessionEventsJson.record.last_lifecycle_state, 'closed');
+const hostCommandOutputReadJsonRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--host-command-output-read-json',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'healthy-session',
+  '--host-command-output-ref',
+  'mcp_payload:carrier_host_command_output:host_command_inventory_1@v1',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(hostCommandOutputReadJsonRun.status, 0);
+const hostCommandOutputReadJson = JSON.parse(hostCommandOutputReadJsonRun.stdout);
+assert.equal(hostCommandOutputReadJson.schema, 'narada.agent_cli.host_command_output_read.v1');
+assert.equal(hostCommandOutputReadJson.site_root, inventoryRoot);
+assert.equal(hostCommandOutputReadJson.session, 'healthy-session');
+assert.equal(hostCommandOutputReadJson.found, true);
+assert.equal(hostCommandOutputReadJson.command_id, 'host_command_inventory_1');
+assert.equal(hostCommandOutputReadJson.command_summary, 'git status');
+assert.equal(hostCommandOutputReadJson.output_ref, 'mcp_payload:carrier_host_command_output:host_command_inventory_1@v1');
+assert.equal(hostCommandOutputReadJson.stdout, 'On branch main');
+assert.equal(hostCommandOutputReadJson.stderr, '');
+assert.equal(hostCommandOutputReadJson.handoffs.host_command_output_read_json, 'narada-agent-cli --identity narada.test --session healthy-session --host-command-output-read-json --host-command-output-ref mcp_payload:carrier_host_command_output:host_command_inventory_1@v1');
 const missingSessionRoot = mkdtempSync(join(tmpdir(), 'narada-agent-cli-session-read-missing-'));
 const missingSessionReadJsonRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
@@ -1695,6 +1734,25 @@ assert.equal(missingSessionEventsJson.session, 'missing-session');
 assert.equal(missingSessionEventsJson.found, false);
 assert.equal(missingSessionEventsJson.event_count, 0);
 assert.deepEqual(missingSessionEventsJson.recent_events, []);
+const missingHostCommandOutputJsonRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--host-command-output-read-json',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'missing-session',
+], {
+  cwd: missingSessionRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: missingSessionRoot },
+  encoding: 'utf8',
+});
+assert.equal(missingHostCommandOutputJsonRun.status, 0);
+const missingHostCommandOutputJson = JSON.parse(missingHostCommandOutputJsonRun.stdout);
+assert.equal(missingHostCommandOutputJson.schema, 'narada.agent_cli.host_command_output_read.v1');
+assert.equal(missingHostCommandOutputJson.site_root, missingSessionRoot);
+assert.equal(missingHostCommandOutputJson.session, 'missing-session');
+assert.equal(missingHostCommandOutputJson.found, false);
+assert.equal(missingHostCommandOutputJson.output_ref, null);
 rmSync(missingSessionRoot, { recursive: true, force: true });
 rmSync(inventoryRoot, { recursive: true, force: true });
 
@@ -2336,6 +2394,9 @@ assert.equal(windowsWrapperTemplate.includes('[switch]$SessionRead'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionRecovery'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionRecoveryJson'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionReadJson'), true);
+assert.equal(windowsWrapperTemplate.includes('[switch]$HostCommandOutputRead'), true);
+assert.equal(windowsWrapperTemplate.includes('[switch]$HostCommandOutputReadJson'), true);
+assert.equal(windowsWrapperTemplate.includes('[string]$HostCommandOutputRef'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionEvents'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionEventsJson'), true);
 assert.equal(windowsWrapperTemplate.includes("[ValidateSet('all', 'lifecycle', 'issues', 'diagnostics')]"), true);
@@ -2368,6 +2429,9 @@ assert.equal(windowsWrapperTemplate.includes("'--session-read'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-recovery'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-recovery-json'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-read-json'"), true);
+assert.equal(windowsWrapperTemplate.includes("'--host-command-output-read'"), true);
+assert.equal(windowsWrapperTemplate.includes("'--host-command-output-read-json'"), true);
+assert.equal(windowsWrapperTemplate.includes("'--host-command-output-ref', $HostCommandOutputRef"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-events'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-events-json'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-events-filter' $SessionEventsFilter '--session-events-count' $SessionEventsCount"), true);
