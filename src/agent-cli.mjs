@@ -1368,6 +1368,30 @@ function createSessionRecoveryPayload(sessionRecord) {
   };
 }
 
+function createSessionEventSummaryPayload(sessionRecord, { naradaDir, eventFilter = 'all', recentCount = 20 } = {}) {
+  if (!sessionRecord) return null;
+  const sessionEventSummary = summarizeSessionInventoryEvents([sessionRecord], { naradaDir, eventFilter, recentCount });
+  return {
+    event_count: sessionEventSummary.event_count,
+    event_kind_counts: sessionEventSummary.event_kind_counts,
+    event_kind_summary: sessionEventSummary.event_kind_summary,
+    issue_code_counts: sessionEventSummary.issue_code_counts,
+    issue_code_summary: sessionEventSummary.issue_code_summary,
+    terminal_state_counts: sessionEventSummary.terminal_state_counts,
+    terminal_state_summary: sessionEventSummary.terminal_state_summary,
+    recommended_action_counts: sessionEventSummary.recommended_action_counts,
+    recommended_action_summary: sessionEventSummary.recommended_action_summary,
+    recommended_command_counts: sessionEventSummary.recommended_command_counts,
+    recommended_command_summary: sessionEventSummary.recommended_command_summary,
+    recovery_primary_counts: sessionEventSummary.recovery_primary_counts,
+    recovery_primary_summary: sessionEventSummary.recovery_primary_summary,
+    recovery_followup_counts: sessionEventSummary.recovery_followup_counts,
+    recovery_followup_summary: sessionEventSummary.recovery_followup_summary,
+    groups: sessionEventSummary.groups,
+    workflow_groups: sessionEventSummary.workflow_groups,
+  };
+}
+
 async function runSessionRecovery({ session = SESSION, siteRoot = SITE_ROOT, naradaDir = NARADA_DIR, jsonOutput = false } = {}) {
   const sessionRecord = readPersistedSession({ session, siteRoot, naradaDir });
   if (!sessionRecord) {
@@ -1387,6 +1411,7 @@ async function runSessionRecovery({ session = SESSION, siteRoot = SITE_ROOT, nar
     }
     return 0;
   }
+  const sessionEventSummary = createSessionEventSummaryPayload(sessionRecord, { naradaDir, eventFilter: 'all', recentCount: 20 });
   if (jsonOutput) {
     console.log(`${JSON.stringify({
       schema: 'narada.agent_cli.session_recovery.v1',
@@ -1394,6 +1419,7 @@ async function runSessionRecovery({ session = SESSION, siteRoot = SITE_ROOT, nar
       session,
       found: true,
       recovery: createSessionRecoveryPayload(sessionRecord),
+      event_summary: sessionEventSummary,
       record: sessionRecord,
     }, null, 2)}\n`);
     return 0;
@@ -1409,6 +1435,10 @@ async function runSessionRecovery({ session = SESSION, siteRoot = SITE_ROOT, nar
     'Recovery followup': sessionRecord.recovery_followup_command ?? 'none',
     'Recommended action': sessionRecord.recommended_action_display,
     'Recommended command': sessionRecord.recommended_command ?? 'none',
+    'Event count': sessionEventSummary.event_count,
+    'Event kinds': sessionEventSummary.event_kind_summary,
+    'Issue codes': sessionEventSummary.issue_code_summary,
+    'Terminal states': sessionEventSummary.terminal_state_summary,
     'Session read': sessionRecord?.handoffs?.session_read ?? 'none',
     'Session recovery': sessionRecord?.handoffs?.session_recovery ?? 'none',
     'Session issues': sessionRecord?.handoffs?.session_events_issues ?? 'none',
@@ -1445,7 +1475,7 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
     return 0;
   }
   const recentEvents = filteredEvents.slice(-recentCount);
-  const sessionEventSummary = summarizeSessionInventoryEvents([sessionRecord], { naradaDir, eventFilter: normalizedEventFilter, recentCount });
+  const sessionEventSummary = createSessionEventSummaryPayload(sessionRecord, { naradaDir, eventFilter: normalizedEventFilter, recentCount });
   if (jsonOutput) {
     console.log(`${JSON.stringify({
       schema: 'narada.agent_cli.session_events_read.v1',
@@ -1529,7 +1559,7 @@ async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaD
     }
     return 0;
   }
-  const sessionEventSummary = summarizeSessionInventoryEvents([sessionRecord], { naradaDir, eventFilter: 'all', recentCount: 20 });
+  const sessionEventSummary = createSessionEventSummaryPayload(sessionRecord, { naradaDir, eventFilter: 'all', recentCount: 20 });
   if (jsonOutput) {
     console.log(`${JSON.stringify({
       schema: 'narada.agent_cli.session_read.v1',
@@ -1537,25 +1567,7 @@ async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaD
       session,
       found: true,
       recovery: createSessionRecoveryPayload(sessionRecord),
-      event_summary: {
-        event_count: sessionEventSummary.event_count,
-        event_kind_counts: sessionEventSummary.event_kind_counts,
-        event_kind_summary: sessionEventSummary.event_kind_summary,
-        issue_code_counts: sessionEventSummary.issue_code_counts,
-        issue_code_summary: sessionEventSummary.issue_code_summary,
-        terminal_state_counts: sessionEventSummary.terminal_state_counts,
-        terminal_state_summary: sessionEventSummary.terminal_state_summary,
-        recommended_action_counts: sessionEventSummary.recommended_action_counts,
-        recommended_action_summary: sessionEventSummary.recommended_action_summary,
-        recommended_command_counts: sessionEventSummary.recommended_command_counts,
-        recommended_command_summary: sessionEventSummary.recommended_command_summary,
-        recovery_primary_counts: sessionEventSummary.recovery_primary_counts,
-        recovery_primary_summary: sessionEventSummary.recovery_primary_summary,
-        recovery_followup_counts: sessionEventSummary.recovery_followup_counts,
-        recovery_followup_summary: sessionEventSummary.recovery_followup_summary,
-        groups: sessionEventSummary.groups,
-        workflow_groups: sessionEventSummary.workflow_groups,
-      },
+      event_summary: sessionEventSummary,
       record: sessionRecord,
     }, null, 2)}\n`);
     return 0;
