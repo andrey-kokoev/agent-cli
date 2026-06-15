@@ -253,6 +253,25 @@ function createMcpStatusSnapshot(mcpServers) {
   };
 }
 
+function createMcpPreflightArtifactSnapshot(preflightArtifact) {
+  if (!preflightArtifact) {
+    return {
+      mcp_preflight_artifact_path: null,
+      mcp_preflight_artifact_generated_at: null,
+      mcp_preflight_operational_state: null,
+      mcp_preflight_startup_failure_summary: null,
+      mcp_preflight_runtime_fault_summary: null,
+    };
+  }
+  return {
+    mcp_preflight_artifact_path: preflightArtifact.artifact_path,
+    mcp_preflight_artifact_generated_at: preflightArtifact.generated_at,
+    mcp_preflight_operational_state: preflightArtifact.mcp_operational_state,
+    mcp_preflight_startup_failure_summary: preflightArtifact.mcp_startup_failure_summary,
+    mcp_preflight_runtime_fault_summary: preflightArtifact.mcp_runtime_fault_summary,
+  };
+}
+
 function createInteractiveHeaderRows({
   mcpServers,
   allTools,
@@ -358,6 +377,7 @@ async function main() {
   }
 
   const mcpServers = await discoverAndStartMcpServers(SITE_ROOT);
+  const mcpPreflightArtifact = readMcpPreflightArtifact();
 
   recordMcpStartupFailures(mcpServers);
   const allTools = aggregateTools(mcpServers);
@@ -377,6 +397,7 @@ async function main() {
   if (messages.length === 0 && rolePrompt) {
     messages.push({ role: 'system', content: rolePrompt });
   }
+  recordMcpPreflightArtifactLinkage({ preflightArtifact: mcpPreflightArtifact });
 
   if (process.stdin.isTTY) {
     emitKeypressEvents(process.stdin, rl);
@@ -542,6 +563,44 @@ async function runMcpPreflight() {
 }
 
 
+
+function readMcpPreflightArtifact({ artifactDir = MCP_PREFLIGHT_ARTIFACT_DIR, session = SESSION, identity = IDENTITY, siteRoot = SITE_ROOT } = {}) {
+  const artifactPath = join(artifactDir, `${session}.json`);
+  if (!existsSync(artifactPath)) return null;
+  try {
+    const artifact = JSON.parse(readFileSync(artifactPath, 'utf8'));
+    if (artifact?.schema !== 'narada.agent_cli.mcp_preflight_artifact.v1') return null;
+    if (artifact?.session !== session) return null;
+    if (artifact?.identity !== identity) return null;
+    if (artifact?.site_root !== siteRoot) return null;
+    return {
+      artifact_path: artifactPath,
+      generated_at: artifact.generated_at ?? null,
+      mcp_operational_state: artifact.mcp_operational_state ?? null,
+      mcp_startup_failure_summary: artifact.mcp_startup_failure_summary ?? null,
+      mcp_runtime_fault_summary: artifact.mcp_runtime_fault_summary ?? null,
+      session: artifact.session,
+      identity: artifact.identity,
+      site_root: artifact.site_root,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function recordMcpPreflightArtifactLinkage({ sessionPath = SESSION_PATH, emit, preflightArtifact = readMcpPreflightArtifact() } = {}) {
+  if (!preflightArtifact) return null;
+  const payload = {
+    artifact_path: preflightArtifact.artifact_path,
+    generated_at: preflightArtifact.generated_at,
+    mcp_operational_state: preflightArtifact.mcp_operational_state,
+    mcp_startup_failure_summary: preflightArtifact.mcp_startup_failure_summary,
+    mcp_runtime_fault_summary: preflightArtifact.mcp_runtime_fault_summary,
+  };
+  appendSession(sessionPath, sessionEventEntry('mcp_preflight_artifact_linked', payload));
+  emit?.('mcp_preflight_artifact_linked', payload);
+  return payload;
+}
 
 function startInteractiveControlJsonlWatcher({ controlPath, inputQueue }) {
   mkdirSync(resolve(controlPath, '..'), { recursive: true });
@@ -3196,6 +3255,8 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
   const mcpServers = await discoverAndStartMcpServers(SITE_ROOT);
   const allTools = aggregateTools(mcpServers);
   const mcpStatus = createMcpStatusSnapshot(mcpServers);
+  const mcpPreflightArtifact = readMcpPreflightArtifact();
+  const mcpPreflightSnapshot = createMcpPreflightArtifactSnapshot(mcpPreflightArtifact);
   const rolePrompt = loadRolePrompt(IDENTITY, SITE_ROOT);
   const state = {
     activeTurn: null,
@@ -3248,10 +3309,12 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
     thinking: sessionSettings.thinking,
     mcp_server_count: Object.keys(mcpServers).length,
     ...mcpStatus,
+    ...mcpPreflightSnapshot,
     tool_count: allTools.length,
     session_path: SESSION_PATH,
     events_path: EVENTS_PATH,
   });
+  recordMcpPreflightArtifactLinkage({ emit, preflightArtifact: mcpPreflightArtifact });
   recordMcpStartupFailures(mcpServers, { emit });
 
   if (OPERATION_HEARTBEAT_DIRECTIVE_ENABLED) {
@@ -3619,9 +3682,10 @@ async function runServerConversationTurn({ requestId, state, messages, allTools,
   }
 }
 
-function serverStatus({ requestId, state, allTools, mcpServers }) {
+function serverStatus({ requestId, state, allTools, mcpServers, mcpPreflightArtifact = readMcpPreflightArtifact() }) {
   const goal = normalizeCarrierGoalState(sessionSettings.goal);
   const mcpStatus = createMcpStatusSnapshot(mcpServers);
+  const mcpPreflightSnapshot = createMcpPreflightArtifactSnapshot(mcpPreflightArtifact);
   return {
     request_id: requestId,
     transport: 'jsonl_stdio',
@@ -3636,6 +3700,7 @@ function serverStatus({ requestId, state, allTools, mcpServers }) {
     active_turn_id: state.activeTurn?.turnId ?? null,
     mcp_server_count: Object.keys(mcpServers).length,
     ...mcpStatus,
+    ...mcpPreflightSnapshot,
     tool_count: allTools.length,
     mcp_tools: mcpToolCatalogEntries(mcpServers),
     observer_muted: (state?.displaySettings ?? transcriptDisplaySettings).observerMuted === true,
@@ -5192,6 +5257,7 @@ export {
   codexExecMcpToolEventSummary,
   consumeOperatorDirectiveInputText,
   createInteractiveHeaderRows,
+  createMcpPreflightArtifactSnapshot,
   codexExecEventText,
   discoverAndStartMcpServers,
   environmentBlockLength,
@@ -5199,6 +5265,7 @@ export {
   classifyCarrierHostCommandInput,
   executeCarrierHostCommand,
   readCarrierHostCommandOutputRef,
+  readMcpPreflightArtifact,
   handleInteractiveControlLine,
   handleSlashCommand,
   messagesWithCarrierGoal,
@@ -5253,6 +5320,7 @@ export {
   toolDirectionLabel,
   inputRecordDisplayLabel,
   rewriteSubmittedPrompt,
+  recordMcpPreflightArtifactLinkage,
   renderMarkdownForTerminal,
   wrapTerminalLine,
   runConversationTurn,
