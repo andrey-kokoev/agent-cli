@@ -323,6 +323,7 @@ const EVENTS_PATH = join(SESSION_DIR, 'events.jsonl');
 const CARRIER_SESSION_DIR = join(NARADA_DIR, 'crew', 'nars-sessions', SESSION);
 if (!MCP_PREFLIGHT_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
 const HEARTBEAT_PATH = join(CARRIER_SESSION_DIR, 'heartbeat.json');
+const MCP_PREFLIGHT_ARTIFACT_DIR = join(NARADA_DIR, 'runtime', 'agent-cli', 'mcp-preflight');
 const HEARTBEAT_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_HEARTBEAT_ENABLE, true);
 const OPERATION_HEARTBEAT_DIRECTIVE_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_OPERATION_HEARTBEAT_DIRECTIVE_ENABLE, SERVER_MODE);
 const OPERATION_HEARTBEAT_DIRECTIVE_INTERVAL_MS = Number(process.env.NARADA_AGENT_CLI_OPERATION_HEARTBEAT_DIRECTIVE_INTERVAL_MS ?? 60000);
@@ -515,6 +516,14 @@ async function runMcpPreflight() {
   try {
     const allTools = aggregateTools(mcpServers);
     const mcpStatus = createMcpStatusSnapshot(mcpServers);
+    const artifactPath = writeMcpPreflightArtifact({
+      session: SESSION,
+      identity: IDENTITY,
+      siteRoot: SITE_ROOT,
+      mcpStatus,
+      mcpServers,
+      allTools,
+    });
     console.log(formatKeyValueRows({
       Identity: IDENTITY,
       Session: SESSION,
@@ -524,6 +533,7 @@ async function runMcpPreflight() {
       ...(mcpStatus.mcp_startup_failure_count > 0 ? { 'MCP startup failures': mcpStatus.mcp_startup_failure_summary } : {}),
       ...(mcpStatus.mcp_runtime_fault_count > 0 ? { 'MCP runtime faults': mcpStatus.mcp_runtime_fault_summary } : {}),
       Tools: allTools.length,
+      Artifact: artifactPath,
     }));
     return mcpStatus.mcp_operational_state === 'healthy' ? 0 : 2;
   } finally {
@@ -2711,6 +2721,22 @@ function removeInvalidToolHistory(messages) {
 
 function appendSession(path, entry) {
   appendFileSync(path, JSON.stringify(entry) + '\n', 'utf-8');
+}
+
+function writeMcpPreflightArtifact({ artifactDir = MCP_PREFLIGHT_ARTIFACT_DIR, session, identity, siteRoot, mcpStatus, mcpServers, allTools }) {
+  mkdirSync(artifactDir, { recursive: true });
+  const artifactPath = join(artifactDir, `${session}.json`);
+  writeFileSync(artifactPath, `${JSON.stringify({
+    schema: 'narada.agent_cli.mcp_preflight_artifact.v1',
+    session,
+    identity,
+    site_root: siteRoot,
+    generated_at: new Date().toISOString(),
+    mcp_server_count: Object.keys(mcpServers).length,
+    tool_count: allTools.length,
+    ...mcpStatus,
+  }, null, 2)}\n`, 'utf8');
+  return artifactPath;
 }
 
 function startCarrierHeartbeat({ path, session, identity, runtime, mode, sessionDir, carrierSessionDir, intervalMs = 5000 }) {
