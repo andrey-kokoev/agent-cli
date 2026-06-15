@@ -2033,6 +2033,63 @@ const degradedSessionEntries = readFileSync(join(degradedServerSite, '.narada', 
 assert.equal(degradedSessionEntries.some((entry) => entry.event_kind === 'carrier_diagnostic_recorded' && entry.payload?.server_name === 'degraded' && entry.payload?.diagnostic_code === 'mcp_stdout_pollution'), true);
 rmSync(degradedServerSite, { recursive: true, force: true });
 
+const runtimeServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-runtime-server-'));
+mkdirSync(join(runtimeServerSite, '.ai', 'mcp'), { recursive: true });
+const runtimeServerPath = join(runtimeServerSite, 'degraded-mcp-server.mjs');
+writeFileSync(runtimeServerPath, `
+import readline from 'node:readline';
+console.log('startup banner');
+const rl = readline.createInterface({ input: process.stdin });
+rl.on('line', (line) => {
+  const request = JSON.parse(line);
+  if (request.method === 'initialize') {
+    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05' } }));
+    return;
+  }
+  if (request.method === 'tools/list') {
+    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { tools: [] } }));
+  }
+});
+`, 'utf8');
+writeFileSync(join(runtimeServerSite, '.ai', 'mcp', 'degraded-mcp.json'), `${JSON.stringify({
+  mcpServers: {
+    degraded: {
+      transport: 'stdio',
+      command: 'node',
+      args: [runtimeServerPath],
+    },
+  },
+}, null, 2)}\n`, 'utf8');
+const runtimeServerChild = spawn(process.execPath, [
+  fileURLToPath(new URL('../bin/agent-runtime-server.mjs', import.meta.url)),
+  '--identity', 'narada.test',
+  '--session', 'runtime-wrapper-test',
+], {
+  env: {
+    ...process.env,
+    NARADA_SITE_ROOT: runtimeServerSite,
+    NARADA_INTELLIGENCE_PROVIDER: 'codex-subscription',
+  },
+  stdio: ['pipe', 'pipe', 'pipe'],
+});
+let runtimeServerStdout = '';
+let runtimeServerStderr = '';
+runtimeServerChild.stdout.setEncoding('utf8');
+runtimeServerChild.stderr.setEncoding('utf8');
+runtimeServerChild.stdout.on('data', (chunk) => { runtimeServerStdout += chunk; });
+runtimeServerChild.stderr.on('data', (chunk) => { runtimeServerStderr += chunk; });
+runtimeServerChild.stdin.write(`${JSON.stringify({ id: 'status-runtime-wrapper-1', method: 'session.status', params: {} })}\n`);
+runtimeServerChild.stdin.write(`${JSON.stringify({ id: 'close-runtime-wrapper-1', method: 'session.close', params: {} })}\n`);
+runtimeServerChild.stdin.end();
+const runtimeServerExitCode = await new Promise((resolveExit) => runtimeServerChild.on('exit', resolveExit));
+assert.equal(runtimeServerExitCode, 0);
+const runtimeServerEvents = runtimeServerStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+assert.equal(runtimeServerEvents[0].event, 'session_started');
+assert.equal(runtimeServerEvents[0].mcp_operational_state, 'startup_degraded');
+assert.equal(runtimeServerStderr.includes('[agent-runtime-server] MCP state=startup_degraded | startup=1 (degraded:mcp_stdout_pollution)'), true);
+assert.equal(runtimeServerEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-runtime-wrapper-1' && event.mcp_startup_failure_summary === '1 (degraded:mcp_stdout_pollution)'), true);
+rmSync(runtimeServerSite, { recursive: true, force: true });
+
 const directiveServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-directive-server-'));
 mkdirSync(join(directiveServerSite, '.ai', 'mcp'), { recursive: true });
 const previousSiteRoot = process.env.NARADA_SITE_ROOT;
