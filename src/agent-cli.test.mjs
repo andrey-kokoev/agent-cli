@@ -3680,11 +3680,13 @@ assert.deepEqual(
     'session_status_requested',
     'session_recovery_requested',
     'preflight_recovery_requested',
+    'session_close_requested',
   ].includes(entry.event)).map((entry) => ({ event: entry.event, request_id: entry.request_id, method: entry.method })),
   [
     { event: 'session_status_requested', request_id: 'status-1', method: 'session.status' },
     { event: 'session_recovery_requested', request_id: 'recovery-1', method: 'session.recovery' },
     { event: 'preflight_recovery_requested', request_id: 'preflight-1', method: 'preflight.recovery' },
+    { event: 'session_close_requested', request_id: 'close-1', method: 'session.close' },
   ],
 );
 assert.equal(stdout.includes('[agent-cli]'), false);
@@ -4648,6 +4650,44 @@ try {
   else process.env.NARADA_SITE_ROOT = previousSiteRoot;
   rmSync(closedServerSite, { recursive: true, force: true });
 }
+
+const interruptPersistenceSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-interrupt-persist-'));
+mkdirSync(join(interruptPersistenceSite, '.ai', 'mcp'), { recursive: true });
+const interruptPersistenceChild = spawn(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--identity', 'narada.test',
+  '--session', 'interrupt-server-test',
+  '--server',
+], {
+  cwd: interruptPersistenceSite,
+  env: { ...process.env, NARADA_SITE_ROOT: interruptPersistenceSite },
+  stdio: ['pipe', 'pipe', 'pipe'],
+});
+let interruptPersistenceStdout = '';
+let interruptPersistenceStderr = '';
+interruptPersistenceChild.stdout.setEncoding('utf8');
+interruptPersistenceChild.stderr.setEncoding('utf8');
+interruptPersistenceChild.stdout.on('data', (chunk) => { interruptPersistenceStdout += chunk; });
+interruptPersistenceChild.stderr.on('data', (chunk) => { interruptPersistenceStderr += chunk; });
+interruptPersistenceChild.stdin.write(`${JSON.stringify({ id: 'interrupt-1', method: 'conversation.interrupt', params: {} })}\n`);
+interruptPersistenceChild.stdin.end();
+const interruptPersistenceExitCode = await new Promise((resolveExit) => interruptPersistenceChild.on('exit', resolveExit));
+assert.equal(interruptPersistenceExitCode, 0);
+const interruptPersistenceEvents = interruptPersistenceStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+assert.equal(interruptPersistenceEvents.some((event) => event.event === 'session_status' && event.request_id === 'interrupt-1'), true);
+const interruptPersistenceSessionEntries = readPersistedSessionEvents({ session: 'interrupt-server-test', naradaDir: join(interruptPersistenceSite, '.narada') });
+assert.deepEqual(
+  interruptPersistenceSessionEntries.filter((entry) => entry.event === 'conversation_interrupt_requested').map((entry) => ({
+    event: entry.event,
+    request_id: entry.request_id,
+    method: entry.method,
+  })),
+  [
+    { event: 'conversation_interrupt_requested', request_id: 'interrupt-1', method: 'conversation.interrupt' },
+  ],
+);
+assert.equal(interruptPersistenceStderr.includes('Fatal error'), false);
+rmSync(interruptPersistenceSite, { recursive: true, force: true });
 
 console.log('agent-cli adapter tests PASSED.');
 

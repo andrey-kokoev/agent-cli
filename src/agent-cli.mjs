@@ -5871,6 +5871,7 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
       return;
     }
     if (controlRequest.method_kind === 'conversation_interrupt') {
+      recordServerWorkflowRequest('conversation_interrupt_requested', { requestId, method: request?.method ?? 'conversation.interrupt' });
       if (state.activeTurn) {
         requestTurnInterrupt(state.activeTurn);
         emit('turn_interrupted', {
@@ -5884,6 +5885,7 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
       return;
     }
     if (controlRequest.method_kind === 'session_close') {
+      recordServerWorkflowRequest('session_close_requested', { requestId, method: request?.method ?? 'session.close' });
       const closedAt = new Date().toISOString();
       state.closed = true;
       if (state.activeTurn) requestTurnInterrupt(state.activeTurn);
