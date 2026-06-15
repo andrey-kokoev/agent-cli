@@ -102,6 +102,8 @@ const SESSION_INVENTORY_EVENTS_FILTER = normalizeSessionEventsFilter(options.ses
 const SESSION_INVENTORY_EVENTS_COUNT = Number.isFinite(Number(options.sessionInventoryEventsCount))
   ? Math.max(1, Number(options.sessionInventoryEventsCount))
   : 20;
+const SESSION_RECOVERY_MODE = options.sessionRecovery === true;
+const SESSION_RECOVERY_JSON_MODE = options.sessionRecoveryJson === true;
 const SESSION_READ_MODE = options.sessionRead === true;
 const SESSION_READ_JSON_MODE = options.sessionReadJson === true;
 const SESSION_EVENTS_MODE = options.sessionEvents === true;
@@ -721,11 +723,11 @@ const NARADA_DIR = basename(SITE_ROOT) === '.narada' ? SITE_ROOT : join(SITE_ROO
 const SESSION_DIR = SERVER_MODE
   ? join(NARADA_DIR, 'crew', 'nars-sessions', SESSION)
   : (existsSync(PC_RUNTIME) ? join(PC_RUNTIME, 'agent-sessions') : resolve(SITE_ROOT, '.ai', 'runtime', 'agent-sessions'));
-if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
 const SESSION_PATH = SERVER_MODE ? join(SESSION_DIR, 'session.jsonl') : join(SESSION_DIR, `${SESSION}.jsonl`);
 const EVENTS_PATH = join(SESSION_DIR, 'events.jsonl');
 const CARRIER_SESSION_DIR = join(NARADA_DIR, 'crew', 'nars-sessions', SESSION);
-if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
 const HEARTBEAT_PATH = join(CARRIER_SESSION_DIR, 'heartbeat.json');
 const MCP_PREFLIGHT_ARTIFACT_DIR = join(NARADA_DIR, 'runtime', 'agent-cli', 'mcp-preflight');
 const HEARTBEAT_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_HEARTBEAT_ENABLE, true);
@@ -779,6 +781,14 @@ async function main() {
   }
   if (SESSION_INVENTORY_EVENTS_JSON_MODE) {
     process.exitCode = await runSessionInventoryEvents({ jsonOutput: true, filterKey: SESSION_INVENTORY_FILTER_KEY, filterValue: SESSION_INVENTORY_FILTER_VALUE, eventFilter: SESSION_INVENTORY_EVENTS_FILTER, recentCount: SESSION_INVENTORY_EVENTS_COUNT });
+    return;
+  }
+  if (SESSION_RECOVERY_MODE) {
+    process.exitCode = await runSessionRecovery();
+    return;
+  }
+  if (SESSION_RECOVERY_JSON_MODE) {
+    process.exitCode = await runSessionRecovery({ jsonOutput: true });
     return;
   }
   if (SESSION_READ_MODE) {
@@ -1219,6 +1229,63 @@ async function runSessionInventoryEvents({ siteRoot = SITE_ROOT, naradaDir = NAR
   }
   blocks.push(renderSessionInventoryEventGroups(inventoryEventSummary.groups));
   console.log(blocks.join('\n\n'));
+  return 0;
+}
+
+async function runSessionRecovery({ session = SESSION, siteRoot = SITE_ROOT, naradaDir = NARADA_DIR, jsonOutput = false } = {}) {
+  const sessionRecord = readPersistedSession({ session, siteRoot, naradaDir });
+  if (!sessionRecord) {
+    if (jsonOutput) {
+      console.log(`${JSON.stringify({
+        schema: 'narada.agent_cli.session_recovery.v1',
+        site_root: siteRoot,
+        session,
+        found: false,
+      }, null, 2)}\n`);
+    } else {
+      console.log(formatKeyValueRows({
+        SiteRoot: siteRoot,
+        Session: session,
+        Status: 'persisted session not found',
+      }));
+    }
+    return 0;
+  }
+  if (jsonOutput) {
+    console.log(`${JSON.stringify({
+      schema: 'narada.agent_cli.session_recovery.v1',
+      site_root: siteRoot,
+      session,
+      found: true,
+      recovery: {
+        recovery_kind: sessionRecord.recovery_kind,
+        recovery_kind_display: sessionRecord.recovery_kind_display,
+        recovery_primary_command: sessionRecord.recovery_primary_command,
+        recovery_followup_command: sessionRecord.recovery_followup_command,
+        recommended_action: sessionRecord.recommended_action,
+        recommended_action_display: sessionRecord.recommended_action_display,
+        recommended_command: sessionRecord.recommended_command,
+      },
+      record: sessionRecord,
+    }, null, 2)}\n`);
+    return 0;
+  }
+  console.log(formatKeyValueRows({
+    SiteRoot: siteRoot,
+    Session: sessionRecord.session,
+    'Operational posture': sessionRecord.operational_posture_display,
+    'MCP state': sessionRecord.mcp_operational_state,
+    'Request posture': sessionRecord.request_posture_display,
+    'Recovery kind': sessionRecord.recovery_kind_display ?? 'none',
+    'Recovery primary': sessionRecord.recovery_primary_command ?? 'none',
+    'Recovery followup': sessionRecord.recovery_followup_command ?? 'none',
+    'Recommended action': sessionRecord.recommended_action_display,
+    'Recommended command': sessionRecord.recommended_command ?? 'none',
+    'Session read': sessionRecord?.handoffs?.session_read ?? 'none',
+    'Session issues': sessionRecord?.handoffs?.session_events_issues ?? 'none',
+    'Session diagnostics': sessionRecord?.handoffs?.session_events_diagnostics ?? 'none',
+    'Session path': sessionRecord.session_path,
+  }));
   return 0;
 }
 
@@ -6464,6 +6531,10 @@ function parseArgs(argv) {
     } else if (argv[i] === '--session-inventory-events-count' && i + 1 < argv.length) {
       opts.sessionInventoryEventsCount = Number(argv[i + 1]);
       i++;
+    } else if (argv[i] === '--session-recovery') {
+      opts.sessionRecovery = true;
+    } else if (argv[i] === '--session-recovery-json') {
+      opts.sessionRecoveryJson = true;
     } else if (argv[i] === '--session-read') {
       opts.sessionRead = true;
     } else if (argv[i] === '--session-read-json') {
@@ -6625,6 +6696,7 @@ export {
   runConversationTurn,
   runMcpPreflight,
   runSessionEventsRead,
+  runSessionRecovery,
   runSessionRead,
   runSessionInventory,
   runSessionInventoryActions,
@@ -6648,7 +6720,7 @@ export {
 
 if (isEntrypoint) {
   if (options.help) {
-    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--session-inventory] [--session-inventory-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics>] [--session-inventory-events-count <n>] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics>] [--session-events-count <n>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
+    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--session-inventory] [--session-inventory-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics>] [--session-inventory-events-count <n>] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics>] [--session-events-count <n>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
     console.log('Programmatic input: --message and --message-file are explicit control inputs; do not use raw stdin piping as the control API.');
     console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, ANTHROPIC_API_KEY, NARADA_AI_API_KEY, NARADA_AI_BASE_URL, NARADA_AI_MODEL, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_ENABLE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_DELAY_MS, NARADA_SITE_ROOT`);
     process.exit(0);

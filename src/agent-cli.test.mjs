@@ -579,6 +579,8 @@ assert.deepEqual(parseArgs(['--session-inventory-recovery']), { sessionInventory
 assert.deepEqual(parseArgs(['--session-inventory-recovery-json']), { sessionInventoryRecoveryJson: true });
 assert.deepEqual(parseArgs(['--session-inventory-events']), { sessionInventoryEvents: true });
 assert.deepEqual(parseArgs(['--session-inventory-events-json']), { sessionInventoryEventsJson: true });
+assert.deepEqual(parseArgs(['--session-recovery']), { sessionRecovery: true });
+assert.deepEqual(parseArgs(['--session-recovery-json']), { sessionRecoveryJson: true });
 assert.equal(parseColorEnv('off', true), false);
 const heartbeatRoot = mkdtempSync(join(tmpdir(), 'narada-agent-cli-heartbeat-'));
 const heartbeatSession = 'carrier_session_heartbeat_test';
@@ -1174,6 +1176,48 @@ assert.equal(sessionReadRun.stdout.includes('1 (invalid_json), 1 (request_dispat
 assert.equal(sessionReadRun.stdout.includes('review runtime diagnostics'), true);
 assert.equal(sessionReadRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20'), true);
 assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'faulted-session')), true);
+const sessionRecoveryRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-recovery',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'faulted-session',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(sessionRecoveryRun.status, 0);
+assert.equal(sessionRecoveryRun.stdout.includes('Session'), true);
+assert.equal(sessionRecoveryRun.stdout.includes('Recovery kind'), true);
+assert.equal(sessionRecoveryRun.stdout.includes('diagnostic review'), true);
+assert.equal(sessionRecoveryRun.stdout.includes('Recovery primary'), true);
+assert.equal(sessionRecoveryRun.stdout.includes('Recovery followup'), true);
+assert.equal(sessionRecoveryRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20'), true);
+assert.equal(sessionRecoveryRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-read'), true);
+const sessionRecoveryJsonRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-recovery-json',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'healthy-session',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(sessionRecoveryJsonRun.status, 0);
+const sessionRecoveryJson = JSON.parse(sessionRecoveryJsonRun.stdout);
+assert.equal(sessionRecoveryJson.schema, 'narada.agent_cli.session_recovery.v1');
+assert.equal(sessionRecoveryJson.site_root, inventoryRoot);
+assert.equal(sessionRecoveryJson.session, 'healthy-session');
+assert.equal(sessionRecoveryJson.found, true);
+assert.equal(sessionRecoveryJson.recovery.recovery_kind, 'no_recovery');
+assert.equal(sessionRecoveryJson.recovery.recovery_primary_command, 'narada-agent-cli --identity narada.test --session healthy-session --session-read');
+assert.equal(sessionRecoveryJson.recovery.recovery_followup_command, null);
+assert.equal(sessionRecoveryJson.record.recommended_action, 'review_session_summary');
 const sessionReadJsonRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
   '--session-read-json',
@@ -1754,6 +1798,8 @@ assert.equal(windowsWrapperTemplate.includes('[string]$SessionInventoryMatch'), 
 assert.equal(windowsWrapperTemplate.includes('[string]$SessionInventoryEventsFilter = \'all\''), true);
 assert.equal(windowsWrapperTemplate.includes('[int]$SessionInventoryEventsCount = 20'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionRead'), true);
+assert.equal(windowsWrapperTemplate.includes('[switch]$SessionRecovery'), true);
+assert.equal(windowsWrapperTemplate.includes('[switch]$SessionRecoveryJson'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionReadJson'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionEvents'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionEventsJson'), true);
@@ -1772,6 +1818,8 @@ assert.equal(windowsWrapperTemplate.includes("'--session-inventory-events-json'"
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-filter', $SessionInventoryFilter, '--session-inventory-match', $SessionInventoryMatch"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-events-filter', $SessionInventoryEventsFilter, '--session-inventory-events-count', $SessionInventoryEventsCount"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-read'"), true);
+assert.equal(windowsWrapperTemplate.includes("'--session-recovery'"), true);
+assert.equal(windowsWrapperTemplate.includes("'--session-recovery-json'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-read-json'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-events'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-events-json'"), true);
