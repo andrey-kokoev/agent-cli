@@ -716,6 +716,7 @@ assert.equal(inventoryEntries[0].request_outcome_total, 0);
 assert.equal(inventoryEntries[0].request_posture, 'clean');
 assert.equal(inventoryEntries[0].request_posture_display, 'clean');
 assert.equal(inventoryEntries[0].mcp_preflight_artifact_path, join(inventoryNaradaDir, 'runtime', 'agent-cli', 'mcp-preflight', 'healthy-session.json'));
+assert.equal(inventoryEntries[0].handoffs.session_read, 'narada-agent-cli --identity narada.test --session healthy-session --session-read');
 assert.equal(inventoryEntries[1].session, 'faulted-session');
 assert.equal(inventoryEntries[1].agent_id, 'narada.test');
 assert.equal(inventoryEntries[1].started_at, '2026-06-14T11:40:00.000Z');
@@ -779,6 +780,8 @@ assert.equal(sessionInventoryRun.stdout.includes('faulted-session'), true);
 assert.equal(sessionInventoryRun.stdout.includes('runtime_faulted'), true);
 assert.equal(sessionInventoryRun.stdout.includes('MCP startup failures  1 (degraded:mcp_stdout_pollution)'), true);
 assert.equal(sessionInventoryRun.stdout.includes('MCP runtime faults    1 (runtime:fs_read_file)'), true);
+assert.equal(sessionInventoryRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-read'), true);
+assert.equal(sessionInventoryRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter issues --session-events-count 20'), true);
 assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-scan-test')), false);
 const sessionInventoryJsonRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
@@ -843,6 +846,7 @@ assert.equal(sessionInventoryJson.sessions[0].request_outcome_total, 0);
 assert.equal(sessionInventoryJson.sessions[0].request_posture, 'clean');
 assert.equal(sessionInventoryJson.sessions[0].request_posture_display, 'clean');
 assert.equal(sessionInventoryJson.sessions[0].mcp_operational_state, 'healthy');
+assert.equal(sessionInventoryJson.sessions[0].handoffs.session_events, 'narada-agent-cli --identity narada.test --session healthy-session --session-events --session-events-filter all --session-events-count 20');
 assert.equal(sessionInventoryJson.sessions[1].session, 'faulted-session');
 assert.equal(sessionInventoryJson.sessions[1].started_at, '2026-06-14T11:40:00.000Z');
 assert.equal(sessionInventoryJson.sessions[1].last_terminal_state, 'failed');
@@ -949,6 +953,7 @@ assert.equal(sessionInventoryEventsRun.stdout.includes('Issue codes'), true);
 assert.equal(sessionInventoryEventsRun.stdout.includes('Terminal states'), true);
 assert.equal(sessionInventoryEventsRun.stdout.includes('Recent events:'), true);
 assert.equal(sessionInventoryEventsRun.stdout.includes('Event groups: event_kind'), true);
+assert.equal(sessionInventoryEventsRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-read'), true);
 assert.equal(sessionInventoryEventsRun.stdout.includes('faulted-session'), true);
 assert.equal(sessionInventoryEventsRun.stdout.includes('healthy-session'), true);
 assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-events-test')), false);
@@ -989,6 +994,7 @@ assert.deepEqual(sessionInventoryEventsJson.groups.terminal_state, {});
 assert.equal(sessionInventoryEventsJson.sessions.length, 1);
 assert.equal(sessionInventoryEventsJson.sessions[0].session, 'faulted-session');
 assert.equal(sessionInventoryEventsJson.sessions[0].event_count, 2);
+assert.equal(sessionInventoryEventsJson.sessions[0].handoffs.session_events_diagnostics, 'narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20');
 assert.equal(sessionInventoryEventsJson.recent_events.length, 2);
 assert.equal(sessionInventoryEventsJson.recent_events[0].session, 'faulted-session');
 assert.equal(sessionInventoryEventsJson.recent_events[0].event_kind, 'carrier_diagnostic_recorded');
@@ -1042,6 +1048,7 @@ assert.equal(sessionReadRun.stdout.includes('mcp_runtime_faulted [mcp=runtime_fa
 assert.equal(sessionReadRun.stdout.includes('runtime_failures (4)'), true);
 assert.equal(sessionReadRun.stdout.includes('failed'), true);
 assert.equal(sessionReadRun.stdout.includes('1 (invalid_json), 1 (request_dispatch_failed), 1 (request_failed), 1 (session_closed)'), true);
+assert.equal(sessionReadRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20'), true);
 assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'faulted-session')), true);
 const sessionReadJsonRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
@@ -1065,6 +1072,7 @@ assert.equal(sessionReadJson.record.session, 'healthy-session');
 assert.equal(sessionReadJson.record.operational_posture, 'healthy');
 assert.equal(sessionReadJson.record.last_lifecycle_state, 'closed');
 assert.equal(sessionReadJson.record.request_posture, 'clean');
+assert.equal(sessionReadJson.record.handoffs.session_read_json, 'narada-agent-cli --identity narada.test --session healthy-session --session-read-json');
 const persistedEvents = readPersistedSessionEvents({ session: 'faulted-session', naradaDir: inventoryNaradaDir });
 assert.equal(persistedEvents.length, 7);
 assert.equal(persistedEvents.at(-1).event_kind, 'input_completed');
@@ -1088,6 +1096,7 @@ assert.equal(sessionEventsRun.stdout.includes('Event count'), true);
 assert.equal(sessionEventsRun.stdout.includes('Recent events:'), true);
 assert.equal(sessionEventsRun.stdout.includes('carrier_diagnostic_recorded'), true);
 assert.equal(sessionEventsRun.stdout.includes('input_completed [terminal=failed]'), true);
+assert.equal(sessionEventsRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter issues --session-events-count 20'), true);
 const sessionEventsLifecycleJsonRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
   '--session-events-json',

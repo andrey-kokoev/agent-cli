@@ -210,6 +210,20 @@ function formatPersistedSessionInventoryEventLine(entry) {
   return `- ${session} ${timestamp} ${eventKind}${details.length > 0 ? ` [${details.join('; ')}]` : ''}`;
 }
 
+function buildPersistedSessionHandoffs({ session, identity = IDENTITY, eventCount = 20 } = {}) {
+  const normalizedSession = String(session ?? '').trim();
+  const normalizedIdentity = String(identity ?? IDENTITY).trim() || IDENTITY;
+  if (!normalizedSession) return {};
+  const base = `narada-agent-cli --identity ${normalizedIdentity} --session ${normalizedSession}`;
+  return {
+    session_read: `${base} --session-read`,
+    session_read_json: `${base} --session-read-json`,
+    session_events: `${base} --session-events --session-events-filter all --session-events-count ${eventCount}`,
+    session_events_issues: `${base} --session-events --session-events-filter issues --session-events-count ${eventCount}`,
+    session_events_diagnostics: `${base} --session-events --session-events-filter diagnostics --session-events-count ${eventCount}`,
+  };
+}
+
 function renderSessionInventoryEventGroups(groups = {}) {
   const sections = [];
   for (const [groupKey, buckets] of Object.entries(groups)) {
@@ -847,6 +861,9 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
       'MCP startup failures': item.mcp_startup_failure_summary,
       'MCP runtime faults': item.mcp_runtime_fault_summary,
       'Preflight artifact': item.mcp_preflight_artifact_path ?? 'none',
+      'Session read': item?.handoffs?.session_read ?? 'none',
+      'Session issues': item?.handoffs?.session_events_issues ?? 'none',
+      'Session diagnostics': item?.handoffs?.session_events_diagnostics ?? 'none',
       'Session path': item.session_path,
     }));
   }
@@ -906,6 +923,9 @@ async function runSessionInventoryEvents({ siteRoot = SITE_ROOT, naradaDir = NAR
       'Event count': item.event_count,
       'Last event': item.last_event_kind,
       'Last event at': item.last_event_at,
+      'Session read': item?.handoffs?.session_read ?? 'none',
+      'Session issues': item?.handoffs?.session_events_issues ?? 'none',
+      'Session diagnostics': item?.handoffs?.session_events_diagnostics ?? 'none',
     }));
   }
   if (inventoryEventSummary.recent_events.length > 0) {
@@ -969,6 +989,9 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
     'Request posture': sessionRecord.request_posture_display,
     'Lifecycle outcomes': sessionRecord.lifecycle_state_summary,
     'Request issues': sessionRecord.request_issue_summary,
+    'Session read': sessionRecord?.handoffs?.session_read ?? 'none',
+    'Session issues': sessionRecord?.handoffs?.session_events_issues ?? 'none',
+    'Session diagnostics': sessionRecord?.handoffs?.session_events_diagnostics ?? 'none',
     'Session path': sessionRecord.session_path,
   })];
   if (recentEvents.length > 0) {
@@ -1030,6 +1053,9 @@ async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaD
     'MCP startup failures': sessionRecord.mcp_startup_failure_summary,
     'MCP runtime faults': sessionRecord.mcp_runtime_fault_summary,
     'Preflight artifact': sessionRecord.mcp_preflight_artifact_path ?? 'none',
+    'Session events': sessionRecord?.handoffs?.session_events ?? 'none',
+    'Session issues': sessionRecord?.handoffs?.session_events_issues ?? 'none',
+    'Session diagnostics': sessionRecord?.handoffs?.session_events_diagnostics ?? 'none',
     'Session path': sessionRecord.session_path,
   }));
   return 0;
@@ -1153,6 +1179,7 @@ function summarizeSessionInventoryEvents(inventory = [], { naradaDir = NARADA_DI
       event_count: events.length,
       last_event_kind: lastEvent?.event_kind ?? lastEvent?.event ?? 'unknown-event',
       last_event_at: lastEvent?.timestamp ?? lastEvent?.occurred_at ?? lastEvent?.payload?.occurred_at ?? lastEvent?.payload?.created_at ?? 'unknown-time',
+      handoffs: item?.handoffs ?? buildPersistedSessionHandoffs({ session, identity: item?.agent_id ?? IDENTITY, eventCount: recentCount }),
     });
   }
   sessions.sort((left, right) => right.event_count - left.event_count || String(right.last_event_at ?? '').localeCompare(String(left.last_event_at ?? '')) || left.session.localeCompare(right.session));
@@ -1455,6 +1482,7 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
       ? formatMcpRuntimeDiagnosticSummary(runtimeDiagnostics)
       : (linkedPreflight?.mcp_runtime_fault_summary ?? preflightArtifact?.mcp_runtime_fault_summary ?? '0'),
     mcp_preflight_artifact_path: linkedPreflight?.artifact_path ?? preflightArtifact?.artifact_path ?? null,
+    handoffs: buildPersistedSessionHandoffs({ session, identity: heartbeat?.agent_id ?? IDENTITY }),
   };
 }
 
