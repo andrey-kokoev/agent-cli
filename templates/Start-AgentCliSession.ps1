@@ -65,6 +65,10 @@ param(
 
     [switch]$McpPreflightReadJson,
 
+    [switch]$McpPreflightInventory,
+
+    [switch]$McpPreflightInventoryJson,
+
     [switch]$AutoApprove
 )
 
@@ -399,6 +403,19 @@ if ($McpPreflightRead) {
 if ($McpPreflightReadJson) {
     Set-Location $WorkDir
     & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-read-json'
+    exit $LASTEXITCODE
+}
+
+if ($McpPreflightInventory) {
+    Write-Host "MCP preflight inventory..." -ForegroundColor Cyan
+    Set-Location $WorkDir
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-inventory'
+    exit $LASTEXITCODE
+}
+
+if ($McpPreflightInventoryJson) {
+    Set-Location $WorkDir
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-inventory-json'
     exit $LASTEXITCODE
 }
 
