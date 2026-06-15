@@ -103,6 +103,8 @@ const MCP_PREFLIGHT_FILTER_VALUE = normalizeMcpPreflightFilterValue(options.mcpP
 const MCP_PREFLIGHT_DIAGNOSTICS_FILTER = normalizeMcpPreflightDiagnosticsFilter(options.mcpPreflightDiagnosticsFilter);
 const SESSION_INVENTORY_MODE = options.sessionInventory === true;
 const SESSION_INVENTORY_JSON_MODE = options.sessionInventoryJson === true;
+const SESSION_INVENTORY_OPERATIONS_MODE = options.sessionInventoryOperations === true;
+const SESSION_INVENTORY_OPERATIONS_JSON_MODE = options.sessionInventoryOperationsJson === true;
 const SESSION_INVENTORY_HOST_COMMANDS_MODE = options.sessionInventoryHostCommands === true;
 const SESSION_INVENTORY_HOST_COMMANDS_JSON_MODE = options.sessionInventoryHostCommandsJson === true;
 const SESSION_INVENTORY_ACTIONS_MODE = options.sessionInventoryActions === true;
@@ -258,6 +260,64 @@ function renderSessionInventoryHostCommands(sessions = []) {
     'Session read': item?.handoffs?.session_read ?? 'none',
     'Session recovery': item?.handoffs?.session_recovery ?? 'none',
     'Session diagnostics': item?.handoffs?.session_events_diagnostics ?? 'none',
+  }));
+}
+
+function summarizeSessionInventoryOperations(inventory = []) {
+  const operationSessions = inventory.filter((item) => Number(item?.operation_event_count ?? 0) > 0);
+  const operationEventCounts = {};
+  const directiveKindCounts = {};
+  const directiveVisibilityCounts = {};
+  const operationIdCounts = {};
+  for (const item of operationSessions) {
+    mergeInventoryCounts(operationEventCounts, item?.operation_event_counts ?? null);
+    mergeInventoryCounts(directiveKindCounts, item?.directive_kind_counts ?? null);
+    mergeInventoryCounts(directiveVisibilityCounts, item?.directive_visibility_counts ?? null);
+    mergeInventoryCounts(operationIdCounts, item?.operation_id_counts ?? null);
+  }
+  return {
+    operation_session_count: operationSessions.length,
+    operation_event_counts: operationEventCounts,
+    operation_event_summary: formatInventoryCounts(operationEventCounts),
+    directive_kind_counts: directiveKindCounts,
+    directive_kind_summary: formatInventoryCounts(directiveKindCounts),
+    directive_visibility_counts: directiveVisibilityCounts,
+    directive_visibility_summary: formatInventoryCounts(directiveVisibilityCounts),
+    operation_id_counts: operationIdCounts,
+    operation_id_summary: formatInventoryCounts(operationIdCounts),
+    groups: {
+      directive_kind: summarizeSessionInventoryGroupBy(operationSessions, 'last_directive_kind', 'last_directive_kind'),
+      directive_visibility: summarizeSessionInventoryGroupBy(operationSessions, 'last_directive_visibility', 'last_directive_visibility'),
+      recommended_action: summarizeSessionInventoryGroupBy(operationSessions, 'recommended_action', 'recommended_action_display'),
+    },
+    workflow_groups: summarizeActionWorkflowGroups(operationSessions),
+    sessions: operationSessions
+      .slice()
+      .sort((left, right) => Number(right?.operation_event_count ?? 0) - Number(left?.operation_event_count ?? 0)
+        || String(right?.last_operation_at ?? '').localeCompare(String(left?.last_operation_at ?? ''))
+        || String(left?.session ?? '').localeCompare(String(right?.session ?? ''))),
+  };
+}
+
+function renderSessionInventoryOperations(sessions = []) {
+  return sessions.map((item) => formatKeyValueRows({
+    Session: item.session,
+    Heartbeat: item.heartbeat_display,
+    'Operation events': item.operation_event_summary,
+    'Directive kinds': item.directive_kind_summary,
+    'Directive visibility': item.directive_visibility_summary,
+    'Operation ids': item.operation_id_summary,
+    'Last operation id': item.last_operation_id ?? 'none',
+    'Last directive kind': item.last_directive_kind ?? 'none',
+    'Last directive visibility': item.last_directive_visibility ?? 'none',
+    'Last operation at': item.last_operation_at ?? 'unknown',
+    'Recommended action': item.recommended_action_display,
+    'Recommended command': item.recommended_command ?? 'none',
+    'Session read': item?.handoffs?.session_read ?? 'none',
+    'Session recovery': item?.handoffs?.session_recovery ?? 'none',
+    'Session issues': item?.handoffs?.session_events_issues ?? 'none',
+    'Session diagnostics': item?.handoffs?.session_events_diagnostics ?? 'none',
+    'Session path': item.session_path,
   }));
 }
 
@@ -1164,11 +1224,11 @@ const NARADA_DIR = basename(SITE_ROOT) === '.narada' ? SITE_ROOT : join(SITE_ROO
 const SESSION_DIR = SERVER_MODE
   ? join(NARADA_DIR, 'crew', 'nars-sessions', SESSION)
   : (existsSync(PC_RUNTIME) ? join(PC_RUNTIME, 'agent-sessions') : resolve(SITE_ROOT, '.ai', 'runtime', 'agent-sessions'));
-if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_HOST_COMMANDS_MODE && !SESSION_INVENTORY_HOST_COMMANDS_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !HOST_COMMAND_OUTPUT_READ_MODE && !HOST_COMMAND_OUTPUT_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_OPERATIONS_MODE && !SESSION_INVENTORY_OPERATIONS_JSON_MODE && !SESSION_INVENTORY_HOST_COMMANDS_MODE && !SESSION_INVENTORY_HOST_COMMANDS_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !HOST_COMMAND_OUTPUT_READ_MODE && !HOST_COMMAND_OUTPUT_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
 const SESSION_PATH = SERVER_MODE ? join(SESSION_DIR, 'session.jsonl') : join(SESSION_DIR, `${SESSION}.jsonl`);
 const EVENTS_PATH = join(SESSION_DIR, 'events.jsonl');
 const CARRIER_SESSION_DIR = join(NARADA_DIR, 'crew', 'nars-sessions', SESSION);
-if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_HOST_COMMANDS_MODE && !SESSION_INVENTORY_HOST_COMMANDS_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !HOST_COMMAND_OUTPUT_READ_MODE && !HOST_COMMAND_OUTPUT_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
+if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_OPERATIONS_MODE && !SESSION_INVENTORY_OPERATIONS_JSON_MODE && !SESSION_INVENTORY_HOST_COMMANDS_MODE && !SESSION_INVENTORY_HOST_COMMANDS_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !HOST_COMMAND_OUTPUT_READ_MODE && !HOST_COMMAND_OUTPUT_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
 const HEARTBEAT_PATH = join(CARRIER_SESSION_DIR, 'heartbeat.json');
 const MCP_PREFLIGHT_ARTIFACT_DIR = join(NARADA_DIR, 'runtime', 'agent-cli', 'mcp-preflight');
 const HEARTBEAT_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_HEARTBEAT_ENABLE, true);
@@ -1238,6 +1298,14 @@ async function main() {
   }
   if (SESSION_INVENTORY_JSON_MODE) {
     process.exitCode = await runSessionInventory({ jsonOutput: true, filterKey: SESSION_INVENTORY_FILTER_KEY, filterValue: SESSION_INVENTORY_FILTER_VALUE });
+    return;
+  }
+  if (SESSION_INVENTORY_OPERATIONS_MODE) {
+    process.exitCode = await runSessionInventoryOperations({ filterKey: SESSION_INVENTORY_FILTER_KEY, filterValue: SESSION_INVENTORY_FILTER_VALUE });
+    return;
+  }
+  if (SESSION_INVENTORY_OPERATIONS_JSON_MODE) {
+    process.exitCode = await runSessionInventoryOperations({ jsonOutput: true, filterKey: SESSION_INVENTORY_FILTER_KEY, filterValue: SESSION_INVENTORY_FILTER_VALUE });
     return;
   }
   if (SESSION_INVENTORY_HOST_COMMANDS_MODE) {
@@ -1977,6 +2045,8 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
     'Request posture': filteredInventoryRollup.request_posture_summary,
     'Request outcomes': filteredInventoryRollup.request_outcome_summary,
     'Request issues': filteredInventoryRollup.request_issue_summary,
+    'Operation events': filteredInventoryRollup.operation_event_summary,
+    'Operation ids': filteredInventoryRollup.operation_id_summary,
     'Host command states': filteredInventoryRollup.host_command_terminal_state_summary,
     'Recommended actions': actionQueue.recommended_action_summary,
     'Recommended commands': actionQueue.recommended_command_summary,
@@ -1998,6 +2068,8 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
       'Request posture': item.request_posture_display,
       'MCP startup failures': item.mcp_startup_failure_summary,
       'MCP runtime faults': item.mcp_runtime_fault_summary,
+      'Operation events': item.operation_event_summary,
+      'Operation ids': item.operation_id_summary,
       'Host command states': item.host_command_terminal_state_summary,
       'Last host command': item.last_host_command_summary ?? 'none',
       'Last host command state': item.last_host_command_terminal_state ?? 'none',
@@ -2062,6 +2134,54 @@ async function runSessionInventoryHostCommands({ siteRoot = SITE_ROOT, naradaDir
   const blocks = [formatKeyValueRows(summary), ...renderSessionInventoryHostCommands(hostCommandQueue.sessions)];
   blocks.push(renderSessionInventoryWorkflowGroups(hostCommandQueue.workflow_groups, { heading: 'Host command action groups' }));
   blocks.push(renderSessionInventoryGroups(hostCommandQueue.groups));
+  console.log(blocks.join('\n\n'));
+  return 0;
+}
+
+async function runSessionInventoryOperations({ siteRoot = SITE_ROOT, naradaDir = NARADA_DIR, jsonOutput = false, filterKey = null, filterValue = null } = {}) {
+  const inventory = readSessionInventory({ siteRoot, naradaDir });
+  const normalizedFilterKey = normalizeSessionInventoryFilterKey(filterKey);
+  const normalizedFilterValue = normalizeSessionInventoryFilterValue(filterValue);
+  const filteredInventory = filterSessionInventory(inventory, { filterKey: normalizedFilterKey, filterValue: normalizedFilterValue });
+  const operationQueue = summarizeSessionInventoryOperations(filteredInventory);
+  const filterLabel = normalizedFilterKey && normalizedFilterValue ? `${normalizedFilterKey}:${normalizedFilterValue}` : 'all';
+  if (jsonOutput) {
+    console.log(`${JSON.stringify({
+      schema: 'narada.agent_cli.session_inventory_operations.v1',
+      site_root: siteRoot,
+      inventory_filter: filterLabel,
+      carrier_session_count: operationQueue.operation_session_count,
+      total_carrier_session_count: inventory.length,
+      operation_event_counts: operationQueue.operation_event_counts,
+      operation_event_summary: operationQueue.operation_event_summary,
+      directive_kind_counts: operationQueue.directive_kind_counts,
+      directive_kind_summary: operationQueue.directive_kind_summary,
+      directive_visibility_counts: operationQueue.directive_visibility_counts,
+      directive_visibility_summary: operationQueue.directive_visibility_summary,
+      operation_id_counts: operationQueue.operation_id_counts,
+      operation_id_summary: operationQueue.operation_id_summary,
+      groups: operationQueue.groups,
+      workflow_groups: operationQueue.workflow_groups,
+      sessions: operationQueue.sessions,
+    }, null, 2)}\n`);
+    return 0;
+  }
+  const summary = {
+    SiteRoot: siteRoot,
+    ...(filterLabel !== 'all' ? { 'Inventory filter': filterLabel, 'Matched sessions': operationQueue.operation_session_count, 'Total sessions': inventory.length } : { 'Carrier sessions': operationQueue.operation_session_count }),
+    'Operation events': operationQueue.operation_event_summary,
+    'Directive kinds': operationQueue.directive_kind_summary,
+    'Directive visibility': operationQueue.directive_visibility_summary,
+    'Operation ids': operationQueue.operation_id_summary,
+  };
+  if (operationQueue.operation_session_count === 0) {
+    summary.Status = 'no persisted operation activity';
+    console.log(formatKeyValueRows(summary));
+    return 0;
+  }
+  const blocks = [formatKeyValueRows(summary), ...renderSessionInventoryOperations(operationQueue.sessions)];
+  blocks.push(renderSessionInventoryWorkflowGroups(operationQueue.workflow_groups, { heading: 'Operation action groups' }));
+  blocks.push(renderSessionInventoryGroups(operationQueue.groups));
   console.log(blocks.join('\n\n'));
   return 0;
 }
@@ -3005,6 +3125,53 @@ function summarizePersistedHostCommandLifecycle(entries = []) {
   };
 }
 
+function summarizePersistedOperationLifecycle(entries = []) {
+  const operationEventCounts = {};
+  const directiveKindCounts = {};
+  const directiveVisibilityCounts = {};
+  const operationIdCounts = {};
+  let lastOperation = null;
+  for (const entry of entries) {
+    const eventKind = entry?.event_kind ?? entry?.event ?? null;
+    if (!['directive_emission_authorized', 'directive_emission_rule_recorded', 'directive_emitted'].includes(String(eventKind ?? ''))) continue;
+    incrementInventoryCounter(operationEventCounts, eventKind);
+    const payload = entry?.payload ?? {};
+    const directiveKind = payload.directive_kind ?? payload.kind ?? payload?.directive?.kind ?? entry?.metadata?.directive?.kind ?? null;
+    const directiveVisibility = payload.visibility ?? payload.directive_visibility ?? payload?.directive?.visibility ?? entry?.metadata?.directive?.visibility ?? null;
+    const operationId = payload.operation_id ?? payload?.directive?.operation_id ?? entry?.metadata?.directive?.operation_id ?? null;
+    if (directiveKind) incrementInventoryCounter(directiveKindCounts, directiveKind);
+    if (directiveVisibility) incrementInventoryCounter(directiveVisibilityCounts, directiveVisibility);
+    if (operationId) incrementInventoryCounter(operationIdCounts, operationId);
+    const occurredAt = entry?.timestamp ?? entry?.occurred_at ?? payload?.occurred_at ?? payload?.created_at ?? null;
+    const candidate = {
+      operation_id: operationId,
+      directive_kind: directiveKind,
+      directive_visibility: directiveVisibility,
+      event_kind: eventKind,
+      occurred_at: occurredAt,
+    };
+    if (!lastOperation || String(candidate.occurred_at ?? '').localeCompare(String(lastOperation.occurred_at ?? '')) >= 0) {
+      lastOperation = candidate;
+    }
+  }
+  return {
+    operation_event_count: Object.values(operationEventCounts).reduce((sum, count) => sum + Number(count ?? 0), 0),
+    operation_event_counts: operationEventCounts,
+    operation_event_summary: formatInventoryCounts(operationEventCounts),
+    directive_kind_counts: directiveKindCounts,
+    directive_kind_summary: formatInventoryCounts(directiveKindCounts),
+    directive_visibility_counts: directiveVisibilityCounts,
+    directive_visibility_summary: formatInventoryCounts(directiveVisibilityCounts),
+    operation_id_counts: operationIdCounts,
+    operation_id_summary: formatInventoryCounts(operationIdCounts),
+    last_operation_id: lastOperation?.operation_id ?? null,
+    last_directive_kind: lastOperation?.directive_kind ?? null,
+    last_directive_visibility: lastOperation?.directive_visibility ?? null,
+    last_operation_event_kind: lastOperation?.event_kind ?? null,
+    last_operation_at: lastOperation?.occurred_at ?? null,
+  };
+}
+
 function classifyPersistedSessionLifecycleState(entry) {
   const eventKind = entry?.event ?? entry?.event_kind ?? null;
   const terminalState = entry?.payload?.terminal_state ?? entry?.terminal_state ?? null;
@@ -3131,6 +3298,7 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     identity: heartbeat?.agent_id ?? IDENTITY,
     siteRoot,
   });
+  const operationLifecycle = summarizePersistedOperationLifecycle(entries);
   const hostCommandLifecycle = summarizePersistedHostCommandLifecycle(entries);
   const requestPosture = summarizeRequestPosture(requestOutcomeCounts);
   const handoffs = {
@@ -3198,6 +3366,20 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     request_outcome_summary: formatInventoryCounts(requestOutcomeCounts),
     request_issue_counts: requestIssueCounts,
     request_issue_summary: formatInventoryCounts(requestIssueCounts),
+    operation_event_count: operationLifecycle.operation_event_count,
+    operation_event_counts: operationLifecycle.operation_event_counts,
+    operation_event_summary: operationLifecycle.operation_event_summary,
+    directive_kind_counts: operationLifecycle.directive_kind_counts,
+    directive_kind_summary: operationLifecycle.directive_kind_summary,
+    directive_visibility_counts: operationLifecycle.directive_visibility_counts,
+    directive_visibility_summary: operationLifecycle.directive_visibility_summary,
+    operation_id_counts: operationLifecycle.operation_id_counts,
+    operation_id_summary: operationLifecycle.operation_id_summary,
+    last_operation_id: operationLifecycle.last_operation_id,
+    last_directive_kind: operationLifecycle.last_directive_kind,
+    last_directive_visibility: operationLifecycle.last_directive_visibility,
+    last_operation_event_kind: operationLifecycle.last_operation_event_kind,
+    last_operation_at: operationLifecycle.last_operation_at,
     host_command_event_count: hostCommandLifecycle.host_command_event_count,
     host_command_event_counts: hostCommandLifecycle.host_command_event_counts,
     host_command_event_summary: hostCommandLifecycle.host_command_event_summary,
@@ -8001,6 +8183,10 @@ function parseArgs(argv) {
       opts.sessionInventory = true;
     } else if (argv[i] === '--session-inventory-json') {
       opts.sessionInventoryJson = true;
+    } else if (argv[i] === '--session-inventory-operations') {
+      opts.sessionInventoryOperations = true;
+    } else if (argv[i] === '--session-inventory-operations-json') {
+      opts.sessionInventoryOperationsJson = true;
     } else if (argv[i] === '--session-inventory-host-commands') {
       opts.sessionInventoryHostCommands = true;
     } else if (argv[i] === '--session-inventory-host-commands-json') {
@@ -8229,7 +8415,7 @@ export {
 
 if (isEntrypoint) {
   if (options.help) {
-    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-diagnostics] [--mcp-preflight-diagnostics-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--mcp-preflight-diagnostics-filter <all|startup|runtime>] [--session-inventory] [--session-inventory-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics>] [--session-inventory-events-count <n>] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics>] [--session-events-count <n>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
+    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-diagnostics] [--mcp-preflight-diagnostics-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--mcp-preflight-diagnostics-filter <all|startup|runtime>] [--session-inventory] [--session-inventory-json] [--session-inventory-operations] [--session-inventory-operations-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics>] [--session-inventory-events-count <n>] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics>] [--session-events-count <n>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
     console.log('Programmatic input: --message and --message-file are explicit control inputs; do not use raw stdin piping as the control API.');
     console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, ANTHROPIC_API_KEY, NARADA_AI_API_KEY, NARADA_AI_BASE_URL, NARADA_AI_MODEL, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_ENABLE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_DELAY_MS, NARADA_SITE_ROOT`);
     process.exit(0);
