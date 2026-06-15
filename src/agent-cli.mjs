@@ -283,6 +283,68 @@ function summarizePersistedSessionRecommendedAction({
   };
 }
 
+function summarizePersistedSessionRecoveryPlan({
+  operationalPosture = 'healthy',
+  mcpOperationalState = 'unknown',
+  requestPosture = 'clean',
+  handoffs = {},
+} = {}) {
+  if (mcpOperationalState === 'runtime_faulted') {
+    return {
+      recovery_kind: 'diagnostic_review',
+      recovery_kind_display: 'diagnostic review',
+      recovery_primary_command: handoffs.session_events_diagnostics ?? null,
+      recovery_followup_command: handoffs.session_read ?? null,
+    };
+  }
+  if (mcpOperationalState === 'startup_degraded') {
+    return {
+      recovery_kind: 'startup_diagnostic_review',
+      recovery_kind_display: 'startup diagnostic review',
+      recovery_primary_command: handoffs.session_events_diagnostics ?? null,
+      recovery_followup_command: handoffs.session_read ?? null,
+    };
+  }
+  if (requestPosture === 'runtime_failures') {
+    return {
+      recovery_kind: 'issue_review',
+      recovery_kind_display: 'issue review',
+      recovery_primary_command: handoffs.session_events_issues ?? null,
+      recovery_followup_command: handoffs.session_events ?? null,
+    };
+  }
+  if (requestPosture === 'invalid_control_traffic') {
+    return {
+      recovery_kind: 'invalid_control_review',
+      recovery_kind_display: 'invalid control review',
+      recovery_primary_command: handoffs.session_events_issues ?? null,
+      recovery_followup_command: handoffs.session_read ?? null,
+    };
+  }
+  if (requestPosture === 'closed_session_retries') {
+    return {
+      recovery_kind: 'closed_session_review',
+      recovery_kind_display: 'closed session review',
+      recovery_primary_command: handoffs.session_events_issues ?? null,
+      recovery_followup_command: handoffs.session_read ?? null,
+    };
+  }
+  if (operationalPosture === 'lifecycle_failed') {
+    return {
+      recovery_kind: 'lifecycle_review',
+      recovery_kind_display: 'lifecycle review',
+      recovery_primary_command: handoffs.session_events ?? null,
+      recovery_followup_command: handoffs.session_read ?? null,
+    };
+  }
+  return {
+    recovery_kind: 'no_recovery',
+    recovery_kind_display: 'no recovery',
+    recovery_primary_command: handoffs.session_read ?? null,
+    recovery_followup_command: null,
+  };
+}
+
 function summarizeSessionInventoryActions(inventory = []) {
   const recommendedActionCounts = {};
   const actions = [];
@@ -302,13 +364,17 @@ function summarizeSessionInventoryActions(inventory = []) {
 function summarizeSessionInventoryRecoveryQueue(inventory = []) {
   const recoveryActions = inventory.filter((item) => item?.recommended_action !== 'review_session_summary');
   const recommendedActionCounts = {};
+  const recoveryKindCounts = {};
   for (const item of recoveryActions) {
     incrementInventoryCounter(recommendedActionCounts, item?.recommended_action ?? 'unknown');
+    incrementInventoryCounter(recoveryKindCounts, item?.recovery_kind ?? 'unknown');
   }
   return {
     recovery_count: recoveryActions.length,
     recommended_action_counts: recommendedActionCounts,
     recommended_action_summary: formatInventoryCounts(recommendedActionCounts),
+    recovery_kind_counts: recoveryKindCounts,
+    recovery_kind_summary: formatInventoryCounts(recoveryKindCounts),
     groups: summarizeSessionInventoryGroupBy(recoveryActions, 'recommended_action', 'recommended_action_display'),
     actions: recoveryActions,
   };
@@ -323,6 +389,9 @@ function renderSessionInventoryActions(actions = []) {
     'Request posture': item.request_posture_display,
     'Recommended action': item.recommended_action_display,
     'Recommended command': item.recommended_command ?? 'none',
+    'Recovery kind': item.recovery_kind_display ?? 'none',
+    'Recovery primary': item.recovery_primary_command ?? 'none',
+    'Recovery followup': item.recovery_followup_command ?? 'none',
     'Session read': item?.handoffs?.session_read ?? 'none',
     'Session issues': item?.handoffs?.session_events_issues ?? 'none',
     'Session diagnostics': item?.handoffs?.session_events_diagnostics ?? 'none',
@@ -1062,6 +1131,8 @@ async function runSessionInventoryRecovery({ siteRoot = SITE_ROOT, naradaDir = N
       summary: {
         recommended_action_counts: recoveryQueue.recommended_action_counts,
         recommended_action_summary: recoveryQueue.recommended_action_summary,
+        recovery_kind_counts: recoveryQueue.recovery_kind_counts,
+        recovery_kind_summary: recoveryQueue.recovery_kind_summary,
       },
       groups: recoveryQueue.groups,
       actions: recoveryQueue.actions,
@@ -1073,6 +1144,7 @@ async function runSessionInventoryRecovery({ siteRoot = SITE_ROOT, naradaDir = N
     ...(filterLabel !== 'all' ? { 'Inventory filter': filterLabel, 'Matched sessions': filteredInventory.length, 'Total sessions': inventory.length } : { 'Carrier sessions': inventory.length }),
     'Recovery queue': recoveryQueue.recovery_count,
     'Recommended actions': recoveryQueue.recommended_action_summary,
+    'Recovery kinds': recoveryQueue.recovery_kind_summary,
   };
   if (recoveryQueue.recovery_count === 0) {
     summary.Status = 'no persisted carrier session recoveries';
@@ -1674,6 +1746,12 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     requestPosture: requestPosture.request_posture,
     handoffs,
   });
+  const recoveryPlan = summarizePersistedSessionRecoveryPlan({
+    operationalPosture: operationalPosture.operational_posture,
+    mcpOperationalState,
+    requestPosture: requestPosture.request_posture,
+    handoffs,
+  });
   return {
     session,
     session_path: join(sessionDir, 'session.jsonl'),
@@ -1693,6 +1771,10 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     recommended_action: recommendedAction.recommended_action,
     recommended_action_display: recommendedAction.recommended_action_display,
     recommended_command: recommendedAction.recommended_command,
+    recovery_kind: recoveryPlan.recovery_kind,
+    recovery_kind_display: recoveryPlan.recovery_kind_display,
+    recovery_primary_command: recoveryPlan.recovery_primary_command,
+    recovery_followup_command: recoveryPlan.recovery_followup_command,
     last_lifecycle_event_kind: lastLifecycleEventKind,
     last_lifecycle_at: lastLifecycleAt,
     last_lifecycle_state: lastLifecycleState,
