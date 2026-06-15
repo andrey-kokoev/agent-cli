@@ -69,9 +69,12 @@ param(
 
     [switch]$McpPreflightInventoryJson,
 
+    [switch]$McpPreflightRecovery,
+
+    [switch]$McpPreflightRecoveryJson,
+
     [switch]$AutoApprove
 )
-
 $ErrorActionPreference = 'Stop'
 
 $SiteRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -416,6 +419,19 @@ if ($McpPreflightInventory) {
 if ($McpPreflightInventoryJson) {
     Set-Location $WorkDir
     & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-inventory-json'
+    exit $LASTEXITCODE
+}
+
+if ($McpPreflightRecovery) {
+    Write-Host "MCP preflight recovery..." -ForegroundColor Cyan
+    Set-Location $WorkDir
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-recovery'
+    exit $LASTEXITCODE
+}
+
+if ($McpPreflightRecoveryJson) {
+    Set-Location $WorkDir
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-recovery-json'
     exit $LASTEXITCODE
 }
 
