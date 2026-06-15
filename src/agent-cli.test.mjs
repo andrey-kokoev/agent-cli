@@ -2671,7 +2671,15 @@ assert.deepEqual(commandTokens(), [
   '/quit',
   'exit',
 ]);
-assert.equal(await handleSlashCommand('/help', { mcpServers: {}, allTools: [] }), 'handled');
+const printedHelpMessages = [];
+const originalHelpStdoutWrite = process.stdout.write;
+process.stdout.write = (value = '') => { printedHelpMessages.push(stripAnsiForTest(String(value))); return true; };
+try {
+  assert.equal(await handleSlashCommand('/help', { mcpServers: {}, allTools: [] }), 'handled');
+} finally {
+  process.stdout.write = originalHelpStdoutWrite;
+}
+assert.equal(printedHelpMessages.some((message) => message.includes('/recovery             Show recovery workflow')), true);
 assert.equal(await handleSlashCommand('/bad', { mcpServers: {}, allTools: [] }), 'handled');
 assert.equal(await handleSlashCommand('plain message', { mcpServers: {}, allTools: [] }), 'none');
 const originalConsoleLog = console.log;
@@ -2896,6 +2904,40 @@ try {
   process.stdout.write = originalSlashStdoutWrite;
 }
 assert.equal(printedStatusMessages.some((message) => message.includes('polluted:mcp_stdout_pollution')), true);
+const printedRecoveryMessages = [];
+process.stdout.write = (value = '') => { printedRecoveryMessages.push(stripAnsiForTest(String(value))); return true; };
+try {
+  assert.equal(await handleSlashCommand('/recovery', {
+    mcpServers: toolsFixtureServers,
+    allTools: tools,
+    mcpPreflightArtifact: {
+      artifact_path: 'D:/tmp/preflight.json',
+      generated_at: '2026-06-14T00:00:00.000Z',
+      mcp_operational_state: 'startup_degraded',
+      mcp_startup_failure_summary: '1 (degraded:mcp_stdout_pollution)',
+      mcp_runtime_fault_summary: '0',
+      recommended_action: 'review_startup_diagnostics',
+      recommended_action_display: 'review startup diagnostics',
+      recommended_command: 'narada-agent-cli --identity narada.test --session narada.test --mcp-preflight-read',
+      recovery_kind: 'startup_diagnostic_review',
+      recovery_kind_display: 'startup diagnostic review',
+      recovery_primary_command: 'narada-agent-cli --identity narada.test --session narada.test --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter startup',
+      recovery_followup_command: 'narada-agent-cli --identity narada.test --session narada.test --mcp-preflight-read',
+      handoffs: {
+        mcp_preflight_read: 'narada-agent-cli --identity narada.test --session narada.test --mcp-preflight-read',
+        mcp_preflight_diagnostics: 'narada-agent-cli --identity narada.test --session narada.test --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all',
+      },
+    },
+  }), 'handled');
+} finally {
+  process.stdout.write = originalSlashStdoutWrite;
+}
+assert.equal(printedRecoveryMessages.some((message) => message.includes('Session posture')), true);
+assert.equal(printedRecoveryMessages.some((message) => message.includes('review startup diagnostics')), true);
+assert.equal(printedRecoveryMessages.some((message) => message.includes('Session recovery')), true);
+assert.equal(printedRecoveryMessages.some((message) => message.includes('--session-recovery')), true);
+assert.equal(printedRecoveryMessages.some((message) => message.includes('Preflight review')), true);
+assert.equal(printedRecoveryMessages.some((message) => message.includes('--mcp-preflight-read')), true);
 const displaySettings = { toolOutputs: true };
 const printedToolOutputMessages = [];
 process.stdout.write = (value = '') => { printedToolOutputMessages.push(stripAnsiForTest(String(value))); return true; };

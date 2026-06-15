@@ -1332,7 +1332,7 @@ async function main() {
       promptState.active = false;
       if (userInput === '__READLINE_CLOSED__') break;
       rewriteSubmittedPrompt(promptLabel, userInput);
-      const slashCommand = await handleSlashCommand(userInput, { mcpServers, allTools, inputQueue, executeGoalOnSet: true });
+      const slashCommand = await handleSlashCommand(userInput, { mcpServers, allTools, inputQueue, carrierState: {}, mcpPreflightArtifact, executeGoalOnSet: true });
       if (slashCommand === 'exit') break;
       if (slashCommand && typeof slashCommand === 'object' && slashCommand.action === 'dispatch_goal') {
         await inputQueue.enqueue(normalizeInputEvent(
@@ -3326,6 +3326,8 @@ async function handleSlashCommand(input, {
   statsRunner = runCodexTranscriptStats,
   displaySettings = transcriptDisplaySettings,
   carrierSessionSettings = sessionSettings,
+  carrierState = {},
+  mcpPreflightArtifact = readMcpPreflightArtifact(),
   executeGoalOnSet = false,
 }) {
   const trimmed = String(input ?? '').trim();
@@ -3345,6 +3347,7 @@ async function handleSlashCommand(input, {
       '',
       '/help                 Show commands',
       '/status               Show session state',
+      '/recovery             Show recovery workflow',
       '/goal [text|pause|resume|clear] Show, set, pause, resume, or clear carrier goal',
       '/stats [args]         Show local Codex transcript statistics',
       '/model <name>         Set model for later turns',
@@ -3449,7 +3452,6 @@ async function handleSlashCommand(input, {
   if (command === '/status') {
     const startupFailures = getMcpStartupFailures(mcpServers);
     const runtimeDiagnostics = getMcpRuntimeDiagnostics(mcpServers);
-    const mcpPreflightArtifact = readMcpPreflightArtifact();
     const mcpPreflightSnapshot = createMcpPreflightArtifactSnapshot(mcpPreflightArtifact);
     printCliMessage(formatKeyValueRows({
       Identity: IDENTITY,
@@ -3472,6 +3474,38 @@ async function handleSlashCommand(input, {
       Observers: displaySettings.observerMuted === true ? 'muted' : 'shown',
     }));
     appendSession(SESSION_PATH, sessionEventEntry('session_command', { command: '/status' }));
+    return 'handled';
+  }
+  if (command === '/recovery') {
+    const liveWorkflow = createLiveWorkflowSnapshot({
+      state: carrierState,
+      mcpOperationalState: mcpOperationalState(mcpServers),
+    });
+    const mcpPreflightSnapshot = createMcpPreflightArtifactSnapshot(mcpPreflightArtifact);
+    printCliMessage(formatKeyValueRows({
+      Identity: IDENTITY,
+      Session: SESSION,
+      'Session posture': liveWorkflow.operational_posture_display,
+      'Request posture': liveWorkflow.request_posture_display,
+      'Recommended action': liveWorkflow.recommended_action_display,
+      'Recommended command': liveWorkflow.recommended_command ?? 'none',
+      'Recovery kind': liveWorkflow.recovery_kind_display ?? 'none',
+      'Recovery primary': liveWorkflow.recovery_primary_command ?? 'none',
+      'Recovery followup': liveWorkflow.recovery_followup_command ?? 'none',
+      'Session recovery': liveWorkflow?.handoffs?.session_recovery ?? 'none',
+      'Session read': liveWorkflow?.handoffs?.session_read ?? 'none',
+      'Session issues': liveWorkflow?.handoffs?.session_events_issues ?? 'none',
+      'Session diagnostics': liveWorkflow?.handoffs?.session_events_diagnostics ?? 'none',
+      ...(mcpPreflightSnapshot.mcp_preflight_operational_state ? { 'Preflight state': mcpPreflightSnapshot.mcp_preflight_operational_state } : {}),
+      ...(mcpPreflightSnapshot.mcp_preflight_recommended_action_display ? { 'Preflight action': mcpPreflightSnapshot.mcp_preflight_recommended_action_display } : {}),
+      ...(mcpPreflightSnapshot.mcp_preflight_recommended_command ? { 'Preflight command': mcpPreflightSnapshot.mcp_preflight_recommended_command } : {}),
+      ...(mcpPreflightSnapshot.mcp_preflight_recovery_kind_display ? { 'Preflight recovery': mcpPreflightSnapshot.mcp_preflight_recovery_kind_display } : {}),
+      ...(mcpPreflightSnapshot.mcp_preflight_recovery_primary_command ? { 'Preflight primary': mcpPreflightSnapshot.mcp_preflight_recovery_primary_command } : {}),
+      ...(mcpPreflightSnapshot.mcp_preflight_recovery_followup_command ? { 'Preflight followup': mcpPreflightSnapshot.mcp_preflight_recovery_followup_command } : {}),
+      ...(mcpPreflightSnapshot.mcp_preflight_handoffs?.mcp_preflight_read ? { 'Preflight review': mcpPreflightSnapshot.mcp_preflight_handoffs.mcp_preflight_read } : {}),
+      ...(mcpPreflightSnapshot.mcp_preflight_handoffs?.mcp_preflight_diagnostics ? { 'Preflight diagnostics': mcpPreflightSnapshot.mcp_preflight_handoffs.mcp_preflight_diagnostics } : {}),
+    }));
+    appendSession(SESSION_PATH, sessionEventEntry('session_command', { command: '/recovery' }));
     return 'handled';
   }
   if (command === '/model') {
