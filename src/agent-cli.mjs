@@ -238,14 +238,27 @@ function mcpOperationalState(mcpServers) {
   return 'startup_degraded';
 }
 
+function createMcpStatusSnapshot(mcpServers) {
+  const startupFailures = getMcpStartupFailures(mcpServers);
+  const runtimeDiagnostics = getMcpRuntimeDiagnostics(mcpServers);
+  return {
+    mcp_operational_state: mcpOperationalState(mcpServers),
+    mcp_startup_failure_count: startupFailures.length,
+    mcp_startup_failures: startupFailures,
+    mcp_startup_failure_summary: formatMcpStartupFailureSummary(startupFailures),
+    mcp_runtime_fault_count: runtimeDiagnostics.length,
+    mcp_runtime_faults: runtimeDiagnostics,
+    mcp_runtime_fault_summary: formatMcpRuntimeDiagnosticSummary(runtimeDiagnostics),
+  };
+}
+
 function createInteractiveHeaderRows({
   mcpServers,
   allTools,
   sessionSettings,
   transcriptDisplaySettings,
 } = {}) {
-  const startupFailures = getMcpStartupFailures(mcpServers);
-  const runtimeDiagnostics = getMcpRuntimeDiagnostics(mcpServers);
+  const mcpStatus = createMcpStatusSnapshot(mcpServers);
   return [
     ['Identity', IDENTITY],
     ['Session', SESSION],
@@ -255,9 +268,9 @@ function createInteractiveHeaderRows({
     ['Stream', sessionSettings.stream ? 'on' : 'off'],
     ['Goal', carrierGoalStatusLabel(sessionSettings.goal)],
     ['MCP servers', Object.keys(mcpServers).length],
-    ['MCP state', mcpOperationalState(mcpServers)],
-    ...(startupFailures.length > 0 ? [['MCP startup failures', formatMcpStartupFailureSummary(startupFailures)]] : []),
-    ...(runtimeDiagnostics.length > 0 ? [['MCP runtime faults', formatMcpRuntimeDiagnosticSummary(runtimeDiagnostics)]] : []),
+    ['MCP state', mcpStatus.mcp_operational_state],
+    ...(mcpStatus.mcp_startup_failure_count > 0 ? [['MCP startup failures', mcpStatus.mcp_startup_failure_summary]] : []),
+    ...(mcpStatus.mcp_runtime_fault_count > 0 ? [['MCP runtime faults', mcpStatus.mcp_runtime_fault_summary]] : []),
     ...Object.entries(mcpServers)
       .filter(([, srv]) => Array.isArray(srv?.tools))
       .map(([name, srv]) => [`  ${name}`, `${srv.tools.length} tools`]),
@@ -3128,7 +3141,7 @@ function buildProgrammaticInputs(opts) {
 async function runServerMode({ input = process.stdin, output = process.stdout, callChatApiFn = callChatApi } = {}) {
   const mcpServers = await discoverAndStartMcpServers(SITE_ROOT);
   const allTools = aggregateTools(mcpServers);
-  const startupFailures = getMcpStartupFailures(mcpServers);
+  const mcpStatus = createMcpStatusSnapshot(mcpServers);
   const rolePrompt = loadRolePrompt(IDENTITY, SITE_ROOT);
   const state = {
     activeTurn: null,
@@ -3180,9 +3193,7 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
     model: sessionSettings.model,
     thinking: sessionSettings.thinking,
     mcp_server_count: Object.keys(mcpServers).length,
-    mcp_operational_state: mcpOperationalState(mcpServers),
-    mcp_startup_failure_count: startupFailures.length,
-    mcp_runtime_fault_count: 0,
+    ...mcpStatus,
     tool_count: allTools.length,
     session_path: SESSION_PATH,
     events_path: EVENTS_PATH,
@@ -3556,8 +3567,7 @@ async function runServerConversationTurn({ requestId, state, messages, allTools,
 
 function serverStatus({ requestId, state, allTools, mcpServers }) {
   const goal = normalizeCarrierGoalState(sessionSettings.goal);
-  const startupFailures = getMcpStartupFailures(mcpServers);
-  const runtimeDiagnostics = getMcpRuntimeDiagnostics(mcpServers);
+  const mcpStatus = createMcpStatusSnapshot(mcpServers);
   return {
     request_id: requestId,
     transport: 'jsonl_stdio',
@@ -3571,11 +3581,7 @@ function serverStatus({ requestId, state, allTools, mcpServers }) {
     active_turn_state: state.activeTurn ? 'running' : 'idle',
     active_turn_id: state.activeTurn?.turnId ?? null,
     mcp_server_count: Object.keys(mcpServers).length,
-    mcp_operational_state: mcpOperationalState(mcpServers),
-    mcp_startup_failure_count: startupFailures.length,
-    mcp_startup_failures: startupFailures,
-    mcp_runtime_fault_count: runtimeDiagnostics.length,
-    mcp_runtime_faults: runtimeDiagnostics,
+    ...mcpStatus,
     tool_count: allTools.length,
     mcp_tools: mcpToolCatalogEntries(mcpServers),
     observer_muted: (state?.displaySettings ?? transcriptDisplaySettings).observerMuted === true,
@@ -5165,6 +5171,7 @@ export {
   formatHeaderRow,
   formatHeaderRows,
   formatKeyValueRows,
+  createMcpStatusSnapshot,
   formatProgressStatus,
   sanitizeOperatorDirectiveDraftForDisplay,
   formatTimestamp,

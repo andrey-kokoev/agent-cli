@@ -32,6 +32,7 @@ import {
   createCarrierDirectiveEmitter,
   createInteractiveHeaderRows,
   createInputQueue,
+  createMcpStatusSnapshot,
   createOperationHeartbeatDirectiveEmitter,
   createTerminalStyle,
   environmentBlockLength,
@@ -615,6 +616,19 @@ const interactiveHeaderRows = stripAnsiForTest(formatHeaderRows(createInteractiv
 assert.equal(interactiveHeaderRows.includes('MCP state            runtime_faulted'), true);
 assert.equal(interactiveHeaderRows.includes('MCP startup failures 1 (polluted:mcp_stdout_pollution)'), true);
 assert.equal(interactiveHeaderRows.includes('MCP runtime faults   1 (narada:fs_read_file)'), true);
+assert.deepEqual(createMcpStatusSnapshot(Object.assign(Object.create(null), {
+  narada: { tools: [{ name: 'fs_read_file' }] },
+  __mcp_startup_failures: [{ server_name: 'polluted', code: 'mcp_stdout_pollution' }],
+  __mcp_runtime_diagnostics: [{ server_name: 'narada', tool_name: 'fs_read_file' }],
+})), {
+  mcp_operational_state: 'runtime_faulted',
+  mcp_startup_failure_count: 1,
+  mcp_startup_failures: [{ server_name: 'polluted', code: 'mcp_stdout_pollution' }],
+  mcp_startup_failure_summary: '1 (polluted:mcp_stdout_pollution)',
+  mcp_runtime_fault_count: 1,
+  mcp_runtime_faults: [{ server_name: 'narada', tool_name: 'fs_read_file' }],
+  mcp_runtime_fault_summary: '1 (narada:fs_read_file)',
+});
 assert.deepEqual(wrapTerminalLine('alpha beta gamma', 10), ['alpha beta', 'gamma']);
 assert.equal(renderMarkdownForTerminal('- `code`').includes('• '), true);
 assert.equal(renderMarkdownForTerminal('- `code`').includes('\x1b[90mcode\x1b[0m'), true);
@@ -1933,6 +1947,10 @@ assert.equal(exitCode, 0);
 const serverEvents = stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
 assert.equal(serverEvents[0].event, 'session_started');
 assert.equal(serverEvents[0].mcp_operational_state, 'healthy');
+assert.equal(serverEvents[0].mcp_startup_failure_summary, '0');
+assert.equal(serverEvents[0].mcp_runtime_fault_summary, '0');
+assert.deepEqual(serverEvents[0].mcp_startup_failures, []);
+assert.deepEqual(serverEvents[0].mcp_runtime_faults, []);
 assert.equal(serverEvents.some((event) => event.event === 'error' && event.code === 'invalid_json'), true);
 assert.equal(serverEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-1'), true);
 assert.deepEqual(serverEvents.find((event) => event.event === 'session_status' && event.request_id === 'status-1')?.mcp_tools, []);
@@ -1998,8 +2016,15 @@ const degradedEvents = degradedStdout.trim().split(/\r?\n/).filter(Boolean).map(
 assert.equal(degradedEvents[0].event, 'session_started');
 assert.equal(degradedEvents[0].mcp_operational_state, 'startup_degraded');
 assert.equal(degradedEvents[0].mcp_startup_failure_count, 1);
+assert.equal(degradedEvents[0].mcp_startup_failure_summary, '1 (degraded:mcp_stdout_pollution)');
+assert.equal(degradedEvents[0].mcp_startup_failures[0].server_name, 'degraded');
+assert.equal(degradedEvents[0].mcp_startup_failures[0].code, 'mcp_stdout_pollution');
+assert.equal(degradedEvents[0].mcp_startup_failures[0].message, 'MCP server degraded emitted non-JSON stdout during startup');
+assert.deepEqual(degradedEvents[0].mcp_startup_failures[0].stdout_pollution, ['startup banner']);
+assert.equal(degradedEvents[0].mcp_runtime_fault_summary, '0');
+assert.deepEqual(degradedEvents[0].mcp_runtime_faults, []);
 assert.equal(degradedEvents.some((event) => event.event === 'carrier_diagnostic_recorded' && event.server_name === 'degraded' && event.diagnostic_code === 'mcp_stdout_pollution'), true);
-assert.equal(degradedEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-degraded-1' && event.mcp_startup_failure_count === 1), true);
+assert.equal(degradedEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-degraded-1' && event.mcp_startup_failure_count === 1 && event.mcp_startup_failure_summary === '1 (degraded:mcp_stdout_pollution)'), true);
 const degradedSessionEntries = readFileSync(join(degradedServerSite, '.narada', 'crew', 'nars-sessions', 'degraded-server-test', 'session.jsonl'), 'utf8')
   .trim()
   .split(/\r?\n/)
