@@ -18,6 +18,8 @@ param(
 
     [switch]$SessionInventory,
 
+    [switch]$SessionInventoryJson,
+
     [switch]$AutoApprove
 )
 
@@ -217,6 +219,12 @@ if ($SessionInventory) {
     Write-Host "Session inventory..." -ForegroundColor Cyan
     Set-Location $WorkDir
     & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-inventory'
+    exit $LASTEXITCODE
+}
+
+if ($SessionInventoryJson) {
+    Set-Location $WorkDir
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-inventory-json'
     exit $LASTEXITCODE
 }
 
