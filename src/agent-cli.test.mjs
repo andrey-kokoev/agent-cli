@@ -949,7 +949,11 @@ assert.equal(sessionInventoryRecoveryRun.status, 0);
 assert.equal(sessionInventoryRecoveryRun.stdout.includes('Recovery queue'), true);
 assert.equal(sessionInventoryRecoveryRun.stdout.includes('faulted-session'), true);
 assert.equal(sessionInventoryRecoveryRun.stdout.includes('healthy-session'), false);
+assert.equal(sessionInventoryRecoveryRun.stdout.includes('Recovery primary commands'), true);
+assert.equal(sessionInventoryRecoveryRun.stdout.includes('Recovery followups'), true);
 assert.equal(sessionInventoryRecoveryRun.stdout.includes('Recovery groups: review_runtime_diagnostics (1)'), true);
+assert.equal(sessionInventoryRecoveryRun.stdout.includes('Primary commands: 1 (narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20)'), true);
+assert.equal(sessionInventoryRecoveryRun.stdout.includes('Followup commands: 1 (narada-agent-cli --identity narada.test --session faulted-session --session-read)'), true);
 assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-recovery-test')), false);
 const sessionInventoryRecoveryJsonRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
@@ -978,8 +982,25 @@ assert.deepEqual(sessionInventoryRecoveryJson.summary, {
     diagnostic_review: 1,
   },
   recovery_kind_summary: '1 (diagnostic_review)',
+  recovery_primary_counts: {
+    'narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20': 1,
+  },
+  recovery_primary_summary: '1 (narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20)',
+  recovery_followup_counts: {
+    'narada-agent-cli --identity narada.test --session faulted-session --session-read': 1,
+  },
+  recovery_followup_summary: '1 (narada-agent-cli --identity narada.test --session faulted-session --session-read)',
 });
 assert.equal(sessionInventoryRecoveryJson.groups.review_runtime_diagnostics[0].session, 'faulted-session');
+assert.equal(sessionInventoryRecoveryJson.workflow_groups.review_runtime_diagnostics.display, 'review runtime diagnostics');
+assert.deepEqual(sessionInventoryRecoveryJson.workflow_groups.review_runtime_diagnostics.recovery_kind_counts, { diagnostic_review: 1 });
+assert.deepEqual(sessionInventoryRecoveryJson.workflow_groups.review_runtime_diagnostics.recovery_primary_counts, {
+  'narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20': 1,
+});
+assert.deepEqual(sessionInventoryRecoveryJson.workflow_groups.review_runtime_diagnostics.recovery_followup_counts, {
+  'narada-agent-cli --identity narada.test --session faulted-session --session-read': 1,
+});
+assert.equal(sessionInventoryRecoveryJson.workflow_groups.review_runtime_diagnostics.sessions[0].session, 'faulted-session');
 assert.equal(sessionInventoryRecoveryJson.actions.length, 1);
 assert.equal(sessionInventoryRecoveryJson.actions[0].session, 'faulted-session');
 assert.equal(sessionInventoryRecoveryJson.actions[0].recommended_action, 'review_runtime_diagnostics');

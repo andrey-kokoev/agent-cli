@@ -366,13 +366,56 @@ function summarizeSessionInventoryActions(inventory = []) {
   };
 }
 
+function summarizeRecoveryWorkflowGroups(recoveryActions = []) {
+  const groups = Object.create(null);
+  for (const item of recoveryActions) {
+    const key = String(item?.recommended_action ?? 'unknown');
+    if (!groups[key]) {
+      groups[key] = {
+        display: item?.recommended_action_display ?? item?.recommended_action ?? 'unknown',
+        recovery_kind_counts: {},
+        recovery_primary_counts: {},
+        recovery_followup_counts: {},
+        sessions: [],
+      };
+    }
+    const group = groups[key];
+    incrementInventoryCounter(group.recovery_kind_counts, item?.recovery_kind ?? 'unknown');
+    incrementInventoryCounter(group.recovery_primary_counts, item?.recovery_primary_command ?? 'none');
+    incrementInventoryCounter(group.recovery_followup_counts, item?.recovery_followup_command ?? 'none');
+    group.sessions.push({
+      session: item?.session ?? 'unknown',
+      display: item?.recovery_kind_display ?? item?.recovery_kind ?? 'unknown',
+      heartbeat_at: item?.heartbeat_at ?? null,
+    });
+  }
+  return Object.fromEntries(Object.entries(groups)
+    .sort((left, right) => right[1].sessions.length - left[1].sessions.length || left[0].localeCompare(right[0]))
+    .map(([key, group]) => [key, {
+      display: group.display,
+      recovery_kind_counts: group.recovery_kind_counts,
+      recovery_kind_summary: formatInventoryCounts(group.recovery_kind_counts),
+      recovery_primary_counts: group.recovery_primary_counts,
+      recovery_primary_summary: formatInventoryCounts(group.recovery_primary_counts),
+      recovery_followup_counts: group.recovery_followup_counts,
+      recovery_followup_summary: formatInventoryCounts(group.recovery_followup_counts),
+      sessions: group.sessions
+        .sort((left, right) => String(right.heartbeat_at ?? '').localeCompare(String(left.heartbeat_at ?? '')) || left.session.localeCompare(right.session))
+        .map(({ session, display }) => ({ session, display })),
+    }]));
+}
+
 function summarizeSessionInventoryRecoveryQueue(inventory = []) {
   const recoveryActions = inventory.filter((item) => item?.recommended_action !== 'review_session_summary');
   const recommendedActionCounts = {};
   const recoveryKindCounts = {};
+  const recoveryPrimaryCounts = {};
+  const recoveryFollowupCounts = {};
   for (const item of recoveryActions) {
     incrementInventoryCounter(recommendedActionCounts, item?.recommended_action ?? 'unknown');
     incrementInventoryCounter(recoveryKindCounts, item?.recovery_kind ?? 'unknown');
+    incrementInventoryCounter(recoveryPrimaryCounts, item?.recovery_primary_command ?? 'none');
+    incrementInventoryCounter(recoveryFollowupCounts, item?.recovery_followup_command ?? 'none');
   }
   return {
     recovery_count: recoveryActions.length,
@@ -380,7 +423,12 @@ function summarizeSessionInventoryRecoveryQueue(inventory = []) {
     recommended_action_summary: formatInventoryCounts(recommendedActionCounts),
     recovery_kind_counts: recoveryKindCounts,
     recovery_kind_summary: formatInventoryCounts(recoveryKindCounts),
+    recovery_primary_counts: recoveryPrimaryCounts,
+    recovery_primary_summary: formatInventoryCounts(recoveryPrimaryCounts),
+    recovery_followup_counts: recoveryFollowupCounts,
+    recovery_followup_summary: formatInventoryCounts(recoveryFollowupCounts),
     groups: summarizeSessionInventoryGroupBy(recoveryActions, 'recommended_action', 'recommended_action_display'),
+    workflow_groups: summarizeRecoveryWorkflowGroups(recoveryActions),
     actions: recoveryActions,
   };
 }
@@ -406,9 +454,13 @@ function renderSessionInventoryActions(actions = []) {
 
 function renderSessionInventoryRecoveryGroups(groups = {}) {
   const sections = [];
-  for (const [groupKey, entries] of Object.entries(groups)) {
-    const lines = [`Recovery groups: ${groupKey} (${entries.length})`];
-    for (const entry of entries.slice(0, 5)) {
+  for (const [groupKey, group] of Object.entries(groups)) {
+    const sessions = Array.isArray(group?.sessions) ? group.sessions : [];
+    const lines = [`Recovery groups: ${groupKey} (${sessions.length})`];
+    if (group?.recovery_kind_summary) lines.push(`Recovery kinds: ${group.recovery_kind_summary}`);
+    if (group?.recovery_primary_summary) lines.push(`Primary commands: ${group.recovery_primary_summary}`);
+    if (group?.recovery_followup_summary) lines.push(`Followup commands: ${group.recovery_followup_summary}`);
+    for (const entry of sessions.slice(0, 5)) {
       lines.push(`- ${entry.session} ${entry.display ?? groupKey}`);
     }
     sections.push(lines.join('\n'));
@@ -1147,8 +1199,13 @@ async function runSessionInventoryRecovery({ siteRoot = SITE_ROOT, naradaDir = N
         recommended_action_summary: recoveryQueue.recommended_action_summary,
         recovery_kind_counts: recoveryQueue.recovery_kind_counts,
         recovery_kind_summary: recoveryQueue.recovery_kind_summary,
+        recovery_primary_counts: recoveryQueue.recovery_primary_counts,
+        recovery_primary_summary: recoveryQueue.recovery_primary_summary,
+        recovery_followup_counts: recoveryQueue.recovery_followup_counts,
+        recovery_followup_summary: recoveryQueue.recovery_followup_summary,
       },
       groups: recoveryQueue.groups,
+      workflow_groups: recoveryQueue.workflow_groups,
       actions: recoveryQueue.actions,
     }, null, 2)}\n`);
     return 0;
@@ -1159,13 +1216,15 @@ async function runSessionInventoryRecovery({ siteRoot = SITE_ROOT, naradaDir = N
     'Recovery queue': recoveryQueue.recovery_count,
     'Recommended actions': recoveryQueue.recommended_action_summary,
     'Recovery kinds': recoveryQueue.recovery_kind_summary,
+    'Recovery primary commands': recoveryQueue.recovery_primary_summary,
+    'Recovery followups': recoveryQueue.recovery_followup_summary,
   };
   if (recoveryQueue.recovery_count === 0) {
     summary.Status = 'no persisted carrier session recoveries';
     console.log(formatKeyValueRows(summary));
     return 0;
   }
-  const blocks = [formatKeyValueRows(summary), ...renderSessionInventoryActions(recoveryQueue.actions), renderSessionInventoryRecoveryGroups(recoveryQueue.groups)];
+  const blocks = [formatKeyValueRows(summary), ...renderSessionInventoryActions(recoveryQueue.actions), renderSessionInventoryRecoveryGroups(recoveryQueue.workflow_groups)];
   console.log(blocks.join('\n\n'));
   return 0;
 }
