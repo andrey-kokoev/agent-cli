@@ -78,10 +78,12 @@ import {
   printAgentMessage,
   readCarrierHostCommandOutputRef,
   readMcpPreflightArtifact,
+  readSessionInventory,
   recordMcpPreflightArtifactLinkage,
   renderMarkdownForTerminal,
   rewriteSubmittedPromptForTest,
   runConversationTurn,
+  runSessionInventory,
   runServerMode,
   serverStatus,
   sanitizeOperatorDirectiveDraftForDisplay,
@@ -562,6 +564,7 @@ assert.deepEqual(parseArgs(['--startup-system-directive', 'run startup sequence'
 assert.deepEqual(parseArgs(['--no-startup-system-directive']), { startupSystemDirective: false });
 assert.deepEqual(parseArgs(['--control-jsonl', '.narada/control.jsonl']), { controlJsonl: '.narada/control.jsonl' });
 assert.deepEqual(parseArgs(['--mcp-preflight']), { mcpPreflight: true });
+assert.deepEqual(parseArgs(['--session-inventory']), { sessionInventory: true });
 assert.equal(parseColorEnv('off', true), false);
 const heartbeatRoot = mkdtempSync(join(tmpdir(), 'narada-agent-cli-heartbeat-'));
 const heartbeatSession = 'carrier_session_heartbeat_test';
@@ -583,6 +586,86 @@ assert.equal(
   false,
 );
 rmSync(heartbeatRoot, { recursive: true, force: true });
+
+const inventoryRoot = mkdtempSync(join(tmpdir(), 'narada-agent-cli-session-inventory-'));
+const inventoryNaradaDir = join(inventoryRoot, '.narada');
+const inventorySessionsDir = join(inventoryNaradaDir, 'crew', 'nars-sessions');
+mkdirSync(join(inventorySessionsDir, 'healthy-session'), { recursive: true });
+mkdirSync(join(inventorySessionsDir, 'faulted-session'), { recursive: true });
+mkdirSync(join(inventoryNaradaDir, 'runtime', 'agent-cli', 'mcp-preflight'), { recursive: true });
+writeFileSync(join(inventorySessionsDir, 'healthy-session', 'heartbeat.json'), `${JSON.stringify({
+  schema: 'narada.carrier_heartbeat.v1',
+  status: 'alive',
+  carrier_session_id: 'healthy-session',
+  agent_id: 'narada.test',
+  heartbeat_at: '2026-06-14T12:00:00.000Z',
+}, null, 2)}\n`, 'utf8');
+writeFileSync(join(inventorySessionsDir, 'faulted-session', 'heartbeat.json'), `${JSON.stringify({
+  schema: 'narada.carrier_heartbeat.v1',
+  status: 'alive',
+  carrier_session_id: 'faulted-session',
+  agent_id: 'narada.test',
+  heartbeat_at: '2026-06-14T11:59:00.000Z',
+}, null, 2)}\n`, 'utf8');
+writeFileSync(join(inventorySessionsDir, 'healthy-session', 'session.jsonl'), `${JSON.stringify(sessionEventEntry('mcp_preflight_artifact_linked', {
+  artifact_path: join(inventoryNaradaDir, 'runtime', 'agent-cli', 'mcp-preflight', 'healthy-session.json'),
+  generated_at: '2026-06-14T11:58:00.000Z',
+  mcp_operational_state: 'healthy',
+  mcp_startup_failure_summary: '0',
+  mcp_runtime_fault_summary: '0',
+}))}\n`, 'utf8');
+writeFileSync(join(inventorySessionsDir, 'faulted-session', 'session.jsonl'), [
+  JSON.stringify({
+    event_kind: 'carrier_diagnostic_recorded',
+    payload: { server_name: 'degraded', diagnostic_code: 'mcp_stdout_pollution' },
+  }),
+  JSON.stringify({
+    event_kind: 'carrier_diagnostic_recorded',
+    payload: { server_name: 'runtime', diagnostic_code: 'mcp_runtime_fault', tool_name: 'fs_read_file' },
+  }),
+].join('\n') + '\n', 'utf8');
+writeFileSync(join(inventoryNaradaDir, 'runtime', 'agent-cli', 'mcp-preflight', 'healthy-session.json'), `${JSON.stringify({
+  schema: 'narada.agent_cli.mcp_preflight_artifact.v1',
+  session: 'healthy-session',
+  identity: 'narada.test',
+  site_root: inventoryRoot,
+  generated_at: '2026-06-14T11:58:00.000Z',
+  mcp_operational_state: 'healthy',
+  mcp_startup_failure_summary: '0',
+  mcp_runtime_fault_summary: '0',
+}, null, 2)}\n`, 'utf8');
+const inventoryEntries = readSessionInventory({ siteRoot: inventoryRoot, naradaDir: inventoryNaradaDir });
+assert.equal(inventoryEntries.length, 2);
+assert.equal(inventoryEntries[0].session, 'healthy-session');
+assert.equal(inventoryEntries[0].mcp_operational_state, 'healthy');
+assert.equal(inventoryEntries[0].mcp_preflight_artifact_path, join(inventoryNaradaDir, 'runtime', 'agent-cli', 'mcp-preflight', 'healthy-session.json'));
+assert.equal(inventoryEntries[1].session, 'faulted-session');
+assert.equal(inventoryEntries[1].mcp_operational_state, 'runtime_faulted');
+assert.equal(inventoryEntries[1].mcp_startup_failure_summary, '1 (degraded:mcp_stdout_pollution)');
+assert.equal(inventoryEntries[1].mcp_runtime_fault_summary, '1 (runtime:fs_read_file)');
+const sessionInventoryRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-inventory',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'inventory-scan-test',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(sessionInventoryRun.status, 0);
+assert.equal(sessionInventoryRun.stdout.includes('Carrier sessions  2'), true);
+assert.equal(sessionInventoryRun.stdout.includes('Session               healthy-session'), true);
+assert.equal(sessionInventoryRun.stdout.includes('MCP state             healthy'), true);
+assert.equal(sessionInventoryRun.stdout.includes('Session               faulted-session'), true);
+assert.equal(sessionInventoryRun.stdout.includes('MCP state             runtime_faulted'), true);
+assert.equal(sessionInventoryRun.stdout.includes('MCP startup failures  1 (degraded:mcp_stdout_pollution)'), true);
+assert.equal(sessionInventoryRun.stdout.includes('MCP runtime faults    1 (runtime:fs_read_file)'), true);
+assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-scan-test')), false);
+rmSync(inventoryRoot, { recursive: true, force: true });
+
 assert.equal(createTerminalStyle({ enabled: false }).prompt('narada> '), 'narada> ');
 assert.equal(createTerminalStyle({ enabled: true }).prompt('narada> ').includes('\x1b['), true);
 assert.equal(stripAnsiForTest(styleInputRouteLabel('operator -> narada.architect')), 'operator -> narada.architect');
