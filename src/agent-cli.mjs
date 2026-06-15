@@ -1904,6 +1904,10 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
       'MCP startup failures': item.mcp_startup_failure_summary,
       'MCP runtime faults': item.mcp_runtime_fault_summary,
       'Preflight artifact': item.mcp_preflight_artifact_path ?? 'none',
+      'Preflight state': item.mcp_preflight_operational_state ?? 'none',
+      'Preflight action': item.mcp_preflight_recommended_action_display ?? 'none',
+      'Preflight command': item.mcp_preflight_recommended_command ?? 'none',
+      'Preflight diagnostics': item?.mcp_preflight_handoffs?.mcp_preflight_diagnostics ?? 'none',
       'Recommended action': item.recommended_action_display,
       'Recommended command': item.recommended_command ?? 'none',
       'Session read': item?.handoffs?.session_read ?? 'none',
@@ -2109,6 +2113,24 @@ function createSessionRecoveryPayload(sessionRecord) {
   };
 }
 
+function createSessionPreflightPayload(sessionRecord) {
+  if (!sessionRecord) return null;
+  return {
+    artifact_path: sessionRecord.mcp_preflight_artifact_path ?? null,
+    operational_state: sessionRecord.mcp_preflight_operational_state ?? null,
+    startup_failure_summary: sessionRecord.mcp_preflight_startup_failure_summary ?? null,
+    runtime_fault_summary: sessionRecord.mcp_preflight_runtime_fault_summary ?? null,
+    recommended_action: sessionRecord.mcp_preflight_recommended_action ?? null,
+    recommended_action_display: sessionRecord.mcp_preflight_recommended_action_display ?? null,
+    recommended_command: sessionRecord.mcp_preflight_recommended_command ?? null,
+    recovery_kind: sessionRecord.mcp_preflight_recovery_kind ?? null,
+    recovery_kind_display: sessionRecord.mcp_preflight_recovery_kind_display ?? null,
+    recovery_primary_command: sessionRecord.mcp_preflight_recovery_primary_command ?? null,
+    recovery_followup_command: sessionRecord.mcp_preflight_recovery_followup_command ?? null,
+    handoffs: sessionRecord.mcp_preflight_handoffs ?? null,
+  };
+}
+
 function createSessionEventSummaryPayload(sessionRecord, { naradaDir, eventFilter = 'all', recentCount = 20 } = {}) {
   if (!sessionRecord) return null;
   const sessionEventSummary = summarizeSessionInventoryEvents([sessionRecord], { naradaDir, eventFilter, recentCount });
@@ -2160,6 +2182,7 @@ async function runSessionRecovery({ session = SESSION, siteRoot = SITE_ROOT, nar
       session,
       found: true,
       recovery: createSessionRecoveryPayload(sessionRecord),
+      preflight: createSessionPreflightPayload(sessionRecord),
       event_summary: sessionEventSummary,
       record: sessionRecord,
     }, null, 2)}\n`);
@@ -2180,6 +2203,10 @@ async function runSessionRecovery({ session = SESSION, siteRoot = SITE_ROOT, nar
     'Event kinds': sessionEventSummary.event_kind_summary,
     'Issue codes': sessionEventSummary.issue_code_summary,
     'Terminal states': sessionEventSummary.terminal_state_summary,
+    'Preflight state': sessionRecord.mcp_preflight_operational_state ?? 'none',
+    'Preflight action': sessionRecord.mcp_preflight_recommended_action_display ?? 'none',
+    'Preflight command': sessionRecord.mcp_preflight_recommended_command ?? 'none',
+    'Preflight diagnostics': sessionRecord?.mcp_preflight_handoffs?.mcp_preflight_diagnostics ?? 'none',
     'Session read': sessionRecord?.handoffs?.session_read ?? 'none',
     'Session recovery': sessionRecord?.handoffs?.session_recovery ?? 'none',
     'Session issues': sessionRecord?.handoffs?.session_events_issues ?? 'none',
@@ -2244,6 +2271,7 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
       workflow_groups: sessionEventSummary.workflow_groups,
       recent_events: recentEvents,
       recovery: createSessionRecoveryPayload(sessionRecord),
+      preflight: createSessionPreflightPayload(sessionRecord),
       record: sessionRecord,
     }, null, 2)}\n`);
     return 0;
@@ -2268,6 +2296,10 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
     'Recovery followup': sessionRecord.recovery_followup_command ?? 'none',
     'Recommended action': sessionRecord.recommended_action_display,
     'Recommended command': sessionRecord.recommended_command ?? 'none',
+    'Preflight state': sessionRecord.mcp_preflight_operational_state ?? 'none',
+    'Preflight action': sessionRecord.mcp_preflight_recommended_action_display ?? 'none',
+    'Preflight command': sessionRecord.mcp_preflight_recommended_command ?? 'none',
+    'Preflight diagnostics': sessionRecord?.mcp_preflight_handoffs?.mcp_preflight_diagnostics ?? 'none',
     'Session recovery': sessionRecord?.handoffs?.session_recovery ?? 'none',
     'Session read': sessionRecord?.handoffs?.session_read ?? 'none',
     'Session issues': sessionRecord?.handoffs?.session_events_issues ?? 'none',
@@ -2308,6 +2340,7 @@ async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaD
       session,
       found: true,
       recovery: createSessionRecoveryPayload(sessionRecord),
+      preflight: createSessionPreflightPayload(sessionRecord),
       event_summary: sessionEventSummary,
       record: sessionRecord,
     }, null, 2)}\n`);
@@ -2340,6 +2373,10 @@ async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaD
     'MCP startup failures': sessionRecord.mcp_startup_failure_summary,
     'MCP runtime faults': sessionRecord.mcp_runtime_fault_summary,
     'Preflight artifact': sessionRecord.mcp_preflight_artifact_path ?? 'none',
+    'Preflight state': sessionRecord.mcp_preflight_operational_state ?? 'none',
+    'Preflight action': sessionRecord.mcp_preflight_recommended_action_display ?? 'none',
+    'Preflight command': sessionRecord.mcp_preflight_recommended_command ?? 'none',
+    'Preflight diagnostics': sessionRecord?.mcp_preflight_handoffs?.mcp_preflight_diagnostics ?? 'none',
     'Recovery kind': sessionRecord.recovery_kind_display ?? 'none',
     'Recovery primary': sessionRecord.recovery_primary_command ?? 'none',
     'Recovery followup': sessionRecord.recovery_followup_command ?? 'none',
@@ -2849,6 +2886,17 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
       ? formatMcpRuntimeDiagnosticSummary(runtimeDiagnostics)
       : (linkedPreflight?.mcp_runtime_fault_summary ?? preflightArtifact?.mcp_runtime_fault_summary ?? '0'),
     mcp_preflight_artifact_path: linkedPreflight?.artifact_path ?? preflightArtifact?.artifact_path ?? null,
+    mcp_preflight_operational_state: linkedPreflight?.mcp_operational_state ?? preflightArtifact?.mcp_operational_state ?? null,
+    mcp_preflight_startup_failure_summary: linkedPreflight?.mcp_startup_failure_summary ?? preflightArtifact?.mcp_startup_failure_summary ?? null,
+    mcp_preflight_runtime_fault_summary: linkedPreflight?.mcp_runtime_fault_summary ?? preflightArtifact?.mcp_runtime_fault_summary ?? null,
+    mcp_preflight_recommended_action: linkedPreflight?.recommended_action ?? preflightArtifact?.recommended_action ?? null,
+    mcp_preflight_recommended_action_display: linkedPreflight?.recommended_action_display ?? preflightArtifact?.recommended_action_display ?? null,
+    mcp_preflight_recommended_command: linkedPreflight?.recommended_command ?? preflightArtifact?.recommended_command ?? null,
+    mcp_preflight_recovery_kind: linkedPreflight?.recovery_kind ?? preflightArtifact?.recovery_kind ?? null,
+    mcp_preflight_recovery_kind_display: linkedPreflight?.recovery_kind_display ?? preflightArtifact?.recovery_kind_display ?? null,
+    mcp_preflight_recovery_primary_command: linkedPreflight?.recovery_primary_command ?? preflightArtifact?.recovery_primary_command ?? null,
+    mcp_preflight_recovery_followup_command: linkedPreflight?.recovery_followup_command ?? preflightArtifact?.recovery_followup_command ?? null,
+    mcp_preflight_handoffs: linkedPreflight?.handoffs ?? preflightArtifact?.handoffs ?? null,
     handoffs,
   };
 }

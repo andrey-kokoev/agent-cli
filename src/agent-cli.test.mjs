@@ -734,6 +734,11 @@ assert.equal(inventoryEntries[0].request_outcome_total, 0);
 assert.equal(inventoryEntries[0].request_posture, 'clean');
 assert.equal(inventoryEntries[0].request_posture_display, 'clean');
 assert.equal(inventoryEntries[0].mcp_preflight_artifact_path, join(inventoryNaradaDir, 'runtime', 'agent-cli', 'mcp-preflight', 'healthy-session.json'));
+assert.equal(inventoryEntries[0].mcp_preflight_operational_state, 'healthy');
+assert.equal(inventoryEntries[0].mcp_preflight_recommended_action, 'start_session');
+assert.equal(inventoryEntries[0].mcp_preflight_recommended_action_display, 'start session');
+assert.equal(inventoryEntries[0].mcp_preflight_recommended_command, null);
+assert.equal(inventoryEntries[0].mcp_preflight_handoffs.mcp_preflight_diagnostics, 'narada-agent-cli --identity narada.test --session healthy-session --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all');
 assert.equal(inventoryEntries[0].handoffs.session_read, 'narada-agent-cli --identity narada.test --session healthy-session --session-read');
 assert.equal(inventoryEntries[0].handoffs.session_recovery, 'narada-agent-cli --identity narada.test --session healthy-session --session-recovery');
 assert.equal(inventoryEntries[0].handoffs.session_recovery_json, 'narada-agent-cli --identity narada.test --session healthy-session --session-recovery-json');
@@ -813,8 +818,8 @@ assert.equal(sessionInventoryRun.stdout.includes('healthy-session'), true);
 assert.equal(sessionInventoryRun.stdout.includes('healthy'), true);
 assert.equal(sessionInventoryRun.stdout.includes('faulted-session'), true);
 assert.equal(sessionInventoryRun.stdout.includes('runtime_faulted'), true);
-assert.equal(sessionInventoryRun.stdout.includes('MCP startup failures  1 (degraded:mcp_stdout_pollution)'), true);
-assert.equal(sessionInventoryRun.stdout.includes('MCP runtime faults    1 (runtime:fs_read_file)'), true);
+assert.equal(sessionInventoryRun.stdout.includes('degraded:mcp_stdout_pollution'), true);
+assert.equal(sessionInventoryRun.stdout.includes('runtime:fs_read_file'), true);
 assert.equal(sessionInventoryRun.stdout.includes('review runtime diagnostics'), true);
 assert.equal(sessionInventoryRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-recovery'), true);
 assert.equal(sessionInventoryRun.stdout.includes('narada-agent-cli --identity narada.test --session faulted-session --session-events --session-events-filter diagnostics --session-events-count 20'), true);
@@ -1420,6 +1425,9 @@ assert.equal(sessionRecoveryJson.found, true);
 assert.equal(sessionRecoveryJson.recovery.recovery_kind, 'no_recovery');
 assert.equal(sessionRecoveryJson.recovery.recovery_primary_command, 'narada-agent-cli --identity narada.test --session healthy-session --session-read');
 assert.equal(sessionRecoveryJson.recovery.recovery_followup_command, null);
+assert.equal(sessionRecoveryJson.preflight.operational_state, 'healthy');
+assert.equal(sessionRecoveryJson.preflight.recommended_action, 'start_session');
+assert.equal(sessionRecoveryJson.preflight.handoffs.mcp_preflight_diagnostics, 'narada-agent-cli --identity narada.test --session healthy-session --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all');
 assert.equal(sessionRecoveryJson.event_summary.event_count, 3);
 assert.deepEqual(sessionRecoveryJson.event_summary.event_kind_counts, {
   input_completed: 1,
@@ -1462,6 +1470,9 @@ assert.equal(sessionReadJson.record.session, 'healthy-session');
 assert.equal(sessionReadJson.recovery.recovery_kind, 'no_recovery');
 assert.equal(sessionReadJson.recovery.recovery_primary_command, 'narada-agent-cli --identity narada.test --session healthy-session --session-read');
 assert.equal(sessionReadJson.recovery.recovery_followup_command, null);
+assert.equal(sessionReadJson.preflight.operational_state, 'healthy');
+assert.equal(sessionReadJson.preflight.recommended_action_display, 'start session');
+assert.equal(sessionReadJson.preflight.handoffs.mcp_preflight_diagnostics, 'narada-agent-cli --identity narada.test --session healthy-session --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all');
 assert.equal(sessionReadJson.event_summary.event_count, 3);
 assert.deepEqual(sessionReadJson.event_summary.event_kind_counts, {
   input_completed: 1,
@@ -1615,6 +1626,9 @@ assert.equal(sessionEventsJson.found, true);
 assert.equal(sessionEventsJson.event_count, 3);
 assert.equal(Array.isArray(sessionEventsJson.recent_events), true);
 assert.equal(sessionEventsJson.recent_events.at(-1).event, 'session_closed');
+assert.equal(sessionEventsJson.preflight.operational_state, 'healthy');
+assert.equal(sessionEventsJson.preflight.recommended_action, 'start_session');
+assert.equal(sessionEventsJson.preflight.handoffs.mcp_preflight_diagnostics, 'narada-agent-cli --identity narada.test --session healthy-session --mcp-preflight-diagnostics --mcp-preflight-diagnostics-filter all');
 assert.equal(sessionEventsJson.record.last_lifecycle_state, 'closed');
 const missingSessionRoot = mkdtempSync(join(tmpdir(), 'narada-agent-cli-session-read-missing-'));
 const missingSessionReadJsonRun = spawnSync(process.execPath, [
