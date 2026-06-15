@@ -61,6 +61,10 @@ param(
 
     [switch]$McpPreflightJson,
 
+    [switch]$McpPreflightRead,
+
+    [switch]$McpPreflightReadJson,
+
     [switch]$AutoApprove
 )
 
@@ -385,6 +389,19 @@ if ($McpPreflightJson) {
     exit $LASTEXITCODE
 }
 
+if ($McpPreflightRead) {
+    Write-Host "MCP preflight review..." -ForegroundColor Cyan
+    Set-Location $WorkDir
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-read'
+    exit $LASTEXITCODE
+}
+
+if ($McpPreflightReadJson) {
+    Set-Location $WorkDir
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-read-json'
+    exit $LASTEXITCODE
+}
+
 $argList = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName)
 if ($AutoApprove) {
     $argList += '--auto-approve'
@@ -418,8 +435,15 @@ if ($preflight) {
     if ($preflight.mcp_runtime_fault_count -gt 0 -and $preflight.mcp_runtime_fault_summary) {
         Write-Host ("  MCP runtime faults:   {0}" -f $preflight.mcp_runtime_fault_summary) -ForegroundColor DarkYellow
     }
+    Write-Host ("  Recommended action:  {0}" -f $preflight.recommended_action_display) -ForegroundColor DarkGray
+    if ($preflight.recommended_command) {
+        Write-Host ("  Recommended command: {0}" -f $preflight.recommended_command) -ForegroundColor DarkYellow
+    }
+    if ($preflight.handoffs -and $preflight.handoffs.mcp_preflight_read) {
+        Write-Host ("  Preflight review:    {0}" -f $preflight.handoffs.mcp_preflight_read) -ForegroundColor DarkGray
+    }
     if ($preflight.artifact_path) {
-        Write-Host ("  Preflight artifact:   {0}" -f $preflight.artifact_path) -ForegroundColor DarkGray
+        Write-Host ("  Preflight artifact:  {0}" -f $preflight.artifact_path) -ForegroundColor DarkGray
     }
 }
 if ($preflightExitCode -eq 1) {
@@ -430,7 +454,6 @@ if ($preflightExitCode -eq 2) {
     Write-Warning "MCP preflight reported degraded startup posture; continuing interactive attach."
 }
 Write-Host ""
-
 Set-Location $WorkDir
 & node @argList
 
