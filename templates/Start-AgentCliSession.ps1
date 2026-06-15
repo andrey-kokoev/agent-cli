@@ -28,6 +28,11 @@ param(
 
     [switch]$SessionEventsJson,
 
+    [ValidateSet('all', 'lifecycle', 'issues', 'diagnostics')]
+    [string]$SessionEventsFilter = 'all',
+
+    [int]$SessionEventsCount = 20,
+
     [switch]$McpPreflightJson,
 
     [switch]$AutoApprove
@@ -254,13 +259,13 @@ if ($SessionReadJson) {
 if ($SessionEvents) {
     Write-Host "Session events..." -ForegroundColor Cyan
     Set-Location $WorkDir
-    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-events'
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-events' '--session-events-filter' $SessionEventsFilter '--session-events-count' $SessionEventsCount
     exit $LASTEXITCODE
 }
 
 if ($SessionEventsJson) {
     Set-Location $WorkDir
-    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-events-json'
+    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--session-events-json' '--session-events-filter' $SessionEventsFilter '--session-events-count' $SessionEventsCount
     exit $LASTEXITCODE
 }
 

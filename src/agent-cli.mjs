@@ -94,6 +94,10 @@ const SESSION_READ_MODE = options.sessionRead === true;
 const SESSION_READ_JSON_MODE = options.sessionReadJson === true;
 const SESSION_EVENTS_MODE = options.sessionEvents === true;
 const SESSION_EVENTS_JSON_MODE = options.sessionEventsJson === true;
+const SESSION_EVENTS_FILTER = normalizeSessionEventsFilter(options.sessionEventsFilter);
+const SESSION_EVENTS_COUNT = Number.isFinite(Number(options.sessionEventsCount))
+  ? Math.max(1, Number(options.sessionEventsCount))
+  : 20;
 const SERVER_MODE = options.server === true;
 const sessionSettings = {
   model: options.model ?? MODEL,
@@ -485,11 +489,11 @@ async function main() {
     return;
   }
   if (SESSION_EVENTS_MODE) {
-    process.exitCode = await runSessionEventsRead();
+    process.exitCode = await runSessionEventsRead({ eventFilter: SESSION_EVENTS_FILTER, recentCount: SESSION_EVENTS_COUNT });
     return;
   }
   if (SESSION_EVENTS_JSON_MODE) {
-    process.exitCode = await runSessionEventsRead({ jsonOutput: true });
+    process.exitCode = await runSessionEventsRead({ jsonOutput: true, eventFilter: SESSION_EVENTS_FILTER, recentCount: SESSION_EVENTS_COUNT });
     return;
   }
   if (HEARTBEAT_ENABLED) {
@@ -756,9 +760,11 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
   return 0;
 }
 
-async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, naradaDir = NARADA_DIR, jsonOutput = false, recentCount = 20 } = {}) {
+async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, naradaDir = NARADA_DIR, jsonOutput = false, recentCount = 20, eventFilter = 'all' } = {}) {
   const sessionRecord = readPersistedSession({ session, siteRoot, naradaDir });
   const events = readPersistedSessionEvents({ session, naradaDir });
+  const normalizedEventFilter = normalizeSessionEventsFilter(eventFilter);
+  const filteredEvents = filterPersistedSessionEvents(events, { eventFilter: normalizedEventFilter });
   if (!sessionRecord) {
     if (jsonOutput) {
       console.log(`${JSON.stringify({
@@ -766,7 +772,9 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
         site_root: siteRoot,
         session,
         found: false,
+        event_filter: normalizedEventFilter,
         event_count: 0,
+        total_event_count: 0,
         recent_events: [],
       }, null, 2)}\n`);
     } else {
@@ -778,14 +786,16 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
     }
     return 0;
   }
-  const recentEvents = events.slice(-recentCount);
+  const recentEvents = filteredEvents.slice(-recentCount);
   if (jsonOutput) {
     console.log(`${JSON.stringify({
       schema: 'narada.agent_cli.session_events_read.v1',
       site_root: siteRoot,
       session,
       found: true,
-      event_count: events.length,
+      event_filter: normalizedEventFilter,
+      event_count: filteredEvents.length,
+      total_event_count: events.length,
       recent_events: recentEvents,
       record: sessionRecord,
     }, null, 2)}\n`);
@@ -794,7 +804,9 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
   const blocks = [formatKeyValueRows({
     SiteRoot: siteRoot,
     Session: sessionRecord.session,
-    'Event count': events.length,
+    'Event filter': normalizedEventFilter,
+    'Event count': filteredEvents.length,
+    'Total event count': events.length,
     'Last event': sessionRecord.last_event_kind ?? 'none',
     'Last event at': sessionRecord.last_event_at ?? 'unknown',
     'Operational posture': sessionRecord.operational_posture_display,
@@ -933,6 +945,23 @@ function readPersistedSessionEvents({ session = SESSION, naradaDir = NARADA_DIR 
     return [];
   }
   return readJsonlFile(join(sessionDir, 'session.jsonl'));
+}
+
+function normalizeSessionEventsFilter(value) {
+  const normalized = String(value ?? 'all').trim().toLowerCase();
+  if (['all', 'lifecycle', 'issues', 'diagnostics'].includes(normalized)) return normalized;
+  return 'all';
+}
+
+function filterPersistedSessionEvents(events = [], { eventFilter = 'all' } = {}) {
+  const normalizedEventFilter = normalizeSessionEventsFilter(eventFilter);
+  if (normalizedEventFilter === 'all') return events;
+  return events.filter((entry) => {
+    if (normalizedEventFilter === 'lifecycle') return classifyPersistedSessionLifecycleState(entry) !== null;
+    if (normalizedEventFilter === 'issues') return classifyPersistedSessionIssueCode(entry) !== null;
+    if (normalizedEventFilter === 'diagnostics') return (entry?.event_kind ?? entry?.event ?? null) === 'carrier_diagnostic_recorded';
+    return true;
+  });
 }
 
 function summarizeSessionInventoryRollup(inventory = []) {
@@ -5823,6 +5852,12 @@ function parseArgs(argv) {
       opts.sessionEvents = true;
     } else if (argv[i] === '--session-events-json') {
       opts.sessionEventsJson = true;
+    } else if (argv[i] === '--session-events-filter' && i + 1 < argv.length) {
+      opts.sessionEventsFilter = argv[i + 1];
+      i++;
+    } else if (argv[i] === '--session-events-count' && i + 1 < argv.length) {
+      opts.sessionEventsCount = Number(argv[i + 1]);
+      i++;
     } else if (argv[i] === '--stream') {
       opts.stream = true;
     } else if (argv[i] === '--no-stream') {
@@ -5974,6 +6009,7 @@ export {
   runSessionInventory,
   runServerMode,
   readPersistedSessionEvents,
+  filterPersistedSessionEvents,
   readPersistedSession,
   readSessionInventory,
   serverStatus,
@@ -5988,7 +6024,7 @@ export {
 
 if (isEntrypoint) {
   if (options.help) {
-    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--session-inventory] [--session-inventory-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
+    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--session-inventory] [--session-inventory-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics>] [--session-events-count <n>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
     console.log('Programmatic input: --message and --message-file are explicit control inputs; do not use raw stdin piping as the control API.');
     console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, ANTHROPIC_API_KEY, NARADA_AI_API_KEY, NARADA_AI_BASE_URL, NARADA_AI_MODEL, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_ENABLE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_DELAY_MS, NARADA_SITE_ROOT`);
     process.exit(0);

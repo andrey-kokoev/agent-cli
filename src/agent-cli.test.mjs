@@ -48,6 +48,7 @@ import {
   formatHeaderRow,
   formatHeaderRows,
   formatKeyValueRows,
+  filterPersistedSessionEvents,
   formatProgressStatus,
   formatTimestamp,
   formatToolResultContent,
@@ -882,6 +883,9 @@ assert.equal(sessionReadJson.record.request_posture, 'clean');
 const persistedEvents = readPersistedSessionEvents({ session: 'faulted-session', naradaDir: inventoryNaradaDir });
 assert.equal(persistedEvents.length, 7);
 assert.equal(persistedEvents.at(-1).event_kind, 'input_completed');
+assert.equal(filterPersistedSessionEvents(persistedEvents, { eventFilter: 'lifecycle' }).length, 1);
+assert.equal(filterPersistedSessionEvents(persistedEvents, { eventFilter: 'issues' }).length, 4);
+assert.equal(filterPersistedSessionEvents(persistedEvents, { eventFilter: 'diagnostics' }).length, 2);
 const sessionEventsRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
   '--session-events',
@@ -899,6 +903,52 @@ assert.equal(sessionEventsRun.stdout.includes('Event count'), true);
 assert.equal(sessionEventsRun.stdout.includes('Recent events:'), true);
 assert.equal(sessionEventsRun.stdout.includes('carrier_diagnostic_recorded'), true);
 assert.equal(sessionEventsRun.stdout.includes('input_completed [terminal=failed]'), true);
+const sessionEventsLifecycleJsonRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-events-json',
+  '--session-events-filter',
+  'lifecycle',
+  '--session-events-count',
+  '5',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'faulted-session',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(sessionEventsLifecycleJsonRun.status, 0);
+const sessionEventsLifecycleJson = JSON.parse(sessionEventsLifecycleJsonRun.stdout);
+assert.equal(sessionEventsLifecycleJson.event_filter, 'lifecycle');
+assert.equal(sessionEventsLifecycleJson.event_count, 1);
+assert.equal(sessionEventsLifecycleJson.total_event_count, 7);
+assert.equal(sessionEventsLifecycleJson.recent_events.length, 1);
+assert.equal(sessionEventsLifecycleJson.recent_events[0].event_kind, 'input_completed');
+const sessionEventsIssuesRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-events',
+  '--session-events-filter',
+  'issues',
+  '--session-events-count',
+  '2',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'faulted-session',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(sessionEventsIssuesRun.status, 0);
+assert.equal(sessionEventsIssuesRun.stdout.includes('Event filter'), true);
+assert.equal(sessionEventsIssuesRun.stdout.includes('issues'), true);
+assert.equal(sessionEventsIssuesRun.stdout.includes('Event count'), true);
+assert.equal(sessionEventsIssuesRun.stdout.includes('4'), true);
+assert.equal(sessionEventsIssuesRun.stdout.includes('Total event count'), true);
+assert.equal(sessionEventsIssuesRun.stdout.includes('7'), true);
 const sessionEventsJsonRun = spawnSync(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
   '--session-events-json',
@@ -1380,6 +1430,9 @@ assert.equal(windowsWrapperTemplate.includes('[switch]$SessionRead'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionReadJson'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionEvents'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionEventsJson'), true);
+assert.equal(windowsWrapperTemplate.includes("[ValidateSet('all', 'lifecycle', 'issues', 'diagnostics')]"), true);
+assert.equal(windowsWrapperTemplate.includes('[string]$SessionEventsFilter = \'all\''), true);
+assert.equal(windowsWrapperTemplate.includes('[int]$SessionEventsCount = 20'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$McpPreflightJson'), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-inventory-json'"), true);
@@ -1387,6 +1440,7 @@ assert.equal(windowsWrapperTemplate.includes("'--session-read'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-read-json'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-events'"), true);
 assert.equal(windowsWrapperTemplate.includes("'--session-events-json'"), true);
+assert.equal(windowsWrapperTemplate.includes("'--session-events-filter' $SessionEventsFilter '--session-events-count' $SessionEventsCount"), true);
 assert.equal(windowsWrapperTemplate.includes("$preflightArgs = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-json')"), true);
 assert.equal(windowsWrapperTemplate.includes('ConvertFrom-Json'), true);
 assert.equal(windowsWrapperTemplate.includes('MCP preflight reported degraded startup posture; continuing interactive attach.'), true);
