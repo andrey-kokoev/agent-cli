@@ -224,6 +224,61 @@ function buildPersistedSessionHandoffs({ session, identity = IDENTITY, eventCoun
   };
 }
 
+function summarizePersistedSessionRecommendedAction({
+  operationalPosture = 'healthy',
+  mcpOperationalState = 'unknown',
+  requestPosture = 'clean',
+  handoffs = {},
+} = {}) {
+  if (mcpOperationalState === 'runtime_faulted') {
+    return {
+      recommended_action: 'review_runtime_diagnostics',
+      recommended_action_display: 'review runtime diagnostics',
+      recommended_command: handoffs.session_events_diagnostics ?? null,
+    };
+  }
+  if (mcpOperationalState === 'startup_degraded') {
+    return {
+      recommended_action: 'review_startup_diagnostics',
+      recommended_action_display: 'review startup diagnostics',
+      recommended_command: handoffs.session_events_diagnostics ?? null,
+    };
+  }
+  if (requestPosture === 'runtime_failures') {
+    return {
+      recommended_action: 'review_request_issues',
+      recommended_action_display: 'review request issues',
+      recommended_command: handoffs.session_events_issues ?? null,
+    };
+  }
+  if (requestPosture === 'invalid_control_traffic') {
+    return {
+      recommended_action: 'review_invalid_control_traffic',
+      recommended_action_display: 'review invalid control traffic',
+      recommended_command: handoffs.session_events_issues ?? null,
+    };
+  }
+  if (requestPosture === 'closed_session_retries') {
+    return {
+      recommended_action: 'review_closed_session_retries',
+      recommended_action_display: 'review closed session retries',
+      recommended_command: handoffs.session_events_issues ?? null,
+    };
+  }
+  if (operationalPosture === 'lifecycle_failed') {
+    return {
+      recommended_action: 'review_session_events',
+      recommended_action_display: 'review session events',
+      recommended_command: handoffs.session_events ?? null,
+    };
+  }
+  return {
+    recommended_action: 'review_session_summary',
+    recommended_action_display: 'review session summary',
+    recommended_command: handoffs.session_read ?? null,
+  };
+}
+
 function renderSessionInventoryEventGroups(groups = {}) {
   const sections = [];
   for (const [groupKey, buckets] of Object.entries(groups)) {
@@ -861,6 +916,8 @@ async function runSessionInventory({ siteRoot = SITE_ROOT, naradaDir = NARADA_DI
       'MCP startup failures': item.mcp_startup_failure_summary,
       'MCP runtime faults': item.mcp_runtime_fault_summary,
       'Preflight artifact': item.mcp_preflight_artifact_path ?? 'none',
+      'Recommended action': item.recommended_action_display,
+      'Recommended command': item.recommended_command ?? 'none',
       'Session read': item?.handoffs?.session_read ?? 'none',
       'Session issues': item?.handoffs?.session_events_issues ?? 'none',
       'Session diagnostics': item?.handoffs?.session_events_diagnostics ?? 'none',
@@ -923,6 +980,8 @@ async function runSessionInventoryEvents({ siteRoot = SITE_ROOT, naradaDir = NAR
       'Event count': item.event_count,
       'Last event': item.last_event_kind,
       'Last event at': item.last_event_at,
+      'Recommended action': item.recommended_action_display,
+      'Recommended command': item.recommended_command ?? 'none',
       'Session read': item?.handoffs?.session_read ?? 'none',
       'Session issues': item?.handoffs?.session_events_issues ?? 'none',
       'Session diagnostics': item?.handoffs?.session_events_diagnostics ?? 'none',
@@ -989,6 +1048,8 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
     'Request posture': sessionRecord.request_posture_display,
     'Lifecycle outcomes': sessionRecord.lifecycle_state_summary,
     'Request issues': sessionRecord.request_issue_summary,
+    'Recommended action': sessionRecord.recommended_action_display,
+    'Recommended command': sessionRecord.recommended_command ?? 'none',
     'Session read': sessionRecord?.handoffs?.session_read ?? 'none',
     'Session issues': sessionRecord?.handoffs?.session_events_issues ?? 'none',
     'Session diagnostics': sessionRecord?.handoffs?.session_events_diagnostics ?? 'none',
@@ -1053,6 +1114,8 @@ async function runSessionRead({ session = SESSION, siteRoot = SITE_ROOT, naradaD
     'MCP startup failures': sessionRecord.mcp_startup_failure_summary,
     'MCP runtime faults': sessionRecord.mcp_runtime_fault_summary,
     'Preflight artifact': sessionRecord.mcp_preflight_artifact_path ?? 'none',
+    'Recommended action': sessionRecord.recommended_action_display,
+    'Recommended command': sessionRecord.recommended_command ?? 'none',
     'Session events': sessionRecord?.handoffs?.session_events ?? 'none',
     'Session issues': sessionRecord?.handoffs?.session_events_issues ?? 'none',
     'Session diagnostics': sessionRecord?.handoffs?.session_events_diagnostics ?? 'none',
@@ -1179,6 +1242,9 @@ function summarizeSessionInventoryEvents(inventory = [], { naradaDir = NARADA_DI
       event_count: events.length,
       last_event_kind: lastEvent?.event_kind ?? lastEvent?.event ?? 'unknown-event',
       last_event_at: lastEvent?.timestamp ?? lastEvent?.occurred_at ?? lastEvent?.payload?.occurred_at ?? lastEvent?.payload?.created_at ?? 'unknown-time',
+      recommended_action: item?.recommended_action,
+      recommended_action_display: item?.recommended_action_display,
+      recommended_command: item?.recommended_command ?? null,
       handoffs: item?.handoffs ?? buildPersistedSessionHandoffs({ session, identity: item?.agent_id ?? IDENTITY, eventCount: recentCount }),
     });
   }
@@ -1436,6 +1502,7 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     siteRoot,
   });
   const requestPosture = summarizeRequestPosture(requestOutcomeCounts);
+  const handoffs = buildPersistedSessionHandoffs({ session, identity: heartbeat?.agent_id ?? IDENTITY });
   let mcpOperationalState = 'unknown';
   if (runtimeDiagnostics.length > 0) mcpOperationalState = 'runtime_faulted';
   else if (startupFailures.length > 0) mcpOperationalState = 'startup_degraded';
@@ -1445,6 +1512,12 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     mcpOperationalState,
     requestPosture: requestPosture.request_posture,
     lastLifecycleState,
+  });
+  const recommendedAction = summarizePersistedSessionRecommendedAction({
+    operationalPosture: operationalPosture.operational_posture,
+    mcpOperationalState,
+    requestPosture: requestPosture.request_posture,
+    handoffs,
   });
   return {
     session,
@@ -1462,6 +1535,9 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     last_terminal_state: lastTerminalState,
     operational_posture: operationalPosture.operational_posture,
     operational_posture_display: operationalPosture.operational_posture_display,
+    recommended_action: recommendedAction.recommended_action,
+    recommended_action_display: recommendedAction.recommended_action_display,
+    recommended_command: recommendedAction.recommended_command,
     last_lifecycle_event_kind: lastLifecycleEventKind,
     last_lifecycle_at: lastLifecycleAt,
     last_lifecycle_state: lastLifecycleState,
@@ -1482,7 +1558,7 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
       ? formatMcpRuntimeDiagnosticSummary(runtimeDiagnostics)
       : (linkedPreflight?.mcp_runtime_fault_summary ?? preflightArtifact?.mcp_runtime_fault_summary ?? '0'),
     mcp_preflight_artifact_path: linkedPreflight?.artifact_path ?? preflightArtifact?.artifact_path ?? null,
-    handoffs: buildPersistedSessionHandoffs({ session, identity: heartbeat?.agent_id ?? IDENTITY }),
+    handoffs,
   };
 }
 
