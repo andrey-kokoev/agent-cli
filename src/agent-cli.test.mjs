@@ -565,6 +565,7 @@ assert.deepEqual(parseArgs(['--no-startup-system-directive']), { startupSystemDi
 assert.deepEqual(parseArgs(['--control-jsonl', '.narada/control.jsonl']), { controlJsonl: '.narada/control.jsonl' });
 assert.deepEqual(parseArgs(['--mcp-preflight']), { mcpPreflight: true });
 assert.deepEqual(parseArgs(['--session-inventory']), { sessionInventory: true });
+assert.deepEqual(parseArgs(['--session-inventory-json']), { sessionInventoryJson: true });
 assert.equal(parseColorEnv('off', true), false);
 const heartbeatRoot = mkdtempSync(join(tmpdir(), 'narada-agent-cli-heartbeat-'));
 const heartbeatSession = 'carrier_session_heartbeat_test';
@@ -664,6 +665,29 @@ assert.equal(sessionInventoryRun.stdout.includes('MCP state             runtime_
 assert.equal(sessionInventoryRun.stdout.includes('MCP startup failures  1 (degraded:mcp_stdout_pollution)'), true);
 assert.equal(sessionInventoryRun.stdout.includes('MCP runtime faults    1 (runtime:fs_read_file)'), true);
 assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-scan-test')), false);
+const sessionInventoryJsonRun = spawnSync(process.execPath, [
+  fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+  '--session-inventory-json',
+  '--identity',
+  'sonar.resident',
+  '--session',
+  'inventory-scan-json-test',
+], {
+  cwd: inventoryRoot,
+  env: { ...process.env, NARADA_SITE_ROOT: inventoryRoot },
+  encoding: 'utf8',
+});
+assert.equal(sessionInventoryJsonRun.status, 0);
+const sessionInventoryJson = JSON.parse(sessionInventoryJsonRun.stdout);
+assert.equal(sessionInventoryJson.schema, 'narada.agent_cli.session_inventory.v1');
+assert.equal(sessionInventoryJson.site_root, inventoryRoot);
+assert.equal(sessionInventoryJson.carrier_session_count, 2);
+assert.equal(Array.isArray(sessionInventoryJson.sessions), true);
+assert.equal(sessionInventoryJson.sessions[0].session, 'healthy-session');
+assert.equal(sessionInventoryJson.sessions[0].mcp_operational_state, 'healthy');
+assert.equal(sessionInventoryJson.sessions[1].session, 'faulted-session');
+assert.equal(sessionInventoryJson.sessions[1].mcp_operational_state, 'runtime_faulted');
+assert.equal(existsSync(join(inventoryRoot, '.narada', 'crew', 'nars-sessions', 'inventory-scan-json-test')), false);
 rmSync(inventoryRoot, { recursive: true, force: true });
 
 assert.equal(createTerminalStyle({ enabled: false }).prompt('narada> '), 'narada> ');
