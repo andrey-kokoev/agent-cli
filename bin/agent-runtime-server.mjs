@@ -73,6 +73,13 @@ function formatSessionWorkflowSummary(event) {
   return `[agent-runtime-server] Session workflow ${event.recommended_action_display ?? event.recommended_action} | command=${event.recommended_command}`;
 }
 
+function formatSessionOperationsSummary(event) {
+  if (!event || event.event !== 'session_operations') return null;
+  if (!event.operation?.operation_event_summary) return null;
+  const command = event.handoffs?.session_operations ?? 'narada-agent-cli --session-operations';
+  return `[agent-runtime-server] Session operations: ${event.operation.operation_event_summary} | command=${command}`;
+}
+
 function formatSessionWorkflowEvent(event) {
   if (!event || (event.event !== 'session_started' && event.event !== 'session_status' && event.event !== 'session_closed')) return null;
   if (!event.recommended_action || event.recommended_action === 'review_session_summary') return null;
@@ -95,6 +102,43 @@ function formatSessionWorkflowEvent(event) {
     recovery_primary_command: event.recovery_primary_command ?? null,
     recovery_followup_command: event.recovery_followup_command ?? null,
     handoffs: event.handoffs ?? null,
+  };
+}
+
+function formatSessionOperationsEvent(event) {
+  if (!event || event.event !== 'session_operations') return null;
+  return {
+    schema: 'narada.agent_runtime_server.wrapper_event.v1',
+    event: 'session_operations_snapshot',
+    timestamp: event.timestamp ?? new Date().toISOString(),
+    source_event: event.event,
+    request_id: event.request_id ?? null,
+    agent_id: event.agent_id ?? null,
+    session_id: event.session_id ?? null,
+    terminal_state: event.terminal_state ?? null,
+    active_turn_state: event.active_turn_state ?? null,
+    active_turn_id: event.active_turn_id ?? null,
+    mcp_operational_state: event.mcp_operational_state ?? null,
+    mcp_preflight_operational_state: event.mcp_preflight_operational_state ?? null,
+    request_posture: event.request_posture ?? null,
+    request_posture_display: event.request_posture_display ?? null,
+    operational_posture: event.operational_posture ?? null,
+    operational_posture_display: event.operational_posture_display ?? null,
+    recommended_action: event.recommended_action ?? null,
+    recommended_action_display: event.recommended_action_display ?? null,
+    recommended_command: event.recommended_command ?? null,
+    recovery_kind: event.recovery_kind ?? null,
+    recovery_kind_display: event.recovery_kind_display ?? null,
+    recovery_primary_command: event.recovery_primary_command ?? null,
+    recovery_followup_command: event.recovery_followup_command ?? null,
+    handoffs: event.handoffs ?? null,
+    operation: event.operation ?? null,
+    event_summary: event.event_summary ?? null,
+    session_path: event.session_path ?? null,
+    events_path: event.events_path ?? null,
+    session_event_count: event.session_event_count ?? null,
+    last_event_kind: event.last_event_kind ?? null,
+    last_event_at: event.last_event_at ?? null,
   };
 }
 
@@ -130,7 +174,7 @@ function formatPreflightWorkflowEvent(event) {
 }
 
 function formatWrapperStatusEvent(event) {
-  if (!event || (event.event !== 'session_started' && event.event !== 'session_status' && event.event !== 'session_closed')) return null;
+  if (!event || (event.event !== 'session_started' && event.event !== 'session_status' && event.event !== 'session_closed' && event.event !== 'session_operations')) return null;
   return {
     schema: 'narada.agent_runtime_server.wrapper_event.v1',
     event: 'session_status_snapshot',
@@ -229,6 +273,7 @@ async function main() {
         }
         for (const [summary, wrapperEvent] of [
           [formatSessionWorkflowSummary(event), formatSessionWorkflowEvent(event)],
+          [formatSessionOperationsSummary(event), formatSessionOperationsEvent(event)],
           [formatPreflightWorkflowSummary(event), formatPreflightWorkflowEvent(event)],
         ]) {
           if (!summary || workflowSummaries.has(summary)) continue;
