@@ -4373,6 +4373,7 @@ function appendJsonlRecord(path, payload) {
   const line = `${JSON.stringify(payload)}\n`;
   mkdirSync(dirname(path), { recursive: true });
   const fd = openSync(path, 'a');
+  let directoryFd = null;
   try {
     writeSync(fd, line, null, 'utf8');
     if (ENABLE_SESSION_FSYNC) {
@@ -4381,8 +4382,17 @@ function appendJsonlRecord(path, payload) {
       } catch {
         // best-effort durability
       }
+      try {
+        directoryFd = openSync(dirname(path), 'r');
+        fsyncSync(directoryFd);
+      } catch {
+        // directory fsync is best-effort for cross-platform support.
+      }
     }
   } finally {
+    if (directoryFd !== null) {
+      closeSync(directoryFd);
+    }
     closeSync(fd);
   }
 }
