@@ -3144,6 +3144,7 @@ assert.equal(printedHelpMessages.some((message) => message.includes('/recovery  
 assert.equal(await handleSlashCommand('/bad', { mcpServers: {}, allTools: [] }), 'handled');
 assert.equal(await handleSlashCommand('plain message', { mcpServers: {}, allTools: [] }), 'none');
 assert.equal(printedHelpMessages.some((message) => message.includes('/ops                  Show operation workflow summary')), true);
+assert.equal(printedHelpMessages.some((message) => message.includes('/ops sync')), true);
 let opsCall;
 assert.equal(await handleSlashCommand('/ops', {
   mcpServers: {},
@@ -3175,6 +3176,26 @@ assert.deepEqual(jsonOpsCall, {
   session: 'ops-json-test',
   naradaDir: '/tmp/ops-session-dir',
   jsonOutput: true,
+});
+let opsSyncCall;
+assert.equal(await handleSlashCommand('/ops sync --target /tmp/ops-target --direction download --dry-run --delete --json', {
+  mcpServers: {},
+  allTools: [],
+  naradaDir: '/tmp/ops-session-dir',
+  session: 'ops-sync-test',
+  runSessionSyncRunner: async (payload) => {
+    opsSyncCall = payload;
+    return 0;
+  },
+}), 'handled');
+assert.deepEqual(opsSyncCall, {
+  session: 'ops-sync-test',
+  naradaDir: '/tmp/ops-session-dir',
+  target: '/tmp/ops-target',
+  direction: 'download',
+  jsonOutput: true,
+  dryRun: true,
+  deleteMissing: true,
 });
 const originalConsoleLog = console.log;
 const originalSlashStdoutWrite = process.stdout.write;

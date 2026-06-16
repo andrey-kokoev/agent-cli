@@ -4873,6 +4873,7 @@ async function handleSlashCommand(input, {
   mcpPreflightArtifact = readMcpPreflightArtifact(),
   executeGoalOnSet = false,
   runSessionOperations = runSessionOperationsRead,
+  runSessionSyncRunner = runSessionSync,
   session = SESSION,
   naradaDir = NARADA_DIR,
 }) {
@@ -4900,6 +4901,7 @@ async function handleSlashCommand(input, {
       '/thinking <level>     none, low, medium, high',
       '/tool-output [state]  Toggle displayed tool call outputs (on, off, toggle)',
       '/ops                  Show operation workflow summary',
+      '/ops sync [--target <path|alias>] [--direction upload|download|bidirectional] [--json] [--dry-run] [--delete]',
       '/tools [filter]       Show discovered MCP tools and input schemas',
       '/observers            Show observer posture',
       '/observer mute        Mute visible observer interjections',
@@ -4923,8 +4925,15 @@ async function handleSlashCommand(input, {
     return 'handled';
   }
   if (command === '/ops') {
-    const wantJson = value.toLowerCase() === '--json';
-    await runSessionOperations({ session, naradaDir, jsonOutput: wantJson });
+    const { action, payload } = handleOpsCommand(value, { session, naradaDir });
+    if (action === 'read') {
+      await runSessionOperations(payload);
+    } else if (action === 'sync') {
+      await runSessionSyncRunner(payload);
+    }
+    if (!action) {
+      printCliMessage('Usage: /ops, /ops --json, /ops sync [--target ...]');
+    }
     return 'handled';
   }
   if (command === '/goal') {
@@ -5087,6 +5096,72 @@ async function handleSlashCommand(input, {
   }
   printCliMessage(`Unknown command: ${command}. Type /help.`);
   return 'handled';
+}
+
+function handleOpsCommand(value, { session, naradaDir, direction: overrideDirection, target: overrideTarget } = {}) {
+  const tokens = shellLikeWords(String(value ?? '').trim());
+  if (tokens.length === 0 || (tokens.length === 1 && tokens[0].toLowerCase() === '--json')) {
+    return {
+      action: 'read',
+      payload: {
+        session,
+        naradaDir,
+        jsonOutput: tokens.some((token) => token.toLowerCase() === '--json'),
+      },
+    };
+  }
+
+  if (tokens[0].toLowerCase() === 'sync') {
+    const options = {
+      session,
+      naradaDir,
+      target: overrideTarget ?? null,
+      direction: overrideDirection ?? 'upload',
+      jsonOutput: false,
+      dryRun: false,
+      deleteMissing: false,
+    };
+    for (let index = 1; index < tokens.length; index += 1) {
+      const token = tokens[index].toLowerCase();
+      const next = tokens[index + 1];
+      if (token === '--target' && next) {
+        options.target = next;
+        index += 1;
+        continue;
+      }
+      if (token === '--direction' && next) {
+        options.direction = next;
+        index += 1;
+        continue;
+      }
+      if (token === '--json') {
+        options.jsonOutput = true;
+        continue;
+      }
+      if (token === '--dry-run') {
+        options.dryRun = true;
+        continue;
+      }
+      if (token === '--delete') {
+        options.deleteMissing = true;
+        continue;
+      }
+      options.target = options.target ?? token;
+    }
+    return {
+      action: 'sync',
+      payload: {
+        ...options,
+        direction: normalizeSessionSyncDirection(options.direction),
+        target: String(options.target ?? '').trim() || null,
+      },
+    };
+  }
+
+  return {
+    action: null,
+    payload: {},
+  };
 }
 
 function handleToolOutputDisplayCommand(value = '', displaySettings = transcriptDisplaySettings) {
