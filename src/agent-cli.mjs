@@ -2,8 +2,8 @@
 import { createHash } from 'node:crypto';
 import { createInterface, emitKeypressEvents } from 'node:readline';
 import { StringDecoder } from 'node:string_decoder';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync } from 'node:fs';
-import { resolve, join, basename } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync, openSync, writeSync, closeSync, fsyncSync } from 'node:fs';
+import { resolve, join, basename, dirname } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { request as httpsRequest } from 'node:https';
 import { request as httpRequest } from 'node:http';
@@ -1232,6 +1232,7 @@ if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE 
 const SESSION_PATH = SERVER_MODE ? join(SESSION_DIR, 'session.jsonl') : join(SESSION_DIR, `${SESSION}.jsonl`);
 const EVENTS_PATH = join(SESSION_DIR, 'events.jsonl');
 const CARRIER_SESSION_DIR = join(NARADA_DIR, 'crew', 'nars-sessions', SESSION);
+const ENABLE_SESSION_FSYNC = process.env.NARADA_SESSION_FSYNC !== '0';
 if (!MCP_PREFLIGHT_MODE && !MCP_PREFLIGHT_JSON_MODE && !MCP_PREFLIGHT_READ_MODE && !MCP_PREFLIGHT_READ_JSON_MODE && !MCP_PREFLIGHT_INVENTORY_MODE && !MCP_PREFLIGHT_INVENTORY_JSON_MODE && !MCP_PREFLIGHT_ACTIONS_MODE && !MCP_PREFLIGHT_ACTIONS_JSON_MODE && !MCP_PREFLIGHT_RECOVERY_MODE && !MCP_PREFLIGHT_RECOVERY_JSON_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_MODE && !MCP_PREFLIGHT_DIAGNOSTICS_JSON_MODE && !SESSION_INVENTORY_MODE && !SESSION_INVENTORY_JSON_MODE && !SESSION_INVENTORY_OPERATIONS_MODE && !SESSION_INVENTORY_OPERATIONS_JSON_MODE && !SESSION_INVENTORY_HOST_COMMANDS_MODE && !SESSION_INVENTORY_HOST_COMMANDS_JSON_MODE && !SESSION_INVENTORY_ACTIONS_MODE && !SESSION_INVENTORY_ACTIONS_JSON_MODE && !SESSION_INVENTORY_RECOVERY_MODE && !SESSION_INVENTORY_RECOVERY_JSON_MODE && !SESSION_INVENTORY_EVENTS_MODE && !SESSION_INVENTORY_EVENTS_JSON_MODE && !SESSION_RECOVERY_MODE && !SESSION_RECOVERY_JSON_MODE && !SESSION_READ_MODE && !SESSION_READ_JSON_MODE && !HOST_COMMAND_OUTPUT_READ_MODE && !HOST_COMMAND_OUTPUT_READ_JSON_MODE && !SESSION_EVENTS_MODE && !SESSION_EVENTS_JSON_MODE && !existsSync(CARRIER_SESSION_DIR)) mkdirSync(CARRIER_SESSION_DIR, { recursive: true });
 const HEARTBEAT_PATH = join(CARRIER_SESSION_DIR, 'heartbeat.json');
 const MCP_PREFLIGHT_ARTIFACT_DIR = join(NARADA_DIR, 'runtime', 'agent-cli', 'mcp-preflight');
@@ -3411,6 +3412,7 @@ function summarizeOperationalPosture({ mcpOperationalState = 'unknown', requestP
 function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, naradaDir = NARADA_DIR } = {}) {
   const heartbeat = readJsonFile(join(sessionDir, 'heartbeat.json'));
   const entries = readJsonlFile(join(sessionDir, 'session.jsonl'));
+  const parseErrors = entries.parse_errors ?? [];
   const startupFailures = [];
   const runtimeDiagnostics = [];
   let linkedPreflight = null;
@@ -3504,6 +3506,8 @@ function summarizePersistedSession({ session, sessionDir, siteRoot = SITE_ROOT, 
     heartbeat_status: heartbeat?.status ?? 'missing',
     heartbeat_display: heartbeat?.heartbeat_at ? `${heartbeat.status ?? 'unknown'} @ ${heartbeat.heartbeat_at}` : (heartbeat?.status ?? 'missing'),
     session_event_count: entries.length,
+    session_jsonl_parse_error_count: parseErrors.length,
+    session_jsonl_parse_error_sample: parseErrors.slice(0, 3),
     last_event_kind: lastEventKind,
     last_event_at: lastEventAt,
     last_terminal_state: lastTerminalState,
@@ -3589,19 +3593,50 @@ function readJsonFile(path) {
 function readJsonlFile(path) {
   if (!existsSync(path)) return [];
   try {
-    return readFileSync(path, 'utf8')
+    const parseErrors = [];
+    const entries = readFileSync(path, 'utf8')
       .split(/\r?\n/)
       .filter((line) => line.trim().length > 0)
       .map((line) => {
         try {
           return JSON.parse(line);
         } catch {
+          parseErrors.push({
+            line,
+            error: 'invalid_json',
+          });
           return null;
         }
       })
       .filter(Boolean);
+    if (parseErrors.length > 0) {
+      Object.defineProperty(entries, 'parse_errors', {
+        value: parseErrors,
+        enumerable: false,
+        writable: false,
+      });
+    }
+    return entries;
   } catch {
     return [];
+  }
+}
+
+function appendJsonlRecord(path, payload) {
+  const line = `${JSON.stringify(payload)}\n`;
+  mkdirSync(dirname(path), { recursive: true });
+  const fd = openSync(path, 'a');
+  try {
+    writeSync(fd, line, null, 'utf8');
+    if (ENABLE_SESSION_FSYNC) {
+      try {
+        fsyncSync(fd);
+      } catch {
+        // best-effort durability
+      }
+    }
+  } finally {
+    closeSync(fd);
   }
 }
 
@@ -5832,7 +5867,7 @@ function removeInvalidToolHistory(messages) {
 }
 
 function appendSession(path, entry) {
-  appendFileSync(path, JSON.stringify(entry) + '\n', 'utf-8');
+  appendJsonlRecord(path, entry);
 }
 
 function writeMcpPreflightArtifact({ artifactDir = MCP_PREFLIGHT_ARTIFACT_DIR, session, identity, siteRoot, mcpStatus, mcpServers, allTools }) {
@@ -6888,7 +6923,7 @@ function observerServerStatus({ requestId, state }) {
 
 function emitServerEvent(output, event) {
   const line = `${JSON.stringify(event)}\n`;
-  appendFileSync(EVENTS_PATH, line, 'utf8');
+  appendJsonlRecord(EVENTS_PATH, event);
   output.write(line);
 }
 
