@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync, mkdirSync, mkdtempSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -90,6 +90,7 @@ import {
   runConversationTurn,
   runSessionEventsRead,
   runSessionInventory,
+  runSessionSync,
   runServerMode,
   serverStatus,
   sanitizeOperatorDirectiveDraftForDisplay,
@@ -603,6 +604,67 @@ assert.deepEqual(parseArgs(['--session-sync']), { sessionSync: true });
 assert.deepEqual(parseArgs(['--session-sync-json']), { sessionSyncJson: true });
 assert.deepEqual(parseArgs(['--session-sync-target', '/tmp/site-sync-target']), { sessionSyncTarget: '/tmp/site-sync-target' });
 assert.deepEqual(parseArgs(['--session-sync-direction', 'bidirectional']), { sessionSyncDirection: 'bidirectional' });
+
+const sessionSyncSourceRoot = mkdtempSync(join(tmpdir(), 'agent-cli-session-sync-source-'));
+const sessionSyncTargetRoot = mkdtempSync(join(tmpdir(), 'agent-cli-session-sync-target-'));
+const sessionSyncSession = 'operator-session-sync';
+const sourceSessionRoot = join(sessionSyncSourceRoot, 'agent-sessions');
+const sourceCarrierRoot = join(sessionSyncSourceRoot, '.narada', 'crew', 'nars-sessions', sessionSyncSession);
+const targetSessionRoot = join(sessionSyncTargetRoot, 'agent-sessions');
+const targetCarrierRoot = join(sessionSyncTargetRoot, '.narada', 'crew', 'nars-sessions', sessionSyncSession);
+mkdirSync(sourceSessionRoot, { recursive: true });
+mkdirSync(sourceCarrierRoot, { recursive: true });
+mkdirSync(targetSessionRoot, { recursive: true });
+mkdirSync(targetCarrierRoot, { recursive: true });
+
+writeFileSync(join(sourceSessionRoot, 'session.jsonl'), `${JSON.stringify({
+  schema: 'narada.session_test.v1',
+  event: 'created',
+}, null, 2)}\n`, 'utf8');
+writeFileSync(join(sourceCarrierRoot, 'heartbeat.json'), `${JSON.stringify({
+  schema: 'narada.heartbeat_test.v1',
+  session: sessionSyncSession,
+}, null, 2)}\n`, 'utf8');
+
+const sessionSyncUploadCode = await runSessionSync({
+  session: sessionSyncSession,
+  target: sessionSyncTargetRoot,
+  direction: 'upload',
+  siteRoot: sessionSyncSourceRoot,
+});
+assert.equal(sessionSyncUploadCode, 0);
+assert.equal(existsSync(join(targetSessionRoot, 'session.jsonl')), true);
+assert.equal(existsSync(join(targetCarrierRoot, 'heartbeat.json')), true);
+
+const sessionSyncMatchAtime = new Date('2026-01-01T12:00:00.000Z');
+const sourceSessionFile = join(targetSessionRoot, 'session.jsonl');
+const sourceCarrierFile = join(targetCarrierRoot, 'heartbeat.json');
+writeFileSync(sourceSessionFile, 'first-write', 'utf8');
+writeFileSync(sourceCarrierFile, 'payload-one', 'utf8');
+utimesSync(sourceSessionFile, sessionSyncMatchAtime, sessionSyncMatchAtime);
+utimesSync(sourceCarrierFile, sessionSyncMatchAtime, sessionSyncMatchAtime);
+writeFileSync(join(sessionSyncSourceRoot, 'agent-sessions', 'session.jsonl'), 'first-write', 'utf8');
+writeFileSync(join(sourceCarrierRoot, 'heartbeat.json'), 'payload-one', 'utf8');
+utimesSync(join(sessionSyncSourceRoot, 'agent-sessions', 'session.jsonl'), sessionSyncMatchAtime, sessionSyncMatchAtime);
+utimesSync(join(sourceCarrierRoot, 'heartbeat.json'), sessionSyncMatchAtime, sessionSyncMatchAtime);
+const sessionSyncEqualHashCode = await runSessionSync({
+  session: sessionSyncSession,
+  target: sessionSyncTargetRoot,
+  direction: 'bidirectional',
+  siteRoot: sessionSyncSourceRoot,
+});
+assert.equal(sessionSyncEqualHashCode, 0);
+
+writeFileSync(join(sourceCarrierRoot, 'heartbeat.json'), 'payload-two', 'utf8');
+utimesSync(join(sourceCarrierRoot, 'heartbeat.json'), sessionSyncMatchAtime, sessionSyncMatchAtime);
+const sessionSyncConflictCode = await runSessionSync({
+  session: sessionSyncSession,
+  target: sessionSyncTargetRoot,
+  direction: 'bidirectional',
+  siteRoot: sessionSyncSourceRoot,
+});
+assert.equal(sessionSyncConflictCode, 1);
+
 assert.deepEqual(parseArgs(['--host-command-output-read']), { hostCommandOutputRead: true });
 assert.deepEqual(parseArgs(['--host-command-output-read-json']), { hostCommandOutputReadJson: true });
 assert.deepEqual(parseArgs(['--host-command-output-ref', 'mcp_payload:carrier_host_command_output:test@v1']), { hostCommandOutputRef: 'mcp_payload:carrier_host_command_output:test@v1' });

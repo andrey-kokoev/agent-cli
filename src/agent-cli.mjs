@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { createInterface, emitKeypressEvents } from 'node:readline';
 import { StringDecoder } from 'node:string_decoder';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync, openSync, writeSync, closeSync, fsyncSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync, openSync, writeSync, closeSync, fsyncSync, copyFileSync, renameSync, unlinkSync } from 'node:fs';
 import { resolve, join, basename, dirname } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { request as httpsRequest } from 'node:https';
@@ -2929,7 +2929,7 @@ function copySessionSyncEntries({
       skipped += 1;
       continue;
     }
-    if (sourceEntry.size === destinationEntry.size) {
+    if (sourceEntry.size === destinationEntry.size && sourceAndDestinationSessionSyncEntriesMatch({ sourceEntry, destinationEntry, destinationRoot })) {
       skipped += 1;
       continue;
     }
@@ -2943,8 +2943,59 @@ function copySessionSyncEntries({
 
 function writeSessionSyncFile({ sourceEntry, destinationRoot }) {
   const destinationPath = join(destinationRoot, sourceEntry.relativePath);
-  mkdirSync(dirname(destinationPath), { recursive: true });
-  writeFileSync(destinationPath, sourceEntry.content, 'utf8');
+  const destinationDirectory = dirname(destinationPath);
+  const stagingDirectory = join(destinationRoot, '.session-sync-staging');
+  const stagingPath = join(stagingDirectory, `${randomId()}.tmp`);
+  let stagingFd = null;
+  let destinationDirectoryFd = null;
+
+  mkdirSync(destinationDirectory, { recursive: true });
+  mkdirSync(stagingDirectory, { recursive: true });
+
+  try {
+    copyFileSync(sourceEntry.sourcePath, stagingPath);
+    stagingFd = openSync(stagingPath, 'r');
+    fsyncSync(stagingFd);
+    closeSync(stagingFd);
+    stagingFd = null;
+    renameSync(stagingPath, destinationPath);
+    destinationDirectoryFd = openSync(destinationDirectory, 'r');
+    fsyncSync(destinationDirectoryFd);
+  } catch (error) {
+    try {
+      unlinkSync(stagingPath);
+    } catch {
+      // Ignore cleanup failures after write errors.
+    }
+    throw error;
+  } finally {
+    if (stagingFd !== null) {
+      closeSync(stagingFd);
+      stagingFd = null;
+    }
+    if (destinationDirectoryFd !== null) {
+      closeSync(destinationDirectoryFd);
+      destinationDirectoryFd = null;
+    }
+  }
+}
+
+function sourceAndDestinationSessionSyncEntriesMatch({ sourceEntry, destinationEntry, destinationRoot }) {
+  const destinationPath = join(destinationRoot, sourceEntry.relativePath);
+  if (!existsSync(destinationPath)) return false;
+  if (Number(destinationEntry.size ?? 0) !== Number(sourceEntry.size)) return false;
+  const sourceHash = sessionSyncSha256(sourceEntry.sourcePath);
+  const destinationHash = sessionSyncSha256(destinationPath);
+  if (!sourceHash || !destinationHash) return false;
+  return sourceHash === destinationHash;
+}
+
+function sessionSyncSha256(filePath) {
+  try {
+    return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+  } catch {
+    return null;
+  }
 }
 
 function collectSessionRootEntries(root) {
@@ -2958,18 +3009,11 @@ function collectSessionRootEntries(root) {
         visit(nextPath, nextRelative);
       } else if (dirEntry.isFile()) {
         const stat = statSync(nextPath);
-        let content;
-        try {
-          content = readFileSync(nextPath, 'utf8');
-        } catch {
-          continue;
-        }
         entries.push({
           relativePath: nextRelative,
           sourcePath: nextPath,
           size: stat.size,
           mtimeMs: stat.mtimeMs,
-          content,
         });
       }
     }
