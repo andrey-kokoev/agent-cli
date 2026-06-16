@@ -694,6 +694,12 @@ const sessionSyncUnresolvedAliasCode = await runSessionSync({
   siteRoot: sessionSyncSourceRoot,
 });
 assert.equal(sessionSyncUnresolvedAliasCode, 1);
+const sessionSyncUnresolvedCloudAliasCode = await runSessionSync({
+  session: sessionSyncSession,
+  target: `cloud:${sessionSyncMissingAliasEnvKey}`,
+  siteRoot: sessionSyncSourceRoot,
+});
+assert.equal(sessionSyncUnresolvedCloudAliasCode, 1);
 const sessionSyncAliasSourceRoot = mkdtempSync(join(tmpdir(), 'agent-cli-session-sync-alias-source-'));
 const sessionSyncAliasTargetRoot = mkdtempSync(join(tmpdir(), 'agent-cli-session-sync-alias-target-'));
 const sessionSyncAliasSession = 'operator-session-sync-alias';
@@ -736,12 +742,53 @@ if (priorAliasEnv === undefined) {
 } else {
   process.env[aliasEnvKey] = priorAliasEnv;
 }
+const cloudAlias = 'team-cloud';
+const cloudAliasEnvKey = `NARADA_CLOUD_ROOT_${cloudAlias.toUpperCase().replace(/[^A-Z0-9_]/g, '_')}`;
+const priorCloudAliasEnv = process.env[cloudAliasEnvKey];
+const cloudAliasSourceRoot = mkdtempSync(join(tmpdir(), 'agent-cli-session-sync-cloud-source-'));
+const cloudAliasDestinationRoot = mkdtempSync(join(tmpdir(), 'agent-cli-session-sync-cloud-destination-'));
+process.env[cloudAliasEnvKey] = cloudAliasDestinationRoot;
+
+const cloudAliasSession = 'operator-session-sync-cloud';
+const cloudAliasSourceSessionRoot = join(cloudAliasSourceRoot, 'agent-sessions');
+const cloudAliasSourceCarrierRoot = join(cloudAliasSourceRoot, '.narada', 'crew', 'nars-sessions', cloudAliasSession);
+const cloudAliasDestSessionRoot = join(cloudAliasDestinationRoot, 'agent-sessions');
+const cloudAliasDestCarrierRoot = join(cloudAliasDestinationRoot, '.narada', 'crew', 'nars-sessions', cloudAliasSession);
+mkdirSync(cloudAliasSourceSessionRoot, { recursive: true });
+mkdirSync(cloudAliasSourceCarrierRoot, { recursive: true });
+mkdirSync(cloudAliasDestSessionRoot, { recursive: true });
+mkdirSync(cloudAliasDestCarrierRoot, { recursive: true });
+const cloudSourceSessionFile = join(cloudAliasSourceSessionRoot, 'session.jsonl');
+writeFileSync(cloudSourceSessionFile, `${JSON.stringify({
+  schema: 'narada.session_test.v1',
+  event: 'cloud alias created',
+}, null, 2)}\n`, 'utf8');
+
+const sessionSyncCloudAliasUploadCode = await runSessionSync({
+  session: cloudAliasSession,
+  target: `cloud:${cloudAlias}`,
+  direction: 'upload',
+  siteRoot: cloudAliasSourceRoot,
+});
+assert.equal(sessionSyncCloudAliasUploadCode, 0);
+assert.equal(existsSync(join(cloudAliasDestSessionRoot, 'session.jsonl')), true);
+if (priorCloudAliasEnv === undefined) {
+  delete process.env[cloudAliasEnvKey];
+} else {
+  process.env[cloudAliasEnvKey] = priorCloudAliasEnv;
+}
 rmSync(aliasSourceSessionRoot, { recursive: true, force: true });
 rmSync(aliasSourceCarrierRoot, { recursive: true, force: true });
 rmSync(aliasTargetSessionRoot, { recursive: true, force: true });
 rmSync(aliasTargetCarrierRoot, { recursive: true, force: true });
 rmSync(sessionSyncAliasSourceRoot, { recursive: true, force: true });
 rmSync(sessionSyncAliasTargetRoot, { recursive: true, force: true });
+rmSync(cloudAliasSourceSessionRoot, { recursive: true, force: true });
+rmSync(cloudAliasSourceCarrierRoot, { recursive: true, force: true });
+rmSync(cloudAliasDestSessionRoot, { recursive: true, force: true });
+rmSync(cloudAliasDestCarrierRoot, { recursive: true, force: true });
+rmSync(cloudAliasDestinationRoot, { recursive: true, force: true });
+rmSync(cloudAliasSourceRoot, { recursive: true, force: true });
 rmSync(sourceSessionRoot, { recursive: true, force: true });
 rmSync(sourceCarrierRoot, { recursive: true, force: true });
 rmSync(targetSessionRoot, { recursive: true, force: true });
