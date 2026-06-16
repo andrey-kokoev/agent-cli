@@ -599,6 +599,10 @@ assert.deepEqual(parseArgs(['--session-operations']), { sessionOperations: true 
 assert.deepEqual(parseArgs(['--session-operations-json']), { sessionOperationsJson: true });
 assert.deepEqual(parseArgs(['--session-recovery']), { sessionRecovery: true });
 assert.deepEqual(parseArgs(['--session-recovery-json']), { sessionRecoveryJson: true });
+assert.deepEqual(parseArgs(['--session-sync']), { sessionSync: true });
+assert.deepEqual(parseArgs(['--session-sync-json']), { sessionSyncJson: true });
+assert.deepEqual(parseArgs(['--session-sync-target', '/tmp/site-sync-target']), { sessionSyncTarget: '/tmp/site-sync-target' });
+assert.deepEqual(parseArgs(['--session-sync-direction', 'bidirectional']), { sessionSyncDirection: 'bidirectional' });
 assert.deepEqual(parseArgs(['--host-command-output-read']), { hostCommandOutputRead: true });
 assert.deepEqual(parseArgs(['--host-command-output-read-json']), { hostCommandOutputReadJson: true });
 assert.deepEqual(parseArgs(['--host-command-output-ref', 'mcp_payload:carrier_host_command_output:test@v1']), { hostCommandOutputRef: 'mcp_payload:carrier_host_command_output:test@v1' });
