@@ -608,6 +608,7 @@ assert.deepEqual(parseArgs(['--session-sync-target', 'site:dev']), { sessionSync
 assert.deepEqual(parseArgs(['--session-sync-target', 'cloud:beta']), { sessionSyncTarget: 'cloud:beta' });
 assert.deepEqual(parseArgs(['--session-sync-direction', 'bidirectional']), { sessionSyncDirection: 'bidirectional' });
 assert.deepEqual(parseArgs(['--session-sync-dry-run']), { sessionSyncDryRun: true });
+assert.deepEqual(parseArgs(['--session-sync-delete']), { sessionSyncDelete: true });
 
 const sessionSyncSourceRoot = mkdtempSync(join(tmpdir(), 'agent-cli-session-sync-source-'));
 const sessionSyncTargetRoot = mkdtempSync(join(tmpdir(), 'agent-cli-session-sync-target-'));
@@ -672,6 +673,30 @@ const sessionSyncEqualHashCode = await runSessionSync({
   siteRoot: sessionSyncSourceRoot,
 });
 assert.equal(sessionSyncEqualHashCode, 0);
+
+writeFileSync(join(targetSessionRoot, 'orphan-session-entry.json'), 'stale-session-entry');
+writeFileSync(join(targetCarrierRoot, 'orphan-carrier-entry.json'), 'stale-carrier-entry');
+
+const sessionSyncDeleteMissingDefaultCode = await runSessionSync({
+  session: sessionSyncSession,
+  target: sessionSyncTargetRoot,
+  direction: 'upload',
+  siteRoot: sessionSyncSourceRoot,
+});
+assert.equal(sessionSyncDeleteMissingDefaultCode, 0);
+assert.equal(existsSync(join(targetSessionRoot, 'orphan-session-entry.json')), true);
+assert.equal(existsSync(join(targetCarrierRoot, 'orphan-carrier-entry.json')), true);
+
+const sessionSyncDeleteMissingCode = await runSessionSync({
+  session: sessionSyncSession,
+  target: sessionSyncTargetRoot,
+  direction: 'upload',
+  siteRoot: sessionSyncSourceRoot,
+  deleteMissing: true,
+});
+assert.equal(sessionSyncDeleteMissingCode, 0);
+assert.equal(existsSync(join(targetSessionRoot, 'orphan-session-entry.json')), false);
+assert.equal(existsSync(join(targetCarrierRoot, 'orphan-carrier-entry.json')), false);
 
 writeFileSync(join(sourceCarrierRoot, 'heartbeat.json'), 'payload-two', 'utf8');
 utimesSync(join(sourceCarrierRoot, 'heartbeat.json'), sessionSyncMatchAtime, sessionSyncMatchAtime);

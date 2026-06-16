@@ -139,6 +139,7 @@ const SESSION_SYNC_JSON_MODE = options.sessionSyncJson === true;
 const SESSION_SYNC_TARGET = String(options.sessionSyncTarget ?? '').trim() || null;
 const SESSION_SYNC_DIRECTION = normalizeSessionSyncDirection(options.sessionSyncDirection);
 const SESSION_SYNC_DRY_RUN = options.sessionSyncDryRun === true;
+const SESSION_SYNC_DELETE = options.sessionSyncDelete === true;
 const SERVER_MODE = options.server === true;
 const sessionSettings = {
   model: options.model ?? MODEL,
@@ -1395,6 +1396,7 @@ async function main() {
       target: SESSION_SYNC_TARGET,
       direction: SESSION_SYNC_DIRECTION,
       dryRun: SESSION_SYNC_DRY_RUN,
+      deleteMissing: SESSION_SYNC_DELETE,
     });
     return;
   }
@@ -1404,6 +1406,7 @@ async function main() {
       direction: SESSION_SYNC_DIRECTION,
       jsonOutput: true,
       dryRun: SESSION_SYNC_DRY_RUN,
+      deleteMissing: SESSION_SYNC_DELETE,
     });
     return;
   }
@@ -2775,6 +2778,7 @@ async function runSessionSync({
   naradaDir = NARADA_DIR,
   jsonOutput = false,
   dryRun = false,
+  deleteMissing = false,
 } = {}) {
   if (!target) {
     if (jsonOutput) {
@@ -2831,6 +2835,7 @@ async function runSessionSync({
     destination,
     session,
     dryRun,
+    deleteMissing,
   });
   cleanupSessionSyncStagingDirectories(source, destination);
   const summary = {
@@ -2847,6 +2852,7 @@ async function runSessionSync({
     source_carrier_session_root: source.carrierDir,
     destination_session_root: destination.sessionDir,
     destination_carrier_session_root: destination.carrierDir,
+    delete_missing: deleteMissing,
     ...directionResult,
   };
 
@@ -2861,6 +2867,7 @@ async function runSessionSync({
       Direction: direction,
       'Session root sync result': `${directionResult.copied} copied / ${directionResult.skipped} skipped`,
       'Carrier session root sync result': `${directionResult.carrierCopied} copied / ${directionResult.carrierSkipped} skipped`,
+      'Deleted files': `${directionResult.deleted} deleted`,
       Status: directionResult.success ? 'session sync completed' : 'session sync completed with conflicts',
       Message: directionResult.message ?? 'ok',
     }));
@@ -2975,12 +2982,13 @@ function cleanupSessionSyncStagingDirectories(...roots) {
   }
 }
 
-function runSessionSyncDirection({ direction, source, destination, dryRun = false }) {
+function runSessionSyncDirection({ direction, source, destination, dryRun = false, deleteMissing = false }) {
   if (direction === 'download') {
     return copySessionSyncRoots({
       source: destination,
       destination: source,
       dryRun,
+      deleteMissing: false,
       direction,
       compare: false,
       operation: 'download',
@@ -2993,12 +3001,14 @@ function runSessionSyncDirection({ direction, source, destination, dryRun = fals
       direction,
       compare: true,
       dryRun,
+      deleteMissing,
       operation: 'bidirectional',
     });
     const backward = copySessionSyncRoots({
       source: destination,
       destination: source,
       dryRun,
+      deleteMissing,
       direction,
       compare: true,
       operation: 'bidirectional',
@@ -3024,12 +3034,13 @@ function runSessionSyncDirection({ direction, source, destination, dryRun = fals
     destination,
     direction,
     compare: false,
+    deleteMissing: direction === 'upload' ? deleteMissing : false,
     dryRun,
     operation: 'upload',
   });
 }
 
-function copySessionSyncRoots({ source, destination, direction, compare, operation, dryRun = false }) {
+function copySessionSyncRoots({ source, destination, direction, compare, operation, dryRun = false, deleteMissing = false }) {
   const sourceSessionEntries = collectSessionRootEntries(source.sessionDir);
   const destinationSessionEntries = collectSessionRootEntries(destination.sessionDir);
   const sourceCarrierEntries = collectSessionRootEntries(source.carrierDir);
@@ -3042,6 +3053,7 @@ function copySessionSyncRoots({ source, destination, direction, compare, operati
     destinationEntries: destinationSessionEntries,
     compare,
     dryRun,
+    deleteMissing,
     operation,
   });
   const syncCarrier = copySessionSyncEntries({
@@ -3051,6 +3063,7 @@ function copySessionSyncRoots({ source, destination, direction, compare, operati
     destinationEntries: destinationCarrierEntries,
     compare,
     dryRun,
+    deleteMissing,
     operation,
   });
 
@@ -3060,13 +3073,16 @@ function copySessionSyncRoots({ source, destination, direction, compare, operati
     copied: syncSession.copied + syncCarrier.copied,
     skipped: syncSession.skipped + syncCarrier.skipped,
     conflicts: syncSession.conflicts + syncCarrier.conflicts,
+    deleted: syncSession.deleted + syncCarrier.deleted,
     message: syncSession.conflicts + syncCarrier.conflicts > 0 ? 'sync completed with conflict timestamps' : 'ok',
     carrierCopied: syncCarrier.copied,
     carrierSkipped: syncCarrier.skipped,
     carrierConflicts: syncCarrier.conflicts,
+    carrierDeleted: syncCarrier.deleted,
     sessionCopied: syncSession.copied,
     sessionSkipped: syncSession.skipped,
     sessionConflicts: syncSession.conflicts,
+    sessionDeleted: syncSession.deleted,
     direction,
   };
 }
@@ -3078,16 +3094,18 @@ function copySessionSyncEntries({
   destinationEntries,
   compare,
   dryRun = false,
+  deleteMissing = false,
 }) {
   if (!existsSync(sourceRoot)) sourceRoot = null;
   if (!sourceRoot) {
-    return { copied: 0, skipped: 0, conflicts: 1 };
+    return { copied: 0, skipped: 0, conflicts: 1, deleted: 0 };
   }
 
   const destinationByPath = new Map(destinationEntries.map((entry) => [entry.relativePath, entry]));
   let copied = 0;
   let skipped = 0;
   let conflicts = 0;
+  let deleted = 0;
 
   for (const sourceEntry of sourceEntries) {
     const destinationEntry = destinationByPath.get(sourceEntry.relativePath);
@@ -3127,8 +3145,23 @@ function copySessionSyncEntries({
     }
     copied += 1;
   }
+  if (deleteMissing) {
+    const sourcePaths = new Set(sourceEntries.map((entry) => entry.relativePath));
+    for (const destinationEntry of destinationEntries) {
+      if (sourcePaths.has(destinationEntry.relativePath)) continue;
+      deleted += 1;
+      if (!dryRun) {
+        const destinationPath = join(destinationRoot, destinationEntry.relativePath);
+        try {
+          unlinkSync(destinationPath);
+        } catch {
+          // Ignore best-effort deletion failures.
+        }
+      }
+    }
+  }
 
-  return { copied, skipped, conflicts };
+  return { copied, skipped, conflicts, deleted };
 }
 
 function writeSessionSyncFile({ sourceEntry, destinationRoot }) {
@@ -9254,6 +9287,8 @@ function parseArgs(argv) {
       i++;
     } else if (argv[i] === '--session-sync-dry-run') {
       opts.sessionSyncDryRun = true;
+    } else if (argv[i] === '--session-sync-delete') {
+      opts.sessionSyncDelete = true;
     } else if (argv[i] === '--stream') {
       opts.stream = true;
     } else if (argv[i] === '--no-stream') {
@@ -9431,7 +9466,7 @@ export {
 
 if (isEntrypoint) {
   if (options.help) {
-    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-diagnostics] [--mcp-preflight-diagnostics-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--mcp-preflight-diagnostics-filter <all|startup|runtime>] [--session-inventory] [--session-inventory-json] [--session-inventory-operations] [--session-inventory-operations-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-inventory-events-count <n>] [--session-operations] [--session-operations-json] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-events-count <n>] [--session-sync] [--session-sync-json] [--session-sync-dry-run] [--session-sync-target <file://url|path|site:alias|cloud:alias>] [--session-sync-direction <upload|download|bidirectional>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
+    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-diagnostics] [--mcp-preflight-diagnostics-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--mcp-preflight-diagnostics-filter <all|startup|runtime>] [--session-inventory] [--session-inventory-json] [--session-inventory-operations] [--session-inventory-operations-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-inventory-events-count <n>] [--session-operations] [--session-operations-json] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-events-count <n>] [--session-sync] [--session-sync-json] [--session-sync-dry-run] [--session-sync-delete] [--session-sync-target <file://url|path|site:alias|cloud:alias>] [--session-sync-direction <upload|download|bidirectional>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
     console.log('Programmatic input: --message and --message-file are explicit control inputs; do not use raw stdin piping as the control API.');
     console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, ANTHROPIC_API_KEY, NARADA_AI_API_KEY, NARADA_AI_BASE_URL, NARADA_AI_MODEL, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_ENABLE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_DELAY_MS, NARADA_SITE_ROOT, NARADA_CLOUD_ROOT`);
     process.exit(0);
