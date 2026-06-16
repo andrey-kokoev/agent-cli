@@ -4430,9 +4430,42 @@ function appendJsonlRecord(path, payload) {
   }
 }
 
+function writeDurableTextFile(path, text, encoding = 'utf8') {
+  mkdirSync(dirname(path), { recursive: true });
+  const tempPath = `${path}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tempPath, text, encoding);
+  if (ENABLE_SESSION_FSYNC) {
+    let tempFd = null;
+    let dirFd = null;
+    try {
+      tempFd = openSync(tempPath, 'r');
+      fsyncSync(tempFd);
+    } catch {
+      // best-effort durability
+    } finally {
+      if (tempFd !== null) {
+        closeSync(tempFd);
+      }
+    }
+    try {
+      dirFd = openSync(dirname(tempPath), 'r');
+      fsyncSync(dirFd);
+    } catch {
+      // best-effort durability
+    } finally {
+      if (dirFd !== null) {
+        closeSync(dirFd);
+      }
+    }
+  }
+  renameSync(tempPath, path);
+}
+
 function startInteractiveControlJsonlWatcher({ controlPath, inputQueue }) {
   mkdirSync(resolve(controlPath, '..'), { recursive: true });
-  if (!existsSync(controlPath)) writeFileSync(controlPath, '', 'utf8');
+  if (!existsSync(controlPath)) {
+    writeDurableTextFile(controlPath, '', 'utf8');
+  }
   let offset = statSync(controlPath).size;
   let stopped = false;
   let chain = Promise.resolve();
@@ -4804,7 +4837,7 @@ function hostCommandOutputEvidence({ commandId, stdout, stderr, outputTruncated,
   }
   mkdirSync(outputDir, { recursive: true });
   const outputPath = join(outputDir, `${commandId}.json`);
-  writeFileSync(outputPath, `${JSON.stringify({
+  writeDurableTextFile(outputPath, `${JSON.stringify({
     schema: 'narada.carrier.host_command_output.v1',
     command_id: commandId,
     output_truncated: outputTruncated,
@@ -6663,7 +6696,7 @@ function appendSession(path, entry) {
 function writeMcpPreflightArtifact({ artifactDir = MCP_PREFLIGHT_ARTIFACT_DIR, session, identity, siteRoot, mcpStatus, mcpServers, allTools }) {
   mkdirSync(artifactDir, { recursive: true });
   const artifactPath = join(artifactDir, `${session}.json`);
-  writeFileSync(artifactPath, `${JSON.stringify({
+  writeDurableTextFile(artifactPath, `${JSON.stringify({
     schema: 'narada.agent_cli.mcp_preflight_artifact.v1',
     session,
     identity,
@@ -8489,7 +8522,7 @@ function findOnPath(names) {
 function writeCodexExecHomeConfig(mcpServers, sessionDir = SESSION_DIR) {
   const codexHome = join(sessionDir, 'codex-home');
   mkdirSync(codexHome, { recursive: true });
-  writeFileSync(join(codexHome, 'config.toml'), `${codexExecConfigToml(mcpServers)}\n`, 'utf8');
+  writeDurableTextFile(join(codexHome, 'config.toml'), `${codexExecConfigToml(mcpServers)}\n`, 'utf8');
   return codexHome;
 }
 
