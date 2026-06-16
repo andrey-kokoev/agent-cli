@@ -2796,9 +2796,35 @@ async function runSessionSync({
     return 1;
   }
 
+  const targetResolution = resolveSessionSyncTarget({ target });
+  if (!targetResolution.ok) {
+    if (jsonOutput) {
+      console.log(`${JSON.stringify({
+        schema: 'narada.agent_cli.session_sync.v1',
+        site_root: siteRoot,
+        session,
+        success: false,
+        status: targetResolution.status,
+        message: targetResolution.message,
+      }, null, 2)}\n`);
+    } else {
+      console.log(formatKeyValueRows({
+        SiteRoot: siteRoot,
+        Session: session,
+        Target: target,
+        Status: targetResolution.message,
+      }));
+    }
+    return 1;
+  }
+
   const source = resolveSessionSyncDirectoryRoots({ siteRoot, session, naradaDir });
-  const destination = resolveSessionSyncDirectoryRoots({ siteRoot: target, session, naradaDir });
-  cleanupSessionSyncStagingDirectories({ source, destination });
+  const destination = resolveSessionSyncDirectoryRoots({
+    siteRoot: targetResolution.siteRoot,
+    session,
+    naradaDir,
+  });
+  cleanupSessionSyncStagingDirectories(source, destination);
   const directionResult = runSessionSyncDirection({
     direction,
     source,
@@ -2806,11 +2832,15 @@ async function runSessionSync({
     session,
     dryRun,
   });
+  cleanupSessionSyncStagingDirectories(source, destination);
   const summary = {
     schema: 'narada.agent_cli.session_sync.v1',
     site_root: siteRoot,
     session,
     target,
+    target_scheme: targetResolution.scheme,
+    target_alias: targetResolution.alias,
+    target_resolved_root: targetResolution.siteRoot,
     dry_run: dryRun,
     direction,
     source_session_root: source.sessionDir,
@@ -2837,6 +2867,97 @@ async function runSessionSync({
   }
 
   return directionResult.success ? 0 : 1;
+}
+
+function resolveSessionSyncTarget({ target }) {
+  const normalized = String(target ?? '').trim();
+  if (!normalized) {
+    return { ok: false, status: 'missing_target', message: '--session-sync-target is required for session sync.' };
+  }
+
+  const fileTarget = normalizeSessionSyncFileTarget(normalized);
+  if (fileTarget.ok || fileTarget.status) return fileTarget;
+
+  const siteTarget = normalizeSessionSyncAliasTarget(normalized, 'site:', 'NARADA_SITE_ROOT');
+  if (siteTarget.ok || siteTarget.status) return siteTarget;
+
+  const cloudTarget = normalizeSessionSyncAliasTarget(normalized, 'cloud:', 'NARADA_CLOUD_ROOT');
+  if (cloudTarget.ok || cloudTarget.status) return cloudTarget;
+
+  if (isLikelyPathLike(normalized)) {
+    return {
+      ok: true,
+      scheme: 'path',
+      siteRoot: resolve(normalized),
+      alias: null,
+    };
+  }
+
+  return {
+    ok: false,
+    status: 'invalid_session_sync_target',
+    message: `Unrecognized --session-sync-target "${normalized}". Use a local path, file:// URL, site:<alias>, or cloud:<alias>.`,
+  };
+}
+
+function normalizeSessionSyncAliasTarget(value, prefix, envPrefix) {
+  const lowerPrefix = prefix.toLowerCase();
+  if (!value.toLowerCase().startsWith(lowerPrefix)) return { ok: false };
+  const alias = value.slice(prefix.length).trim();
+  if (!alias) {
+    return {
+      ok: false,
+      status: 'invalid_session_sync_target',
+      message: `Unrecognized ${prefix} alias in --session-sync-target "${value}".`,
+    };
+  }
+  const envKey = `${envPrefix}_${normalizeSessionSyncAlias(alias)}`;
+  const aliasRoot = process.env[envKey];
+  if (!aliasRoot || !String(aliasRoot).trim()) {
+    return {
+      ok: false,
+      status: 'unresolved_session_sync_alias',
+      message: `Cannot resolve --session-sync-target "${value}". Missing ${envKey}.`,
+    };
+  }
+  return {
+    ok: true,
+    scheme: prefix.slice(0, -1),
+    alias,
+    siteRoot: resolve(String(aliasRoot)),
+  };
+}
+
+function normalizeSessionSyncFileTarget(value) {
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return { ok: false };
+  try {
+    const siteRoot = resolve(fileURLToPath(new URL(value)));
+    return { ok: true, scheme: 'file', alias: null, siteRoot };
+  } catch {
+    return {
+      ok: false,
+      status: 'invalid_session_sync_target',
+      message: `Invalid file URI in --session-sync-target "${value}".`,
+    };
+  }
+}
+
+function normalizeSessionSyncAlias(alias) {
+  return String(alias)
+    .trim()
+    .replace(/[^A-Za-z0-9_]/g, '_')
+    .toUpperCase();
+}
+
+function isLikelyPathLike(value) {
+  const trimmed = String(value).trim();
+  if (!trimmed) return false;
+  if (trimmed === '.' || trimmed === '..') return true;
+  if (/^[A-Za-z]:[\\/]/.test(trimmed)) return true;
+  if (trimmed.startsWith('/') || trimmed.startsWith('\\\\') || trimmed.startsWith('./') || trimmed.startsWith('.\\\\')) return true;
+  if (trimmed.startsWith('~/') || trimmed.startsWith('~\\\\')) return true;
+  if (/^[^:]+$/.test(trimmed)) return true;
+  return false;
 }
 
 function cleanupSessionSyncStagingDirectories(...roots) {
@@ -3024,12 +3145,20 @@ function writeSessionSyncFile({ sourceEntry, destinationRoot }) {
   try {
     copyFileSync(sourceEntry.sourcePath, stagingPath);
     stagingFd = openSync(stagingPath, 'r');
-    fsyncSync(stagingFd);
+    try {
+      fsyncSync(stagingFd);
+    } catch {
+      // fsync can be unsupported for some Windows/FS combinations; continue without strict durability.
+    }
     closeSync(stagingFd);
     stagingFd = null;
     renameSync(stagingPath, destinationPath);
     destinationDirectoryFd = openSync(destinationDirectory, 'r');
-    fsyncSync(destinationDirectoryFd);
+    try {
+      fsyncSync(destinationDirectoryFd);
+    } catch {
+      // Directory fsync is best-effort for cross-platform compatibility.
+    }
   } catch (error) {
     try {
       unlinkSync(stagingPath);
@@ -9059,7 +9188,7 @@ export {
 
 if (isEntrypoint) {
   if (options.help) {
-    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-diagnostics] [--mcp-preflight-diagnostics-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--mcp-preflight-diagnostics-filter <all|startup|runtime>] [--session-inventory] [--session-inventory-json] [--session-inventory-operations] [--session-inventory-operations-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-inventory-events-count <n>] [--session-operations] [--session-operations-json] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-events-count <n>] [--session-sync] [--session-sync-json] [--session-sync-dry-run] [--session-sync-target <path>] [--session-sync-direction <upload|download|bidirectional>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
+    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--server] [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-diagnostics] [--mcp-preflight-diagnostics-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--mcp-preflight-diagnostics-filter <all|startup|runtime>] [--session-inventory] [--session-inventory-json] [--session-inventory-operations] [--session-inventory-operations-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-inventory-events-count <n>] [--session-operations] [--session-operations-json] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-events-count <n>] [--session-sync] [--session-sync-json] [--session-sync-dry-run] [--session-sync-target <file://url|path|site:alias|cloud:alias>] [--session-sync-direction <upload|download|bidirectional>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>] [--message <text>] [--message-file <path>] [--operator-directive|--system-directive] [--enable-startup-system-directive|--startup-system-directive <text>|--no-startup-system-directive] [--interactive-after-message] [--auto-approve]`);
     console.log('Programmatic input: --message and --message-file are explicit control inputs; do not use raw stdin piping as the control API.');
     console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, ANTHROPIC_API_KEY, NARADA_AI_API_KEY, NARADA_AI_BASE_URL, NARADA_AI_MODEL, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_ENABLE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_DELAY_MS, NARADA_SITE_ROOT`);
     process.exit(0);

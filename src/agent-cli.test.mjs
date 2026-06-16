@@ -603,6 +603,9 @@ assert.deepEqual(parseArgs(['--session-recovery-json']), { sessionRecoveryJson: 
 assert.deepEqual(parseArgs(['--session-sync']), { sessionSync: true });
 assert.deepEqual(parseArgs(['--session-sync-json']), { sessionSyncJson: true });
 assert.deepEqual(parseArgs(['--session-sync-target', '/tmp/site-sync-target']), { sessionSyncTarget: '/tmp/site-sync-target' });
+assert.deepEqual(parseArgs(['--session-sync-target', 'file:///tmp/site-sync-file-target']), { sessionSyncTarget: 'file:///tmp/site-sync-file-target' });
+assert.deepEqual(parseArgs(['--session-sync-target', 'site:dev']), { sessionSyncTarget: 'site:dev' });
+assert.deepEqual(parseArgs(['--session-sync-target', 'cloud:beta']), { sessionSyncTarget: 'cloud:beta' });
 assert.deepEqual(parseArgs(['--session-sync-direction', 'bidirectional']), { sessionSyncDirection: 'bidirectional' });
 assert.deepEqual(parseArgs(['--session-sync-dry-run']), { sessionSyncDryRun: true });
 
@@ -683,6 +686,62 @@ assert.equal(existsSync(join(targetSessionRoot, '.session-sync-staging')), false
 assert.equal(existsSync(join(targetCarrierRoot, '.session-sync-staging')), false);
 assert.equal(existsSync(join(sourceSessionRoot, '.session-sync-staging')), false);
 assert.equal(existsSync(join(sourceCarrierRoot, '.session-sync-staging')), false);
+
+const sessionSyncMissingAliasEnvKey = 'MISSING_ALIAS_FOR_TEST';
+const sessionSyncUnresolvedAliasCode = await runSessionSync({
+  session: sessionSyncSession,
+  target: `site:${sessionSyncMissingAliasEnvKey}`,
+  siteRoot: sessionSyncSourceRoot,
+});
+assert.equal(sessionSyncUnresolvedAliasCode, 1);
+const sessionSyncAliasSourceRoot = mkdtempSync(join(tmpdir(), 'agent-cli-session-sync-alias-source-'));
+const sessionSyncAliasTargetRoot = mkdtempSync(join(tmpdir(), 'agent-cli-session-sync-alias-target-'));
+const sessionSyncAliasSession = 'operator-session-sync-alias';
+const alias = 'team-alpha';
+const aliasEnvKey = `NARADA_SITE_ROOT_${alias.toUpperCase().replace(/[^A-Z0-9_]/g, '_')}`;
+const priorAliasEnv = process.env[aliasEnvKey];
+process.env[aliasEnvKey] = sessionSyncAliasTargetRoot;
+
+const aliasSourceSessionRoot = join(sessionSyncAliasSourceRoot, 'agent-sessions');
+const aliasSourceCarrierRoot = join(sessionSyncAliasSourceRoot, '.narada', 'crew', 'nars-sessions', sessionSyncAliasSession);
+const aliasTargetSessionRoot = join(sessionSyncAliasTargetRoot, 'agent-sessions');
+const aliasTargetCarrierRoot = join(sessionSyncAliasTargetRoot, '.narada', 'crew', 'nars-sessions', sessionSyncAliasSession);
+mkdirSync(aliasSourceSessionRoot, { recursive: true });
+mkdirSync(aliasSourceCarrierRoot, { recursive: true });
+mkdirSync(aliasTargetSessionRoot, { recursive: true });
+mkdirSync(aliasTargetCarrierRoot, { recursive: true });
+writeFileSync(
+  join(aliasSourceSessionRoot, 'session.jsonl'),
+  `${JSON.stringify(
+    {
+      schema: 'narada.session_test.v1',
+      event: 'created',
+    },
+    null,
+    2,
+  )}\n`,
+  'utf8',
+);
+
+const sessionSyncAliasUploadCode = await runSessionSync({
+  session: sessionSyncAliasSession,
+  target: `site:${alias}`,
+  direction: 'upload',
+  siteRoot: sessionSyncAliasSourceRoot,
+});
+assert.equal(sessionSyncAliasUploadCode, 0);
+assert.equal(existsSync(join(aliasTargetSessionRoot, 'session.jsonl')), true);
+if (priorAliasEnv === undefined) {
+  delete process.env[aliasEnvKey];
+} else {
+  process.env[aliasEnvKey] = priorAliasEnv;
+}
+rmSync(aliasSourceSessionRoot, { recursive: true, force: true });
+rmSync(aliasSourceCarrierRoot, { recursive: true, force: true });
+rmSync(aliasTargetSessionRoot, { recursive: true, force: true });
+rmSync(aliasTargetCarrierRoot, { recursive: true, force: true });
+rmSync(sessionSyncAliasSourceRoot, { recursive: true, force: true });
+rmSync(sessionSyncAliasTargetRoot, { recursive: true, force: true });
 rmSync(sourceSessionRoot, { recursive: true, force: true });
 rmSync(sourceCarrierRoot, { recursive: true, force: true });
 rmSync(targetSessionRoot, { recursive: true, force: true });
