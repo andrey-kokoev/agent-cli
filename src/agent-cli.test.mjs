@@ -3143,6 +3143,39 @@ try {
 assert.equal(printedHelpMessages.some((message) => message.includes('/recovery             Show recovery workflow')), true);
 assert.equal(await handleSlashCommand('/bad', { mcpServers: {}, allTools: [] }), 'handled');
 assert.equal(await handleSlashCommand('plain message', { mcpServers: {}, allTools: [] }), 'none');
+assert.equal(printedHelpMessages.some((message) => message.includes('/ops                  Show operation workflow summary')), true);
+let opsCall;
+assert.equal(await handleSlashCommand('/ops', {
+  mcpServers: {},
+  allTools: [],
+  naradaDir: '/tmp/ops-session-dir',
+  session: 'ops-test',
+  runSessionOperations: async (payload) => {
+    opsCall = payload;
+    return 0;
+  },
+}), 'handled');
+assert.deepEqual(opsCall, {
+  session: 'ops-test',
+  naradaDir: '/tmp/ops-session-dir',
+  jsonOutput: false,
+});
+let jsonOpsCall;
+assert.equal(await handleSlashCommand('/ops --json', {
+  mcpServers: {},
+  allTools: [],
+  naradaDir: '/tmp/ops-session-dir',
+  session: 'ops-json-test',
+  runSessionOperations: async (payload) => {
+    jsonOpsCall = payload;
+    return 0;
+  },
+}), 'handled');
+assert.deepEqual(jsonOpsCall, {
+  session: 'ops-json-test',
+  naradaDir: '/tmp/ops-session-dir',
+  jsonOutput: true,
+});
 const originalConsoleLog = console.log;
 const originalSlashStdoutWrite = process.stdout.write;
 const printedStatsMessages = [];

@@ -4872,6 +4872,9 @@ async function handleSlashCommand(input, {
   carrierState = {},
   mcpPreflightArtifact = readMcpPreflightArtifact(),
   executeGoalOnSet = false,
+  runSessionOperations = runSessionOperationsRead,
+  session = SESSION,
+  naradaDir = NARADA_DIR,
 }) {
   const trimmed = String(input ?? '').trim();
   if (!trimmed) return 'none';
@@ -4896,6 +4899,7 @@ async function handleSlashCommand(input, {
       '/model <name>         Set model for later turns',
       '/thinking <level>     none, low, medium, high',
       '/tool-output [state]  Toggle displayed tool call outputs (on, off, toggle)',
+      '/ops                  Show operation workflow summary',
       '/tools [filter]       Show discovered MCP tools and input schemas',
       '/observers            Show observer posture',
       '/observer mute        Mute visible observer interjections',
@@ -4916,6 +4920,11 @@ async function handleSlashCommand(input, {
       arguments: value,
       tool_count: allTools.length,
     }));
+    return 'handled';
+  }
+  if (command === '/ops') {
+    const wantJson = value.toLowerCase() === '--json';
+    await runSessionOperations({ session, naradaDir, jsonOutput: wantJson });
     return 'handled';
   }
   if (command === '/goal') {
