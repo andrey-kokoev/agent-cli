@@ -604,6 +604,7 @@ assert.deepEqual(parseArgs(['--session-sync']), { sessionSync: true });
 assert.deepEqual(parseArgs(['--session-sync-json']), { sessionSyncJson: true });
 assert.deepEqual(parseArgs(['--session-sync-target', '/tmp/site-sync-target']), { sessionSyncTarget: '/tmp/site-sync-target' });
 assert.deepEqual(parseArgs(['--session-sync-direction', 'bidirectional']), { sessionSyncDirection: 'bidirectional' });
+assert.deepEqual(parseArgs(['--session-sync-dry-run']), { sessionSyncDryRun: true });
 
 const sessionSyncSourceRoot = mkdtempSync(join(tmpdir(), 'agent-cli-session-sync-source-'));
 const sessionSyncTargetRoot = mkdtempSync(join(tmpdir(), 'agent-cli-session-sync-target-'));
@@ -647,6 +648,20 @@ writeFileSync(join(sessionSyncSourceRoot, 'agent-sessions', 'session.jsonl'), 'f
 writeFileSync(join(sourceCarrierRoot, 'heartbeat.json'), 'payload-one', 'utf8');
 utimesSync(join(sessionSyncSourceRoot, 'agent-sessions', 'session.jsonl'), sessionSyncMatchAtime, sessionSyncMatchAtime);
 utimesSync(join(sourceCarrierRoot, 'heartbeat.json'), sessionSyncMatchAtime, sessionSyncMatchAtime);
+const targetCarrierBeforeDryRun = readFileSync(sourceCarrierFile, 'utf8');
+const targetSessionBeforeDryRun = readFileSync(sourceSessionFile, 'utf8');
+const sessionSyncDryRunCode = await runSessionSync({
+  session: sessionSyncSession,
+  target: sessionSyncTargetRoot,
+  direction: 'bidirectional',
+  siteRoot: sessionSyncSourceRoot,
+  dryRun: true,
+});
+assert.equal(sessionSyncDryRunCode, 0);
+const targetCarrierAfterDryRun = readFileSync(sourceCarrierFile, 'utf8');
+assert.equal(targetCarrierAfterDryRun, targetCarrierBeforeDryRun);
+const targetSessionAfterDryRun = readFileSync(sourceSessionFile, 'utf8');
+assert.equal(targetSessionAfterDryRun, targetSessionBeforeDryRun);
 const sessionSyncEqualHashCode = await runSessionSync({
   session: sessionSyncSession,
   target: sessionSyncTargetRoot,
