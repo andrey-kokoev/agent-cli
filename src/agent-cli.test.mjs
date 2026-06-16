@@ -664,6 +664,16 @@ const sessionSyncConflictCode = await runSessionSync({
   siteRoot: sessionSyncSourceRoot,
 });
 assert.equal(sessionSyncConflictCode, 1);
+assert.equal(existsSync(join(targetSessionRoot, '.session-sync-staging')), false);
+assert.equal(existsSync(join(targetCarrierRoot, '.session-sync-staging')), false);
+assert.equal(existsSync(join(sourceSessionRoot, '.session-sync-staging')), false);
+assert.equal(existsSync(join(sourceCarrierRoot, '.session-sync-staging')), false);
+rmSync(sourceSessionRoot, { recursive: true, force: true });
+rmSync(sourceCarrierRoot, { recursive: true, force: true });
+rmSync(targetSessionRoot, { recursive: true, force: true });
+rmSync(targetCarrierRoot, { recursive: true, force: true });
+rmSync(sessionSyncSourceRoot, { recursive: true, force: true });
+rmSync(sessionSyncTargetRoot, { recursive: true, force: true });
 
 assert.deepEqual(parseArgs(['--host-command-output-read']), { hostCommandOutputRead: true });
 assert.deepEqual(parseArgs(['--host-command-output-read-json']), { hostCommandOutputReadJson: true });

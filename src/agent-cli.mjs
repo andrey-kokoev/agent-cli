@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { createInterface, emitKeypressEvents } from 'node:readline';
 import { StringDecoder } from 'node:string_decoder';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync, openSync, writeSync, closeSync, fsyncSync, copyFileSync, renameSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync, openSync, writeSync, closeSync, fsyncSync, copyFileSync, renameSync, unlinkSync, rmSync } from 'node:fs';
 import { resolve, join, basename, dirname } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { request as httpsRequest } from 'node:https';
@@ -2780,6 +2780,7 @@ async function runSessionSync({ session = SESSION, target = null, direction = 'u
 
   const source = resolveSessionSyncDirectoryRoots({ siteRoot, session, naradaDir });
   const destination = resolveSessionSyncDirectoryRoots({ siteRoot: target, session, naradaDir });
+  cleanupSessionSyncStagingDirectories({ source, destination });
   const directionResult = runSessionSyncDirection({ direction, source, destination, session });
   const summary = {
     schema: 'narada.agent_cli.session_sync.v1',
@@ -2810,6 +2811,21 @@ async function runSessionSync({ session = SESSION, target = null, direction = 'u
   }
 
   return directionResult.success ? 0 : 1;
+}
+
+function cleanupSessionSyncStagingDirectories(...roots) {
+  for (const root of roots) {
+    const sourceStaging = join(root.sessionDir, '.session-sync-staging');
+    const carrierStaging = join(root.carrierDir, '.session-sync-staging');
+    const stale = [sourceStaging, carrierStaging];
+    for (const directory of stale) {
+      try {
+        rmSync(directory, { recursive: true, force: true });
+      } catch {
+        // Ignore best-effort staging cleanup.
+      }
+    }
+  }
 }
 
 function runSessionSyncDirection({ direction, source, destination }) {
