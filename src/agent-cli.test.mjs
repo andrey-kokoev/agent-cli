@@ -3197,6 +3197,26 @@ assert.deepEqual(opsSyncCall, {
   dryRun: true,
   deleteMissing: true,
 });
+let positionalOpsSyncCall;
+assert.equal(await handleSlashCommand('/ops sync /tmp/positional-target --direction bidirectional', {
+  mcpServers: {},
+  allTools: [],
+  naradaDir: '/tmp/ops-session-dir',
+  session: 'ops-pos-sync',
+  runSessionSyncRunner: async (payload) => {
+    positionalOpsSyncCall = payload;
+    return 0;
+  },
+}), 'handled');
+assert.deepEqual(positionalOpsSyncCall, {
+  session: 'ops-pos-sync',
+  naradaDir: '/tmp/ops-session-dir',
+  target: '/tmp/positional-target',
+  direction: 'bidirectional',
+  jsonOutput: false,
+  dryRun: false,
+  deleteMissing: false,
+});
 const originalConsoleLog = console.log;
 const originalSlashStdoutWrite = process.stdout.write;
 const printedStatsMessages = [];
