@@ -3813,23 +3813,241 @@ function summarizePersistedOperationLifecycle(entries = []) {
   const directiveKindCounts = {};
   const directiveVisibilityCounts = {};
   const operationIdCounts = {};
+  const operationMetadataById = Object.create(null);
+  const visibilityValuesByLifecycleKey = Object.create(null);
+  const fallbackOperationIdCandidates = new Set();
   let lastOperation = null;
+
+  const looksLikeOperationId = (value) => (
+    typeof value === 'string' && /^operation_[A-Za-z0-9_]+$/.test(value)
+      ? value
+      : null
+  );
+
+  const findOperationIdInObject = (value, depth = 0) => {
+    if (!value || typeof value !== 'object' || depth > 4) return null;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const nested = findOperationIdInObject(item, depth + 1);
+        if (nested) return nested;
+      }
+      return null;
+    }
+    const objectKind = value?.kind;
+    if (objectKind === 'operation' && typeof value?.id === 'string') {
+      const candidate = looksLikeOperationId(value.id);
+      if (candidate) return candidate;
+    }
+    for (const [key, candidateValue] of Object.entries(value)) {
+      if (key === 'operation_id' || key === 'operationId') {
+        const explicitCandidate = looksLikeOperationId(candidateValue);
+        if (explicitCandidate) return explicitCandidate;
+      }
+      const nested = findOperationIdInObject(candidateValue, depth + 1);
+      if (nested) return nested;
+    }
+    return null;
+  };
+
+  const targetOperationId = (target) => {
+    if (!target || typeof target !== 'object') return null;
+    return target.kind === 'operation' ? target.id : null;
+  };
+
+  const targetCarrierSessionId = (target) => {
+    if (!target || typeof target !== 'object') return null;
+    return target.kind === 'carrier_session' ? target.id : null;
+  };
+
+  const extractOperationId = (payload, entry) => {
+    const operationId = (
+      payload?.operation_id
+      ?? payload?.operationId
+      ?? payload?.operation?.id
+      ?? payload?.directive?.operation_id
+      ?? payload?.directive?.operationId
+      ?? payload?.directive?.operation?.id
+      ?? payload?.authorization?.operation_id
+      ?? payload?.authorization?.operationId
+      ?? payload?.authorization?.operation?.id
+      ?? payload?.rule?.operation_id
+      ?? payload?.rule?.operationId
+      ?? payload?.rule?.operation?.id
+      ?? payload?.input?.operation_id
+      ?? payload?.input?.operationId
+      ?? payload?.input?.operation?.id
+      ?? targetOperationId(payload?.target)
+      ?? targetOperationId(payload?.authorization?.target)
+      ?? targetOperationId(payload?.rule?.target)
+      ?? targetOperationId(payload?.input?.target)
+      ?? (entry?.operation?.id)
+      ?? entry?.operationId
+      ?? entry?.operation_id
+      ?? entry?.metadata?.operation_id
+      ?? entry?.metadata?.operationId
+      ?? entry?.metadata?.operation?.id
+      ?? payload?.operation_inventory_id
+      ?? payload?.operationInventoryId
+      ?? (entry?.event === 'directive_emitted'
+        ? payload?.authorization?.operation_id
+        : null)
+      ?? findOperationIdInObject(entry, 0)
+      ?? findOperationIdInObject(payload, 0)
+    );
+    if (operationId) {
+      const candidate = looksLikeOperationId(operationId);
+      if (candidate) fallbackOperationIdCandidates.add(candidate);
+      return operationId;
+    }
+    const payloadOperationInventory = looksLikeOperationId(payload?.operation_id);
+    if (payloadOperationInventory) {
+      fallbackOperationIdCandidates.add(payloadOperationInventory);
+      return payloadOperationInventory;
+    }
+    const metadataOperationInventory = looksLikeOperationId(entry?.metadata?.operation_id);
+    if (metadataOperationInventory) {
+      fallbackOperationIdCandidates.add(metadataOperationInventory);
+      return metadataOperationInventory;
+    }
+    return null;
+  };
+
+  const extractDirectiveLifecycleKey = (payload, entry, operationId) => {
+    const targetSessionId = targetCarrierSessionId(payload?.target)
+      ?? targetCarrierSessionId(payload?.authorization?.target)
+      ?? targetCarrierSessionId(payload?.rule?.target)
+      ?? targetCarrierSessionId(payload?.input?.target)
+      ?? targetCarrierSessionId(entry?.target);
+    if (operationId) return `operation:${operationId}`;
+    if (targetSessionId) return `carrier_session:${targetSessionId}`;
+    return null;
+  };
+
+  const recordVisibilityValue = (key, visibility) => {
+    if (!key || !visibility) return;
+    const current = visibilityValuesByLifecycleKey[key];
+    if (!current) {
+      visibilityValuesByLifecycleKey[key] = new Set([visibility]);
+      return;
+    }
+    current.add(visibility);
+  };
+
+  const resolveVisibilityFromLifecycleKey = (key) => {
+    const values = visibilityValuesByLifecycleKey[key];
+    if (!values || values.size !== 1) return null;
+    return Array.from(values)[0];
+  };
+
+  const extractDirectiveKind = (payload, entry) =>
+    payload?.directive_kind
+    ?? payload?.kind
+    ?? payload?.directive?.kind
+    ?? payload?.authorization?.directive_kind
+    ?? payload?.authorization?.kind
+    ?? payload?.rule?.directive_kind
+    ?? payload?.rule?.kind
+    ?? payload?.input?.directive_kind
+    ?? payload?.input?.kind
+    ?? entry?.metadata?.directive?.kind
+    ?? null;
+
+  const extractDirectiveVisibility = (payload, entry) =>
+    payload?.visibility
+    ?? payload?.directive_visibility
+    ?? payload?.directive?.visibility
+    ?? payload?.authorization?.visibility
+    ?? payload?.rule?.visibility
+    ?? payload?.input?.visibility
+    ?? entry?.metadata?.directive?.visibility
+    ?? null;
+
   for (const entry of entries) {
     const eventKind = entry?.event_kind ?? entry?.event ?? null;
-    if (!['directive_emission_authorized', 'directive_emission_rule_recorded', 'directive_emitted'].includes(String(eventKind ?? ''))) continue;
+    if (!['directive_emission_authorized', 'directive_emission_rule_recorded', 'directive_emitted'].includes(String(eventKind ?? ''))) {
+      continue;
+    }
+    const payload = entry?.payload ?? {};
+    const operationId = extractOperationId(payload, entry);
+    const key = extractDirectiveLifecycleKey(payload, entry, operationId);
+    const directiveKind = extractDirectiveKind(payload, entry);
+    const directiveVisibility = extractDirectiveVisibility(payload, entry);
+    if (directiveVisibility) {
+      recordVisibilityValue(key, directiveVisibility);
+    }
+    if (!operationId || (!directiveKind && !directiveVisibility)) {
+      continue;
+    }
+    const cachedMetadata = operationMetadataById[operationId] ?? {};
+    operationMetadataById[operationId] = {
+      ...cachedMetadata,
+      kind: directiveKind ?? cachedMetadata.kind ?? null,
+      visibility: directiveVisibility ?? cachedMetadata.visibility ?? null,
+    };
+  }
+
+  let lastDirectiveKind = null;
+  let lastDirectiveVisibility = null;
+  const synthesizedOperationIdByKey = new Map();
+  let synthesizedOperationIdCounter = 1;
+  const operationIds = Object.keys(operationMetadataById);
+  const candidateOperationIds = Array.from(fallbackOperationIdCandidates);
+  const fallbackOperationId = operationIds.length === 1
+    ? operationIds[0]
+    : (candidateOperationIds.length === 1 ? candidateOperationIds[0] : null);
+  const synthesizeOperationId = (lifecycleKey) => {
+    if (!lifecycleKey) return null;
+    if (!synthesizedOperationIdByKey.has(lifecycleKey)) {
+      synthesizedOperationIdByKey.set(
+        lifecycleKey,
+        `operation_inventory_${synthesizedOperationIdCounter++}`,
+      );
+    }
+    return synthesizedOperationIdByKey.get(lifecycleKey);
+  };
+
+  for (const entry of entries) {
+    const eventKind = entry?.event_kind ?? entry?.event ?? null;
+    if (!['directive_emission_authorized', 'directive_emission_rule_recorded', 'directive_emitted'].includes(String(eventKind ?? ''))) {
+      continue;
+    }
     incrementInventoryCounter(operationEventCounts, eventKind);
     const payload = entry?.payload ?? {};
-    const directiveKind = payload.directive_kind ?? payload.kind ?? payload?.directive?.kind ?? entry?.metadata?.directive?.kind ?? null;
-    const directiveVisibility = payload.visibility ?? payload.directive_visibility ?? payload?.directive?.visibility ?? entry?.metadata?.directive?.visibility ?? null;
-    const operationId = payload.operation_id ?? payload?.directive?.operation_id ?? entry?.metadata?.directive?.operation_id ?? null;
-    if (directiveKind) incrementInventoryCounter(directiveKindCounts, directiveKind);
-    if (directiveVisibility) incrementInventoryCounter(directiveVisibilityCounts, directiveVisibility);
+    let operationId = extractOperationId(payload, entry) ?? fallbackOperationId;
+    const key = extractDirectiveLifecycleKey(payload, entry, operationId);
+    if (!operationId) operationId = synthesizeOperationId(key ?? 'default');
+    const fallbackVisibilityFromLifecycle = key ? resolveVisibilityFromLifecycleKey(key) : null;
+    const fallbackMetadata = operationId ? operationMetadataById[operationId] ?? {} : {};
+    const resolvedDirectiveKind = extractDirectiveKind(payload, entry)
+      ?? fallbackMetadata.kind
+      ?? lastDirectiveKind
+      ?? null;
+    const resolvedDirectiveVisibility = extractDirectiveVisibility(payload, entry)
+      ?? fallbackMetadata.visibility
+      ?? fallbackVisibilityFromLifecycle
+      ?? lastDirectiveVisibility
+      ?? null;
+
+    if (operationId && (resolvedDirectiveKind || resolvedDirectiveVisibility)) {
+      const cachedMetadata = operationMetadataById[operationId] ?? {};
+      operationMetadataById[operationId] = {
+        ...cachedMetadata,
+        kind: resolvedDirectiveKind ?? cachedMetadata.kind ?? null,
+        visibility: resolvedDirectiveVisibility ?? cachedMetadata.visibility ?? null,
+      };
+    }
+
+    if (resolvedDirectiveKind) incrementInventoryCounter(directiveKindCounts, resolvedDirectiveKind);
+    if (resolvedDirectiveVisibility) incrementInventoryCounter(directiveVisibilityCounts, resolvedDirectiveVisibility);
+    if (resolvedDirectiveKind) lastDirectiveKind = resolvedDirectiveKind;
+    if (resolvedDirectiveVisibility) lastDirectiveVisibility = resolvedDirectiveVisibility;
     if (operationId) incrementInventoryCounter(operationIdCounts, operationId);
+
     const occurredAt = entry?.timestamp ?? entry?.occurred_at ?? payload?.occurred_at ?? payload?.created_at ?? null;
     const candidate = {
       operation_id: operationId,
-      directive_kind: directiveKind,
-      directive_visibility: directiveVisibility,
+      directive_kind: resolvedDirectiveKind,
+      directive_visibility: resolvedDirectiveVisibility,
       event_kind: eventKind,
       occurred_at: occurredAt,
     };
@@ -3837,6 +4055,7 @@ function summarizePersistedOperationLifecycle(entries = []) {
       lastOperation = candidate;
     }
   }
+
   return {
     operation_event_count: Object.values(operationEventCounts).reduce((sum, count) => sum + Number(count ?? 0), 0),
     operation_event_counts: operationEventCounts,
@@ -7082,6 +7301,12 @@ async function handleServerRequestLine(line, context) {
 async function handleServerRequest(request, { state, messages, allTools, mcpServers, mcpPreflightArtifact, emit, callChatApiFn }) {
   if (request?.method === 'session.operations') {
     const requestId = request?.id ?? null;
+    noteSessionActivity(state, 'session_operations_requested');
+    if (activeOperationHeartbeatDirectiveEmitter?.emitOnce) {
+      await activeOperationHeartbeatDirectiveEmitter.emitOnce({ reason: 'session_operations_requested' })
+        .catch((error) => recordCarrierDiagnostic('error', `session_operations directive emission failed: ${error instanceof Error ? error.message : String(error)}`));
+      noteSessionActivity(state, 'session_operations_requested');
+    }
     recordServerWorkflowRequest('session_operations_requested', { requestId, method: 'session.operations' });
     emit('session_operations', serverOperations({ requestId, state, mcpServers, mcpPreflightArtifact }));
     return;
