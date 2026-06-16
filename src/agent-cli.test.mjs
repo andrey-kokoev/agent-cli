@@ -709,6 +709,7 @@ writeFileSync(join(inventorySessionsDir, 'faulted-session', 'session.jsonl'), [
     timestamp: '2026-06-14T11:59:45.000Z',
     payload: { terminal_state: 'failed' },
   }),
+  'not-json-line',
 ].join('\n') + '\n', 'utf8');
 writeFileSync(join(inventoryNaradaDir, 'runtime', 'agent-cli', 'mcp-preflight', 'healthy-session.json'), `${JSON.stringify({
   schema: 'narada.agent_cli.mcp_preflight_artifact.v1',
@@ -737,6 +738,8 @@ assert.equal(inventoryEntries[0].mode, 'server');
 assert.equal(inventoryEntries[0].started_at, '2026-06-14T11:50:00.000Z');
 assert.equal(inventoryEntries[0].mcp_operational_state, 'healthy');
 assert.equal(inventoryEntries[0].session_event_count, 10);
+assert.equal(inventoryEntries[0].session_jsonl_parse_error_count, 0);
+assert.deepEqual(inventoryEntries[0].session_jsonl_parse_error_sample, []);
 assert.equal(inventoryEntries[0].last_event_kind, 'session_closed');
 assert.equal(inventoryEntries[0].last_event_at, '2026-06-14T12:00:05.000Z');
 assert.equal(inventoryEntries[0].last_terminal_state, 'completed');
@@ -787,6 +790,10 @@ assert.equal(inventoryEntries[1].agent_id, 'narada.test');
 assert.equal(inventoryEntries[1].started_at, '2026-06-14T11:40:00.000Z');
 assert.equal(inventoryEntries[1].mcp_operational_state, 'runtime_faulted');
 assert.equal(inventoryEntries[1].session_event_count, 7);
+assert.equal(inventoryEntries[1].session_jsonl_parse_error_count, 1);
+assert.deepEqual(inventoryEntries[1].session_jsonl_parse_error_sample, [
+  { line: 'not-json-line', error: 'invalid_json' },
+]);
 assert.equal(inventoryEntries[1].last_event_kind, 'input_completed');
 assert.equal(inventoryEntries[1].last_event_at, '2026-06-14T11:59:45.000Z');
 assert.equal(inventoryEntries[1].last_terminal_state, 'failed');
