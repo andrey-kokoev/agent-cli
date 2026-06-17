@@ -2,3 +2,4 @@
 /.pnpm-store/
 .DS_Store
 *.log
+/.narada/crew/nars-sessions/
