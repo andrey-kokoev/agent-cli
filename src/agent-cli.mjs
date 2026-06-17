@@ -2864,6 +2864,7 @@ async function runSessionSync({
   dryRun = false,
   deleteMissing = false,
 } = {}) {
+  const workflowStartedAt = new Date();
   const { summary, exitCode, directionResult = null } = buildSessionSyncSummary({
     session,
     target,
@@ -2874,7 +2875,12 @@ async function runSessionSync({
     deleteMissing,
   });
   if (recordWorkflow) {
+    const workflowCompletedAt = new Date();
+    const workflowStartedIso = workflowStartedAt.toISOString();
+    const workflowCompletedIso = workflowCompletedAt.toISOString();
+    const workflowDurationMs = workflowCompletedAt.getTime() - workflowStartedAt.getTime();
     recordSessionSyncWorkflow({
+      event: 'session_sync_requested',
       requestId,
       session,
       target,
@@ -2886,6 +2892,28 @@ async function runSessionSync({
       exitCode,
       transport,
       naradaDir,
+      operation_status: 'requested',
+      requested_at: workflowStartedIso,
+      completed_at: workflowCompletedIso,
+      duration_ms: workflowDurationMs,
+    });
+    recordSessionSyncWorkflow({
+      event: 'session_sync_completed',
+      requestId,
+      session,
+      target,
+      direction,
+      dryRun,
+      deleteMissing,
+      summary,
+      directionResult,
+      exitCode,
+      transport,
+      naradaDir,
+      operation_status: exitCode === 0 ? 'succeeded' : 'failed',
+      requested_at: workflowStartedIso,
+      completed_at: workflowCompletedIso,
+      duration_ms: workflowDurationMs,
     });
   }
   if (jsonOutput) {
@@ -7506,6 +7534,7 @@ function sessionSyncOperationId({ session, target, direction = 'upload', request
 }
 
 function recordSessionSyncWorkflow({
+  event = 'session_sync_requested',
   requestId = null,
   session = SESSION,
   target = null,
@@ -7518,6 +7547,10 @@ function recordSessionSyncWorkflow({
   transport = 'jsonl_stdio',
   naradaDir = NARADA_DIR,
   method = 'session.sync',
+  operation_status = null,
+  requested_at = null,
+  completed_at = null,
+  duration_ms = null,
 }) {
   const operationId = sessionSyncOperationId({ session, target, direction, requestId, dryRun, deleteMissing });
   const normalizedSummary = summary ?? {};
@@ -7537,8 +7570,6 @@ function recordSessionSyncWorkflow({
     direction,
     dry_run: !!dryRun,
     delete_missing: !!deleteMissing,
-    operation_id: operationId,
-    request_id: requestId,
     transport,
     status: normalizedSummary.status ?? null,
     message: normalizedSummary.message ?? null,
@@ -7550,9 +7581,14 @@ function recordSessionSyncWorkflow({
     carrier_copied: directionResult?.carrierCopied ?? normalizedSummary.carrierCopied ?? 0,
     carrier_skipped: directionResult?.carrierSkipped ?? normalizedSummary.carrierSkipped ?? 0,
     carrier_deleted: directionResult?.carrierDeleted ?? normalizedSummary.carrierDeleted ?? 0,
+    requested_at: requested_at,
+    completed_at: completed_at,
+    duration_ms: duration_ms,
+    operation_status,
+    operation_id: operationId,
+    request_id: requestId,
   };
-  appendSession(sessionPath, sessionEventEntry('session_sync_requested', result));
-  appendSession(sessionPath, { ...result, event: 'session_sync_completed' });
+  appendSession(sessionPath, sessionEventEntry(event, result));
 }
 
 async function handleServerRequestLine(line, context) {
@@ -7609,7 +7645,10 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
     }
     noteSessionActivity(state, 'session_sync_requested');
     recordServerWorkflowRequest('session_sync_requested', { requestId, method: 'session.sync' });
+    const workflowStartedAt = new Date();
+    const workflowStartedIso = workflowStartedAt.toISOString();
     recordSessionSyncWorkflow({
+      event: 'session_sync_requested',
       requestId,
       session: SESSION,
       target,
@@ -7619,6 +7658,32 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
       summary,
       directionResult,
       exitCode,
+      transport: 'jsonl_stdio',
+      operation_status: 'requested',
+      requested_at: workflowStartedIso,
+      completed_at: null,
+      duration_ms: null,
+    });
+    const workflowCompletedAt = new Date();
+    const workflowCompletedIso = workflowCompletedAt.toISOString();
+    const workflowDurationMs = workflowCompletedAt.getTime() - workflowStartedAt.getTime();
+    recordSessionSyncWorkflow({
+      event: 'session_sync_completed',
+      requestId,
+      session: SESSION,
+      target,
+      direction,
+      dryRun,
+      deleteMissing,
+      summary,
+      directionResult,
+      exitCode,
+      transport: 'jsonl_stdio',
+      naradaDir: NARADA_DIR,
+      operation_status: exitCode === 0 ? 'succeeded' : 'failed',
+      requested_at: workflowStartedIso,
+      completed_at: workflowCompletedIso,
+      duration_ms: workflowDurationMs,
     });
     emit('session_sync', {
       request_id: requestId,

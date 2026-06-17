@@ -712,10 +712,21 @@ assert.equal(sessionSyncFirstRequest?.event, 'session_sync_requested');
 assert.equal(sessionSyncFirstRequest?.method, 'session.sync');
 assert.equal(sessionSyncFirstRequest?.transport, 'cli');
 assert.equal(typeof sessionSyncFirstRequest?.operation_id, 'string');
+assert.equal(sessionSyncFirstRequest?.operation_status, 'requested');
+assert.equal(typeof sessionSyncFirstRequest?.requested_at, 'string');
 assert.equal(
   completedSessionSyncEvents.find((entry) => entry.operation_id === sessionSyncFirstRequest?.operation_id)?.event,
   'session_sync_completed',
 );
+const completedSessionSyncEntry = completedSessionSyncEvents.find(
+  (entry) => entry.operation_id === sessionSyncFirstRequest?.operation_id,
+);
+assert.equal(completedSessionSyncEntry?.event, 'session_sync_completed');
+assert.equal(completedSessionSyncEntry?.operation_status, 'succeeded');
+assert.equal(typeof completedSessionSyncEntry?.requested_at, 'string');
+assert.equal(typeof completedSessionSyncEntry?.completed_at, 'string');
+assert.equal(typeof completedSessionSyncEntry?.duration_ms, 'number');
+assert.equal(completedSessionSyncEntry?.duration_ms >= 0, true);
 
 writeFileSync(join(sourceCarrierRoot, 'heartbeat.json'), 'payload-two', 'utf8');
 utimesSync(join(sourceCarrierRoot, 'heartbeat.json'), sessionSyncMatchAtime, sessionSyncMatchAtime);
@@ -4277,7 +4288,7 @@ assert.equal(serverHeartbeat.agent_id, 'narada.test');
 assert.equal(serverHeartbeat.runtime, 'agent-cli');
 const persistedServerEvents = readPersistedSessionEvents({ session: 'server-test', naradaDir: join(serverSite, '.narada') });
 const persistedSessionSyncRequested = persistedServerEvents.find(
-  (entry) => entry.event === 'session_sync_requested' && entry.request_id === 'sync-1',
+  (entry) => entry.event === 'session_sync_requested' && entry.request_id === 'sync-1' && entry.operation_status,
 );
 const persistedSessionSyncCompleted = persistedServerEvents.find(
   (entry) => entry.event === 'session_sync_completed' && entry.request_id === 'sync-1',
@@ -4286,8 +4297,14 @@ assert.equal(persistedSessionSyncRequested?.event, 'session_sync_requested');
 assert.equal(persistedSessionSyncRequested?.request_id, 'sync-1');
 assert.equal(persistedSessionSyncRequested?.method, 'session.sync');
 assert.equal(persistedSessionSyncRequested?.transport, 'jsonl_stdio');
+assert.equal(persistedSessionSyncRequested?.operation_status, 'requested');
+assert.equal(typeof persistedSessionSyncRequested?.requested_at, 'string');
 assert.equal(persistedSessionSyncCompleted?.event, 'session_sync_completed');
 assert.equal(persistedSessionSyncCompleted?.request_id, 'sync-1');
+assert.equal(persistedSessionSyncCompleted?.operation_status, 'failed');
+assert.equal(typeof persistedSessionSyncCompleted?.completed_at, 'string');
+assert.equal(typeof persistedSessionSyncCompleted?.duration_ms, 'number');
+assert.equal(persistedSessionSyncCompleted?.duration_ms >= 0, true);
 assert.deepEqual(
   persistedServerEvents.filter((entry) => [
     'session_status_requested',
