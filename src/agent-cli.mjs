@@ -2770,56 +2770,42 @@ async function runSessionEventsRead({ session = SESSION, siteRoot = SITE_ROOT, n
   return 0;
 }
 
-async function runSessionSync({
+function buildSessionSyncSummary({
   session = SESSION,
   target = null,
   direction = 'upload',
   siteRoot = SITE_ROOT,
   naradaDir = NARADA_DIR,
-  jsonOutput = false,
   dryRun = false,
   deleteMissing = false,
 } = {}) {
   if (!target) {
-    if (jsonOutput) {
-      console.log(`${JSON.stringify({
+    return {
+      exitCode: 1,
+      summary: {
         schema: 'narada.agent_cli.session_sync.v1',
         site_root: siteRoot,
         session,
         success: false,
         status: 'missing_target',
         message: '--session-sync-target is required for session sync.',
-      }, null, 2)}\n`);
-    } else {
-      console.log(formatKeyValueRows({
-        SiteRoot: siteRoot,
-        Session: session,
-        Status: 'session sync target required. pass --session-sync-target <path>',
-      }));
-    }
-    return 1;
+      },
+    };
   }
 
   const targetResolution = resolveSessionSyncTarget({ target });
   if (!targetResolution.ok) {
-    if (jsonOutput) {
-      console.log(`${JSON.stringify({
+    return {
+      exitCode: 1,
+      summary: {
         schema: 'narada.agent_cli.session_sync.v1',
         site_root: siteRoot,
         session,
         success: false,
         status: targetResolution.status,
         message: targetResolution.message,
-      }, null, 2)}\n`);
-    } else {
-      console.log(formatKeyValueRows({
-        SiteRoot: siteRoot,
-        Session: session,
-        Target: target,
-        Status: targetResolution.message,
-      }));
-    }
-    return 1;
+      },
+    };
   }
 
   const source = resolveSessionSyncDirectoryRoots({ siteRoot, session, naradaDir });
@@ -2856,6 +2842,34 @@ async function runSessionSync({
     ...directionResult,
   };
 
+  return {
+    exitCode: directionResult.success ? 0 : 1,
+    summary,
+    success: directionResult.success,
+    directionResult,
+    targetResolution,
+  };
+}
+
+async function runSessionSync({
+  session = SESSION,
+  target = null,
+  direction = 'upload',
+  siteRoot = SITE_ROOT,
+  naradaDir = NARADA_DIR,
+  jsonOutput = false,
+  dryRun = false,
+  deleteMissing = false,
+} = {}) {
+  const { summary, exitCode, directionResult = null } = buildSessionSyncSummary({
+    session,
+    target,
+    direction,
+    siteRoot,
+    naradaDir,
+    dryRun,
+    deleteMissing,
+  });
   if (jsonOutput) {
     console.log(`${JSON.stringify(summary, null, 2)}\n`);
   } else {
@@ -2865,15 +2879,14 @@ async function runSessionSync({
       Target: target,
       Mode: dryRun ? 'dry-run' : 'live',
       Direction: direction,
-      'Session root sync result': `${directionResult.copied} copied / ${directionResult.skipped} skipped`,
-      'Carrier session root sync result': `${directionResult.carrierCopied} copied / ${directionResult.carrierSkipped} skipped`,
-      'Deleted files': `${directionResult.deleted} deleted`,
-      Status: directionResult.success ? 'session sync completed' : 'session sync completed with conflicts',
-      Message: directionResult.message ?? 'ok',
+      'Session root sync result': `${directionResult?.copied ?? 0} copied / ${directionResult?.skipped ?? 0} skipped`,
+      'Carrier session root sync result': `${directionResult?.carrierCopied ?? 0} copied / ${directionResult?.carrierSkipped ?? 0} skipped`,
+      'Deleted files': `${directionResult?.deleted ?? 0} deleted`,
+      Status: summary?.success ? 'session sync completed' : 'session sync completed with conflicts',
+      Message: summary?.message ?? 'ok',
     }));
   }
-
-  return directionResult.success ? 0 : 1;
+  return exitCode;
 }
 
 function resolveSessionSyncTarget({ target }) {
@@ -7442,6 +7455,25 @@ function serverRecovery({ requestId, state, mcpServers, mcpPreflightArtifact = r
   };
 }
 
+function serverSync({
+  requestId,
+  direction = 'upload',
+  target = null,
+  dryRun = false,
+  deleteMissing = false,
+}) {
+  return {
+    request_id: requestId,
+    transport: 'jsonl_stdio',
+    event: 'session_sync',
+    ...resolveSessionSyncTarget({ target }),
+    mode: dryRun ? 'dry-run' : 'live',
+    direction,
+    target,
+    delete_missing: deleteMissing,
+  };
+}
+
 async function handleServerRequestLine(line, context) {
   let request;
   try {
@@ -7476,6 +7508,45 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
     noteSessionActivity(state, 'session_recovery_requested');
     recordServerWorkflowRequest('session_recovery_requested', { requestId, method: 'session.recovery' });
     emit('session_recovery', serverRecovery({ requestId, state, mcpServers, mcpPreflightArtifact }));
+    return;
+  }
+  if (request?.method === 'session.sync') {
+    const requestId = request?.id ?? null;
+    const params = request?.params ?? {};
+    const direction = normalizeSessionSyncDirection(params.direction);
+    const target = params.target ?? params.session_sync_target ?? params.sessionSyncTarget ?? null;
+    const dryRun = params.dry_run ?? params.dryRun ?? false;
+    const deleteMissing = params.delete ?? params.delete_missing ?? params.deleteMissing ?? false;
+    const { summary, exitCode, directionResult = null } = buildSessionSyncSummary({
+      target,
+      direction,
+      dryRun,
+      deleteMissing,
+    });
+    if (!summary) {
+      recordCarrierDiagnostic('error', 'session sync failed to build summary');
+    }
+    noteSessionActivity(state, 'session_sync_requested');
+    recordServerWorkflowRequest('session_sync_requested', { requestId, method: 'session.sync' });
+    emit('session_sync', {
+      request_id: requestId,
+      transport: 'jsonl_stdio',
+      event: 'session_sync',
+      ...(summary ?? {}),
+      ...serverSync({
+        requestId,
+        direction,
+        target,
+        dryRun,
+        deleteMissing,
+      }),
+      success: exitCode === 0,
+      copied: directionResult?.copied ?? summary?.copied ?? 0,
+      skipped: directionResult?.skipped ?? summary?.skipped ?? 0,
+      conflicts: directionResult?.conflicts ?? summary?.conflicts ?? 0,
+      deleted: directionResult?.deleted ?? summary?.deleted ?? 0,
+      message: summary?.message ?? 'session sync requested',
+    });
     return;
   }
   if (request?.method === 'preflight.recovery') {

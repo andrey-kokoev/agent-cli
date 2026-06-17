@@ -4143,6 +4143,8 @@ const child = spawn(process.execPath, [
   },
   stdio: ['pipe', 'pipe', 'pipe'],
 });
+const serverSyncTarget = join(serverSite, 'sync-target');
+mkdirSync(serverSyncTarget, { recursive: true });
 let stdout = '';
 let stderr = '';
 child.stdout.setEncoding('utf8');
@@ -4154,6 +4156,7 @@ child.stdin.write(`${JSON.stringify({ id: 'status-1', method: 'session.status', 
 child.stdin.write(`${JSON.stringify({ id: 'operations-1', method: 'session.operations', params: {} })}\n`);
 child.stdin.write(`${JSON.stringify({ id: 'recovery-1', method: 'session.recovery', params: {} })}\n`);
 child.stdin.write(`${JSON.stringify({ id: 'preflight-1', method: 'preflight.recovery', params: {} })}\n`);
+child.stdin.write(`${JSON.stringify({ id: 'sync-1', method: 'session.sync', params: { target: serverSyncTarget, direction: 'upload', dry_run: true } })}\n`);
 child.stdin.write(`${JSON.stringify({ id: 'close-1', method: 'session.close', params: {} })}\n`);
 child.stdin.end();
 const exitCode = await new Promise((resolveExit) => child.on('exit', resolveExit));
@@ -4209,6 +4212,13 @@ assert.equal(serverPreflightRecoveryEvent?.event, 'preflight_recovery');
 assert.equal(serverPreflightRecoveryEvent?.mcp_preflight_artifact_path, null);
 assert.equal(serverPreflightRecoveryEvent?.mcp_preflight_operational_state, null);
 assert.equal(serverPreflightRecoveryEvent?.mcp_preflight_recommended_action, null);
+const serverSyncEvent = serverEvents.find((event) => event.event === 'session_sync' && event.request_id === 'sync-1');
+assert.equal(serverSyncEvent?.event, 'session_sync');
+assert.equal(serverSyncEvent?.request_id, 'sync-1');
+assert.equal(serverSyncEvent?.direction, 'upload');
+assert.equal(serverSyncEvent?.target, serverSyncTarget);
+assert.equal(serverSyncEvent?.mode, 'dry-run');
+assert.equal(serverSyncEvent?.success, false);
 const serverClosedEvent = serverEvents.find((event) => event.event === 'session_closed' && event.request_id === 'close-1');
 assert.equal(serverClosedEvent?.event, 'session_closed');
 assert.equal(serverClosedEvent?.terminal_state, 'closed');
