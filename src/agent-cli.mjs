@@ -4641,6 +4641,36 @@ function recordServerWorkflowRequest(event, { requestId = null, method = null, t
   }));
 }
 
+function recordServerWorkflowLifecycleEvent(
+  event,
+  {
+    requestId = null,
+    method = null,
+    transport = 'jsonl_stdio',
+    operation_status = null,
+    requested_at = null,
+    completed_at = null,
+    duration_ms = null,
+    ...extra
+  } = {},
+) {
+  appendSession(SESSION_PATH, sessionEventEntry(event, {
+    request_id: requestId,
+    method,
+    transport,
+    operation_status,
+    requested_at,
+    completed_at,
+    duration_ms,
+    ...extra,
+  }));
+}
+
+function operatorWorkflowId({ requestId = null, method = null, namespace = 'operator' } = {}) {
+  if (!requestId && !method) return null;
+  return `operation_${namespace}_${hashStable(`${namespace}:${method ?? ''}:${requestId ?? ''}`).slice(0, 16)}`;
+}
+
 function recordMcpStartupFailures(mcpServers, { emit = null } = {}) {
   const failures = getMcpStartupFailures(mcpServers);
   for (const failure of failures) {
@@ -7610,6 +7640,9 @@ async function handleServerRequestLine(line, context) {
 async function handleServerRequest(request, { state, messages, allTools, mcpServers, mcpPreflightArtifact, emit, callChatApiFn }) {
   if (request?.method === 'session.operations') {
     const requestId = request?.id ?? null;
+    const workflowStartedAt = new Date();
+    const workflowStartedIso = workflowStartedAt.toISOString();
+    const operationId = operatorWorkflowId({ requestId, method: 'session.operations' });
     noteSessionActivity(state, 'session_operations_requested');
     if (activeOperationHeartbeatDirectiveEmitter?.emitOnce) {
       await activeOperationHeartbeatDirectiveEmitter.emitOnce({ reason: 'session_operations_requested' })
@@ -7617,14 +7650,65 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
       noteSessionActivity(state, 'session_operations_requested');
     }
     recordServerWorkflowRequest('session_operations_requested', { requestId, method: 'session.operations' });
-    emit('session_operations', serverOperations({ requestId, state, mcpServers, mcpPreflightArtifact }));
+    try {
+      emit('session_operations', serverOperations({ requestId, state, mcpServers, mcpPreflightArtifact }));
+      recordServerWorkflowLifecycleEvent('session_operations_completed', {
+        requestId,
+        method: 'session.operations',
+        operation_status: 'succeeded',
+        requested_at: workflowStartedIso,
+        completed_at: new Date().toISOString(),
+        duration_ms: new Date().getTime() - workflowStartedAt.getTime(),
+        operation_id: operationId,
+      });
+    } catch (error) {
+      recordServerWorkflowLifecycleEvent('session_operations_completed', {
+        requestId,
+        method: 'session.operations',
+        operation_status: 'failed',
+        requested_at: workflowStartedIso,
+        completed_at: new Date().toISOString(),
+        duration_ms: new Date().getTime() - workflowStartedAt.getTime(),
+        error_code: error instanceof Error ? error.name : 'error',
+        error_message: error instanceof Error ? error.message : String(error),
+        operation_id: operationId,
+      });
+      throw error;
+    }
     return;
   }
   if (request?.method === 'session.recovery') {
     const requestId = request?.id ?? null;
+    const workflowStartedAt = new Date();
+    const workflowStartedIso = workflowStartedAt.toISOString();
+    const operationId = operatorWorkflowId({ requestId, method: 'session.recovery' });
     noteSessionActivity(state, 'session_recovery_requested');
     recordServerWorkflowRequest('session_recovery_requested', { requestId, method: 'session.recovery' });
-    emit('session_recovery', serverRecovery({ requestId, state, mcpServers, mcpPreflightArtifact }));
+    try {
+      emit('session_recovery', serverRecovery({ requestId, state, mcpServers, mcpPreflightArtifact }));
+      recordServerWorkflowLifecycleEvent('session_recovery_completed', {
+        requestId,
+        method: 'session.recovery',
+        operation_status: 'succeeded',
+        requested_at: workflowStartedIso,
+        completed_at: new Date().toISOString(),
+        duration_ms: new Date().getTime() - workflowStartedAt.getTime(),
+        operation_id: operationId,
+      });
+    } catch (error) {
+      recordServerWorkflowLifecycleEvent('session_recovery_completed', {
+        requestId,
+        method: 'session.recovery',
+        operation_status: 'failed',
+        requested_at: workflowStartedIso,
+        completed_at: new Date().toISOString(),
+        duration_ms: new Date().getTime() - workflowStartedAt.getTime(),
+        error_code: error instanceof Error ? error.name : 'error',
+        error_message: error instanceof Error ? error.message : String(error),
+        operation_id: operationId,
+      });
+      throw error;
+    }
     return;
   }
   if (request?.method === 'session.sync') {
@@ -7708,9 +7792,36 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
   }
   if (request?.method === 'preflight.recovery') {
     const requestId = request?.id ?? null;
+    const workflowStartedAt = new Date();
+    const workflowStartedIso = workflowStartedAt.toISOString();
+    const operationId = operatorWorkflowId({ requestId, method: 'preflight.recovery' });
     noteSessionActivity(state, 'preflight_recovery_requested');
     recordServerWorkflowRequest('preflight_recovery_requested', { requestId, method: 'preflight.recovery' });
-    emit('preflight_recovery', serverPreflightRecovery({ requestId, mcpPreflightArtifact }));
+    try {
+      emit('preflight_recovery', serverPreflightRecovery({ requestId, mcpPreflightArtifact }));
+      recordServerWorkflowLifecycleEvent('preflight_recovery_completed', {
+        requestId,
+        method: 'preflight.recovery',
+        operation_status: 'succeeded',
+        requested_at: workflowStartedIso,
+        completed_at: new Date().toISOString(),
+        duration_ms: new Date().getTime() - workflowStartedAt.getTime(),
+        operation_id: operationId,
+      });
+    } catch (error) {
+      recordServerWorkflowLifecycleEvent('preflight_recovery_completed', {
+        requestId,
+        method: 'preflight.recovery',
+        operation_status: 'failed',
+        requested_at: workflowStartedIso,
+        completed_at: new Date().toISOString(),
+        duration_ms: new Date().getTime() - workflowStartedAt.getTime(),
+        error_code: error instanceof Error ? error.name : 'error',
+        error_message: error instanceof Error ? error.message : String(error),
+        operation_id: operationId,
+      });
+      throw error;
+    }
     return;
   }
   const controlRequest = classifyCarrierControlRequest(request);
@@ -7733,54 +7844,224 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
       return;
     }
     if (controlRequest.method_kind === 'session_status') {
-      noteSessionActivity(state, 'session_status_requested');
-      recordServerWorkflowRequest('session_status_requested', { requestId, method: request?.method ?? 'session.status' });
-      emit('session_status', serverStatus({ requestId, state, allTools, mcpServers }));
+      const operation_id = operatorWorkflowId({ requestId, method: request?.method ?? 'session.status' });
+      const startedAt = new Date();
+      const requestedAt = startedAt.toISOString();
+      recordServerWorkflowLifecycleEvent('session_status_requested', {
+        requestId,
+        operation_id,
+        method: request?.method ?? 'session.status',
+        operation_status: 'requested',
+        requested_at: requestedAt,
+      });
+      try {
+        noteSessionActivity(state, 'session_status_requested');
+        emit('session_status', serverStatus({ requestId, state, allTools, mcpServers }));
+        const completedAt = new Date();
+        recordServerWorkflowLifecycleEvent('session_status_completed', {
+          requestId,
+          operation_id,
+          method: request?.method ?? 'session.status',
+          operation_status: 'completed',
+          requested_at: requestedAt,
+          completed_at: completedAt.toISOString(),
+          duration_ms: completedAt.getTime() - startedAt.getTime(),
+        });
+      } catch (error) {
+        const completedAt = new Date();
+        recordServerWorkflowLifecycleEvent('session_status_completed', {
+          requestId,
+          operationId,
+          method: request?.method ?? 'session.status',
+          operation_status: 'failed',
+          requested_at: requestedAt,
+          completed_at: completedAt.toISOString(),
+          duration_ms: completedAt.getTime() - startedAt.getTime(),
+          error_message: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
       return;
     }
     if (controlRequest.method_kind === 'observers_status') {
-      recordServerWorkflowRequest('observer_status_requested', { requestId, method: request?.method ?? 'observers.status' });
-      emit('observer_status', observerServerStatus({ requestId, state }));
+      const operationId = operatorWorkflowId({ requestId, method: request?.method ?? 'observers.status' });
+      const startedAt = new Date();
+      const requestedAt = startedAt.toISOString();
+      recordServerWorkflowLifecycleEvent('observer_status_requested', {
+        requestId,
+        operationId,
+        method: request?.method ?? 'observers.status',
+        operation_status: 'requested',
+        requested_at: requestedAt,
+      });
+      try {
+        emit('observer_status', observerServerStatus({ requestId, state }));
+        const completedAt = new Date();
+        recordServerWorkflowLifecycleEvent('observer_status_completed', {
+          requestId,
+          operationId,
+          method: request?.method ?? 'observers.status',
+          operation_status: 'completed',
+          requested_at: requestedAt,
+          completed_at: completedAt.toISOString(),
+          duration_ms: completedAt.getTime() - startedAt.getTime(),
+        });
+      } catch (error) {
+        const completedAt = new Date();
+        recordServerWorkflowLifecycleEvent('observer_status_completed', {
+          requestId,
+          operationId,
+          method: request?.method ?? 'observers.status',
+          operation_status: 'failed',
+          requested_at: requestedAt,
+          completed_at: completedAt.toISOString(),
+          duration_ms: completedAt.getTime() - startedAt.getTime(),
+          error_message: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
       return;
     }
     if (controlRequest.method_kind === 'observer_set_muted') {
-      recordServerWorkflowRequest('observer_state_change_requested', {
+      const operationId = operatorWorkflowId({ requestId, method: request?.method ?? null });
+      const startedAt = new Date();
+      const requestedAt = startedAt.toISOString();
+      const controlMethod = request?.method ?? null;
+      recordServerWorkflowLifecycleEvent('observer_state_change_requested', {
         requestId,
-        method: request?.method ?? null,
+        operationId,
+        method: controlMethod,
         observer_action: controlRequest.observer_action ?? null,
+        operation_status: 'requested',
+        requested_at: requestedAt,
       });
-      const result = handleObserverCommand(controlRequest.observer_action, state.displaySettings);
-      emit('observer_status', {
-        ...observerServerStatus({ requestId, state }),
-        terminal_state: result.status,
-        message: result.message,
-      });
+      try {
+        const result = handleObserverCommand(controlRequest.observer_action, state.displaySettings);
+        emit('observer_status', {
+          ...observerServerStatus({ requestId, state }),
+          terminal_state: result.status,
+          message: result.message,
+        });
+        const completedAt = new Date();
+        recordServerWorkflowLifecycleEvent('observer_state_change_completed', {
+          requestId,
+          operationId,
+          method: controlMethod,
+          observer_action: controlRequest.observer_action ?? null,
+          operation_status: 'completed',
+          requested_at: requestedAt,
+          completed_at: completedAt.toISOString(),
+          duration_ms: completedAt.getTime() - startedAt.getTime(),
+        });
+      } catch (error) {
+        const completedAt = new Date();
+        recordServerWorkflowLifecycleEvent('observer_state_change_completed', {
+          requestId,
+          operationId,
+          method: request?.method ?? null,
+          observer_action: controlRequest.observer_action ?? null,
+          operation_status: 'failed',
+          requested_at: requestedAt,
+          completed_at: completedAt.toISOString(),
+          duration_ms: completedAt.getTime() - startedAt.getTime(),
+          error_message: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
       return;
     }
     if (controlRequest.method_kind === 'conversation_interrupt') {
-      recordServerWorkflowRequest('conversation_interrupt_requested', { requestId, method: request?.method ?? 'conversation.interrupt' });
-      if (state.activeTurn) {
-        requestTurnInterrupt(state.activeTurn);
-        emit('turn_interrupted', {
-          request_id: requestId,
-          turn_id: state.activeTurn.turnId,
-          terminal_state: 'interrupted_requested',
+      const operationId = operatorWorkflowId({ requestId, method: request?.method ?? 'conversation.interrupt' });
+      const startedAt = new Date();
+      const requestedAt = startedAt.toISOString();
+      recordServerWorkflowLifecycleEvent('conversation_interrupt_requested', {
+        requestId,
+        operationId,
+        method: request?.method ?? 'conversation.interrupt',
+        operation_status: 'requested',
+        requested_at: requestedAt,
+      });
+      try {
+        if (state.activeTurn) {
+          requestTurnInterrupt(state.activeTurn);
+          emit('turn_interrupted', {
+            request_id: requestId,
+            turn_id: state.activeTurn.turnId,
+            terminal_state: 'interrupted_requested',
+          });
+        } else {
+          emit('session_status', serverStatus({ requestId, state, allTools, mcpServers }));
+        }
+        const completedAt = new Date();
+        recordServerWorkflowLifecycleEvent('conversation_interrupt_completed', {
+          requestId,
+          operationId,
+          method: request?.method ?? 'conversation.interrupt',
+          operation_status: 'completed',
+          requested_at: requestedAt,
+          completed_at: completedAt.toISOString(),
+          duration_ms: completedAt.getTime() - startedAt.getTime(),
         });
-      } else {
-        emit('session_status', serverStatus({ requestId, state, allTools, mcpServers }));
+      } catch (error) {
+        const completedAt = new Date();
+        recordServerWorkflowLifecycleEvent('conversation_interrupt_completed', {
+          requestId,
+          operationId,
+          method: request?.method ?? 'conversation.interrupt',
+          operation_status: 'failed',
+          requested_at: requestedAt,
+          completed_at: completedAt.toISOString(),
+          duration_ms: completedAt.getTime() - startedAt.getTime(),
+          error_message: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
       }
       return;
     }
     if (controlRequest.method_kind === 'session_close') {
-      recordServerWorkflowRequest('session_close_requested', { requestId, method: request?.method ?? 'session.close' });
-      const closedAt = new Date().toISOString();
-      state.closed = true;
-      if (state.activeTurn) requestTurnInterrupt(state.activeTurn);
-      noteSessionActivity(state, 'session_closed', closedAt, 'closed');
-      emit('session_closed', {
-        ...serverStatus({ requestId, state, allTools, mcpServers, mcpPreflightArtifact }),
-        terminal_state: 'closed',
+      const operationId = operatorWorkflowId({ requestId, method: request?.method ?? 'session.close' });
+      const startedAt = new Date();
+      const requestedAt = startedAt.toISOString();
+      recordServerWorkflowLifecycleEvent('session_close_requested', {
+        requestId,
+        operationId,
+        method: request?.method ?? 'session.close',
+        operation_status: 'requested',
+        requested_at: requestedAt,
       });
+      try {
+        const closedAt = new Date().toISOString();
+        state.closed = true;
+        if (state.activeTurn) requestTurnInterrupt(state.activeTurn);
+        noteSessionActivity(state, 'session_closed', closedAt, 'closed');
+        emit('session_closed', {
+          ...serverStatus({ requestId, state, allTools, mcpServers, mcpPreflightArtifact }),
+          terminal_state: 'closed',
+        });
+        const completedAt = new Date();
+        recordServerWorkflowLifecycleEvent('session_close_completed', {
+          requestId,
+          operationId,
+          method: request?.method ?? 'session.close',
+          operation_status: 'completed',
+          requested_at: requestedAt,
+          completed_at: completedAt.toISOString(),
+          duration_ms: completedAt.getTime() - startedAt.getTime(),
+        });
+      } catch (error) {
+        const completedAt = new Date();
+        recordServerWorkflowLifecycleEvent('session_close_completed', {
+          requestId,
+          operationId,
+          method: request?.method ?? 'session.close',
+          operation_status: 'failed',
+          requested_at: requestedAt,
+          completed_at: completedAt.toISOString(),
+          duration_ms: completedAt.getTime() - startedAt.getTime(),
+          error_message: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
       return;
     }
     if (controlRequest.method_kind === 'carrier_input_deliver') {
