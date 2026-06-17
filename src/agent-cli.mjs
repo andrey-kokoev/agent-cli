@@ -2858,6 +2858,9 @@ async function runSessionSync({
   siteRoot = SITE_ROOT,
   naradaDir = NARADA_DIR,
   jsonOutput = false,
+  transport = 'cli',
+  requestId = null,
+  recordWorkflow = true,
   dryRun = false,
   deleteMissing = false,
 } = {}) {
@@ -2870,6 +2873,21 @@ async function runSessionSync({
     dryRun,
     deleteMissing,
   });
+  if (recordWorkflow) {
+    recordSessionSyncWorkflow({
+      requestId,
+      session,
+      target,
+      direction,
+      dryRun,
+      deleteMissing,
+      summary,
+      directionResult,
+      exitCode,
+      transport,
+      naradaDir,
+    });
+  }
   if (jsonOutput) {
     console.log(`${JSON.stringify(summary, null, 2)}\n`);
   } else {
@@ -7487,12 +7505,35 @@ function sessionSyncOperationId({ session, target, direction = 'upload', request
   return `operation_session_sync_${hashStable(base).slice(0, 16)}`;
 }
 
-function recordSessionSyncWorkflow({ requestId = null, session = SESSION, target = null, direction = 'upload', dryRun = false, deleteMissing = false, summary = null, directionResult = null, exitCode = 0, transport = 'jsonl_stdio' }) {
+function recordSessionSyncWorkflow({
+  requestId = null,
+  session = SESSION,
+  target = null,
+  direction = 'upload',
+  dryRun = false,
+  deleteMissing = false,
+  summary = null,
+  directionResult = null,
+  exitCode = 0,
+  transport = 'jsonl_stdio',
+  naradaDir = NARADA_DIR,
+  method = 'session.sync',
+}) {
   const operationId = sessionSyncOperationId({ session, target, direction, requestId, dryRun, deleteMissing });
   const normalizedSummary = summary ?? {};
+  const syncTarget = normalizedSummary.target ?? target ?? null;
+  const sessionPath = join(naradaDir, 'crew', 'nars-sessions', session, 'session.jsonl');
   const result = {
     session,
-    target,
+    target: syncTarget,
+    method,
+    target_scheme: normalizedSummary.target_scheme ?? null,
+    target_alias: normalizedSummary.target_alias ?? null,
+    target_resolved_root: normalizedSummary.target_resolved_root ?? null,
+    source_session_root: normalizedSummary.source_session_root ?? null,
+    destination_session_root: normalizedSummary.destination_session_root ?? null,
+    source_carrier_session_root: normalizedSummary.source_carrier_session_root ?? null,
+    destination_carrier_session_root: normalizedSummary.destination_carrier_session_root ?? null,
     direction,
     dry_run: !!dryRun,
     delete_missing: !!deleteMissing,
@@ -7510,8 +7551,8 @@ function recordSessionSyncWorkflow({ requestId = null, session = SESSION, target
     carrier_skipped: directionResult?.carrierSkipped ?? normalizedSummary.carrierSkipped ?? 0,
     carrier_deleted: directionResult?.carrierDeleted ?? normalizedSummary.carrierDeleted ?? 0,
   };
-  appendSession(SESSION_PATH, sessionEventEntry('session_sync_requested', result));
-  appendSession(SESSION_PATH, { ...result, event: 'session_sync_completed' });
+  appendSession(sessionPath, sessionEventEntry('session_sync_requested', result));
+  appendSession(sessionPath, { ...result, event: 'session_sync_completed' });
 }
 
 async function handleServerRequestLine(line, context) {
