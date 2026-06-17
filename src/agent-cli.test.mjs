@@ -4219,6 +4219,7 @@ assert.equal(serverSyncEvent?.direction, 'upload');
 assert.equal(serverSyncEvent?.target, serverSyncTarget);
 assert.equal(serverSyncEvent?.mode, 'dry-run');
 assert.equal(serverSyncEvent?.success, false);
+
 const serverClosedEvent = serverEvents.find((event) => event.event === 'session_closed' && event.request_id === 'close-1');
 assert.equal(serverClosedEvent?.event, 'session_closed');
 assert.equal(serverClosedEvent?.terminal_state, 'closed');
@@ -4234,6 +4235,18 @@ assert.equal(serverHeartbeat.carrier_session_id, 'server-test');
 assert.equal(serverHeartbeat.agent_id, 'narada.test');
 assert.equal(serverHeartbeat.runtime, 'agent-cli');
 const persistedServerEvents = readPersistedSessionEvents({ session: 'server-test', naradaDir: join(serverSite, '.narada') });
+const persistedSessionSyncRequested = persistedServerEvents.find(
+  (entry) => entry.event === 'session_sync_requested' && entry.request_id === 'sync-1',
+);
+const persistedSessionSyncCompleted = persistedServerEvents.find(
+  (entry) => entry.event === 'session_sync_completed' && entry.request_id === 'sync-1',
+);
+assert.equal(persistedSessionSyncRequested?.event, 'session_sync_requested');
+assert.equal(persistedSessionSyncRequested?.request_id, 'sync-1');
+assert.equal(persistedSessionSyncRequested?.method, 'session.sync');
+assert.equal(persistedSessionSyncRequested?.transport, 'jsonl_stdio');
+assert.equal(persistedSessionSyncCompleted?.event, 'session_sync_completed');
+assert.equal(persistedSessionSyncCompleted?.request_id, 'sync-1');
 assert.deepEqual(
   persistedServerEvents.filter((entry) => [
     'session_status_requested',

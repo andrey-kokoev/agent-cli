@@ -7474,6 +7474,46 @@ function serverSync({
   };
 }
 
+function sessionSyncOperationId({ session, target, direction = 'upload', requestId = null, dryRun = false, deleteMissing = false }) {
+  const base = {
+    kind: 'session_sync',
+    session,
+    target: target ?? null,
+    direction,
+    requestId,
+    dryRun: !!dryRun,
+    deleteMissing: !!deleteMissing,
+  };
+  return `operation_session_sync_${hashStable(base).slice(0, 16)}`;
+}
+
+function recordSessionSyncWorkflow({ requestId = null, session = SESSION, target = null, direction = 'upload', dryRun = false, deleteMissing = false, summary = null, directionResult = null, exitCode = 0, transport = 'jsonl_stdio' }) {
+  const operationId = sessionSyncOperationId({ session, target, direction, requestId, dryRun, deleteMissing });
+  const normalizedSummary = summary ?? {};
+  const result = {
+    session,
+    target,
+    direction,
+    dry_run: !!dryRun,
+    delete_missing: !!deleteMissing,
+    operation_id: operationId,
+    request_id: requestId,
+    transport,
+    status: normalizedSummary.status ?? null,
+    message: normalizedSummary.message ?? null,
+    success: exitCode === 0,
+    copied: directionResult?.copied ?? normalizedSummary.copied ?? 0,
+    skipped: directionResult?.skipped ?? normalizedSummary.skipped ?? 0,
+    conflicts: directionResult?.conflicts ?? normalizedSummary.conflicts ?? 0,
+    deleted: directionResult?.deleted ?? normalizedSummary.deleted ?? 0,
+    carrier_copied: directionResult?.carrierCopied ?? normalizedSummary.carrierCopied ?? 0,
+    carrier_skipped: directionResult?.carrierSkipped ?? normalizedSummary.carrierSkipped ?? 0,
+    carrier_deleted: directionResult?.carrierDeleted ?? normalizedSummary.carrierDeleted ?? 0,
+  };
+  appendSession(SESSION_PATH, sessionEventEntry('session_sync_requested', result));
+  appendSession(SESSION_PATH, { ...result, event: 'session_sync_completed' });
+}
+
 async function handleServerRequestLine(line, context) {
   let request;
   try {
@@ -7528,6 +7568,17 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
     }
     noteSessionActivity(state, 'session_sync_requested');
     recordServerWorkflowRequest('session_sync_requested', { requestId, method: 'session.sync' });
+    recordSessionSyncWorkflow({
+      requestId,
+      session: SESSION,
+      target,
+      direction,
+      dryRun,
+      deleteMissing,
+      summary,
+      directionResult,
+      exitCode,
+    });
     emit('session_sync', {
       request_id: requestId,
       transport: 'jsonl_stdio',
