@@ -9571,20 +9571,75 @@ function formatTimestamp(now = new Date()) {
 function renderMarkdownForTerminal(text) {
   const lines = String(text ?? '').split(/\r?\n/);
   let inFence = false;
-  return lines.map((line) => {
+  let inTable = false;
+  let tableRows = [];
+  let tableHeader = null;
+  const outLines = [];
+  for (const line of lines) {
     const fenceMatch = line.match(/^(\s*)```/);
     if (fenceMatch) {
+      if (inTable) flushTable();
       inFence = !inFence;
-      return null;
+      continue;
     }
-    if (inFence) return terminalStyle.code(`  ${line.replace(/^\s{0,4}/, '')}`);
-    if (/^#{1,6}\s+/.test(line)) return terminalStyle.label(line.replace(/^#{1,6}\s+/, ''));
+    if (inFence) {
+      outLines.push(terminalStyle.code(`  ${line.replace(/^\s{0,4}/, '')}`));
+      continue;
+    }
+    const tableMatch = line.match(/^\|(.*)\|$/);
+    if (tableMatch) {
+      inTable = true;
+      const cells = tableMatch[1].split('|').map((cell) => cell.trim());
+      const isSeparator = cells.every((cell) => /^:?-+:?$/.test(cell));
+      if (isSeparator) continue;
+      if (tableHeader === null) {
+        tableHeader = cells;
+      } else {
+        tableRows.push(cells);
+      }
+      continue;
+    }
+    if (inTable) {
+      flushTable();
+      inTable = false;
+    }
+    if (/^#{1,6}\s+/.test(line)) {
+      outLines.push(terminalStyle.label(line.replace(/^#{1,6}\s+/, '')));
+      continue;
+    }
     const normalizedLine = normalizeDisplayTerms(line);
     const bulletLine = /^\s*[-*]\s+/.test(normalizedLine)
       ? normalizedLine.replace(/^(\s*)[-*]\s+/, '$1• ')
       : normalizedLine;
-    return styleInlineCode(bulletLine);
-  }).filter((line) => line !== null).join('\n');
+    outLines.push(styleInlineCode(bulletLine));
+  }
+  if (inTable) flushTable();
+  return outLines.filter((line) => line !== null).join('\n');
+
+  function flushTable() {
+    if (!tableHeader) return;
+    const colCount = tableHeader.length;
+    const visible = (s) => stripAnsi(s).length;
+    const padded = (s, width) => {
+      const padWidth = Math.max(0, width - visible(s));
+      return `${s}${' '.repeat(padWidth)}`;
+    };
+    const widths = tableHeader.map((h, i) => Math.max(
+      visible(styleInlineCode(h)),
+      ...tableRows.map((row) => visible(styleInlineCode(row[i] ?? ''))),
+    ));
+    const renderRow = (row) => row.map((cell, i) => padded(styleInlineCode(cell ?? ''), widths[i])).join('  ');
+    outLines.push(terminalStyle.label(renderRow(tableHeader)));
+    for (const row of tableRows) {
+      const paddedRow = [];
+      for (let i = 0; i < colCount; i++) {
+        paddedRow.push(padded(styleInlineCode(row[i] ?? ''), widths[i]));
+      }
+      outLines.push(paddedRow.join('  '));
+    }
+    tableHeader = null;
+    tableRows = [];
+  }
 }
 
 function styleInlineCode(line) {

@@ -2686,7 +2686,7 @@ try {
 } finally {
   process.stdout.write = originalStdoutWrite;
 }
-assert.equal(stripAnsiForTest(toolDirectionLabel('invoke')), 'narada.architect -> agent-cli');
+assert.equal(stripAnsiForTest(renderMarkdownForTerminal('| Field | Values | Meaning |\n|-------|--------|---------|\n| executor | engine, agent, or operator | **Who** runs the step |\n| blocking | true or false | Whether the run **waits** for sop_run_advance after completion |')), 'Field     Values                      Meaning                                                       \nexecutor  engine, agent, or operator  **Who** runs the step                                         \nblocking  true or false               Whether the run **waits** for sop_run_advance after completion');
 assert.equal(stripAnsiForTest(toolDirectionLabel('result')), 'agent-cli -> narada.architect');
 const hostCommandOutputDir = mkdtempSync(join(tmpdir(), 'narada-agent-cli-host-command-'));
 const hostCommandEvents = [];
