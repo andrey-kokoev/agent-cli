@@ -22,7 +22,7 @@ The feature exists for carrier-local operations that an operator intentionally r
 
 ## Input Semantics
 
-An interactive input line is a host-command request when, after leading whitespace is ignored, it starts with `!` and has non-empty command text after the prefix.
+An operator input line in a server-backed session is a host-command request when, after leading whitespace is ignored, it starts with `!` and has non-empty command text after the prefix.
 
 Examples:
 
@@ -126,8 +126,8 @@ Implementation should add tests for:
 
 ## Initial Implementation Decisions
 
-- Host execution is enabled by default in interactive mode and can be disabled with `NARADA_AGENT_CLI_HOST_COMMANDS=false`.
-- Runtime server JSONL mode does not accept host-command requests in the first implementation.
+- Host execution is enabled by default for server-backed operator input and can be disabled with `NARADA_AGENT_CLI_HOST_COMMANDS=false`.
+- Raw runtime-server JSONL frames do not accept host-command requests in the first implementation; terminal wrappers classify operator input before forwarding provider turns.
 - Windows hosts execute through `%ComSpec%` or `cmd.exe` with `/d /s /c`; POSIX hosts execute through `$SHELL` or `/bin/sh` with `-lc`.
-- Command allowlists and approval prompts are classifier states but are not wired to an interactive approval UI in the first implementation.
+- Command allowlists and approval prompts are classifier states but are not wired to a runtime approval UI in the first implementation.
 - Command redaction is not implemented in the first implementation; emitted evidence records `redaction_applied: false`.

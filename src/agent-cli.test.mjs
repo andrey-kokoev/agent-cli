@@ -18,7 +18,6 @@ import {
   PROVIDER_SUPPORT_STATES,
   REQUEST_ADAPTERS,
   assertApiKeyConfigured,
-  buildProgrammaticInputs,
   buildAnthropicMessagesRequest,
   buildCodexMcpRequest,
   buildChildProcessEnv,
@@ -34,7 +33,7 @@ import {
   copyToClipboard,
   consumeOperatorDirectiveInputText,
   createCarrierDirectiveEmitter,
-  createInteractiveHeaderRows,
+  createRuntimeHeaderRows,
   createMcpPreflightArtifactSnapshot,
   createSessionActivitySnapshot,
   createInputQueue,
@@ -59,7 +58,7 @@ import {
   formatToolResultContent,
   formatObserverPosture,
   handleGoalCommand,
-  handleInteractiveControlLine,
+  handleControlLine,
   handleObserverCommand,
   handleSlashCommand,
   messagesWithCarrierGoal,
@@ -102,12 +101,12 @@ import {
   resolveProviderSupportState,
   sessionEventEntry,
   sessionLogEntry,
-  shouldDeferInteractiveInput,
+  shouldDeferQueuedInput,
   shouldDisplayToolOutputs,
   observerVisibility,
   styleInputRouteLabel,
   shouldSuppressMcpStderr,
-  startInteractiveControlJsonlWatcher,
+  startControlJsonlWatcher,
   toolDirectionLabel,
   wrapTerminalLine,
 } from './agent-cli.mjs';
@@ -140,7 +139,7 @@ for (const entry of inputPipelineCases.cases) {
   assert.deepEqual(queueAdmission.visible_events.map((event) => event.event_kind), entry.expected.visible_event_kinds ?? [], entry.name);
   assert.equal(hold.hold_action, entry.expected.hold_action, entry.name);
   assert.equal(hold.should_defer, entry.expected.should_defer, entry.name);
-  assert.equal(shouldDeferInteractiveInput(normalized, {
+  assert.equal(shouldDeferQueuedInput(normalized, {
     rl: { line: entry.state.composerHasDraft ? 'draft' : '' },
     promptState: { active: true },
   }), entry.expected.should_defer, entry.name);
@@ -283,11 +282,6 @@ for (const entry of [
   })), [], entry.name);
 }
 
-const tempDir = resolve('.ai/tmp-agent-cli-programmatic-test');
-mkdirSync(tempDir, { recursive: true });
-const messageFile = resolve(tempDir, 'message.txt');
-writeFileSync(messageFile, 'file supplied message', 'utf8');
-
 const hugeEnv = {
   Path: 'C:\\Windows\\System32',
   APPDATA: 'C:\\Users\\Andrey\\AppData\\Roaming',
@@ -309,21 +303,6 @@ assert.equal(childEnv.FORCE_COLOR, '0');
 assert.equal(childEnv.NO_COLOR, '1');
 assert.ok(environmentBlockLength(childEnv) < 32767);
 
-const programmaticInputs = buildProgrammaticInputs({
-  messages: ['flag supplied message'],
-  messageFiles: [messageFile],
-  authorityRef: 'task:1186',
-});
-assert.deepEqual(programmaticInputs, [
-  { content: 'flag supplied message', source: 'programmatic_operator', authority_ref: 'task:1186' },
-  { content: 'file supplied message', source: 'programmatic_operator', authority_ref: 'task:1186' },
-]);
-assert.deepEqual(buildProgrammaticInputs({ messages: ['op'], operatorDirective: true }), [
-  { content: 'op', source: 'operator_directive', authority_ref: null },
-]);
-assert.deepEqual(buildProgrammaticInputs({ messages: ['sys'], systemDirective: true }), [
-  { content: 'sys', source: 'system_directive', authority_ref: null },
-]);
 assert.equal(inputRecordDisplayLabel({ source: 'operator_directive' }), 'operator directive -> narada.architect');
 assert.equal(inputRecordDisplayLabel({ source: 'operator_steering' }), 'operator steering -> narada.architect');
 assert.equal(inputRecordDisplayLabel({ source: 'system_directive' }), 'system directive');
@@ -396,11 +375,11 @@ const abandoned = abandonedQueue.finalizeSession();
 assert.equal(abandoned.length, 1);
 assert.equal(abandonedQueue.pendingCount, 0);
 assert.deepEqual(abandonedQueue.finalizeSession(), []);
-assert.equal(shouldDeferInteractiveInput({ source: 'manual_operator' }, { promptState: { active: true } }), false);
-assert.equal(shouldDeferInteractiveInput({ source: 'system_directive' }, { rl: { line: '' }, promptState: { active: true } }), false);
-assert.equal(shouldDeferInteractiveInput({ source: 'system_directive' }, { rl: { line: '   ' }, promptState: { active: true } }), false);
-assert.equal(shouldDeferInteractiveInput({ source: 'system_directive' }, { rl: { line: 'partial' }, promptState: { active: true } }), true);
-assert.equal(shouldDeferInteractiveInput({ source: 'system_directive' }, { rl: { line: 'partial' }, promptState: { active: false } }), false);
+assert.equal(shouldDeferQueuedInput({ source: 'manual_operator' }, { promptState: { active: true } }), false);
+assert.equal(shouldDeferQueuedInput({ source: 'system_directive' }, { rl: { line: '' }, promptState: { active: true } }), false);
+assert.equal(shouldDeferQueuedInput({ source: 'system_directive' }, { rl: { line: '   ' }, promptState: { active: true } }), false);
+assert.equal(shouldDeferQueuedInput({ source: 'system_directive' }, { rl: { line: 'partial' }, promptState: { active: true } }), true);
+assert.equal(shouldDeferQueuedInput({ source: 'system_directive' }, { rl: { line: 'partial' }, promptState: { active: false } }), false);
 assert.equal(sanitizeOperatorDirectiveDraftForDisplay('keep this full draft'), 'keep this full draft');
 assert.equal(sanitizeOperatorDirectiveDraftForDisplay('line\r\nbreak\tand\u0003control'), 'line break andcontrol');
 const submittedOperatorDirectiveLines = [];
@@ -429,7 +408,7 @@ const controlEvents = [];
 const controlQueue = createInputQueue({
   drain: async (event) => { controlEvents.push(event); return { terminal_state: 'completed' }; },
 });
-const watcher = startInteractiveControlJsonlWatcher({ controlPath: controlJsonlPath, inputQueue: controlQueue });
+const watcher = startControlJsonlWatcher({ controlPath: controlJsonlPath, inputQueue: controlQueue });
 const controlFrame = JSON.stringify({
   method: 'system_directive.deliver',
   params: { directive_id: 'dir_partial', message: 'run startup sequence' },
@@ -447,7 +426,7 @@ const nativeControlEvents = [];
 const nativeControlQueue = createInputQueue({
   drain: async (event) => { nativeControlEvents.push(event); return { terminal_state: 'completed' }; },
 });
-await handleInteractiveControlLine(JSON.stringify({
+await handleControlLine(JSON.stringify({
   schema: 'narada.carrier.control.input_event.v1',
   control_event_id: 'control_native_1',
   input_event_id: 'input_native_1',
@@ -475,7 +454,7 @@ const carrierInputDeliverEvents = [];
 const carrierInputDeliverQueue = createInputQueue({
   drain: async (event) => { carrierInputDeliverEvents.push(event); return { terminal_state: 'completed' }; },
 });
-await handleInteractiveControlLine(JSON.stringify({
+await handleControlLine(JSON.stringify({
   method: 'carrier.input.deliver',
   params: {
     input: {
@@ -501,7 +480,7 @@ const observerControlEvents = [];
 const observerControlQueue = createInputQueue({
   drain: async (event) => { observerControlEvents.push(event); return { terminal_state: 'completed_without_provider' }; },
 });
-await handleInteractiveControlLine(JSON.stringify({
+await handleControlLine(JSON.stringify({
   schema: 'narada.carrier.control.input_event.v1',
   control_event_id: 'control_observer_1',
   input_event_id: 'input_observer_1',
@@ -601,7 +580,7 @@ assert.deepEqual(parseArgs(['--startup-system-directive', 'run startup sequence'
 assert.deepEqual(parseArgs(['--no-startup-system-directive']), { removedConversationArgs: ['--no-startup-system-directive'] });
 assert.deepEqual(parseArgs(['--interactive-after-message']), { removedConversationArgs: ['--interactive-after-message'] });
 assert.deepEqual(parseArgs(['--auto-approve']), { removedConversationArgs: ['--auto-approve'] });
-assert.deepEqual(parseArgs(['--control-jsonl', '.narada/control.jsonl']), { controlJsonl: '.narada/control.jsonl' });
+assert.deepEqual(parseArgs(['--control-jsonl', '.narada/control.jsonl']), { removedConversationArgs: ['--control-jsonl'] });
 assert.deepEqual(parseArgs(['--mcp-preflight']), { mcpPreflight: true });
 assert.deepEqual(parseArgs(['--mcp-preflight-json']), { mcpPreflightJson: true });
 assert.deepEqual(parseArgs(['--mcp-preflight-read']), { mcpPreflightRead: true });
@@ -2232,7 +2211,7 @@ assert.equal(formatHeaderRow('Identity', 'narada.architect', {}).includes('\x1b[
 const headerRows = stripAnsiForTest(formatHeaderRows([['MCP servers', 1], ['  narada-proper', '29 tools']]));
 assert.equal(headerRows.includes('MCP servers     1'), true);
 assert.equal(headerRows.includes('  narada-proper 29 tools'), true);
-const interactiveHeaderRows = stripAnsiForTest(formatHeaderRows(createInteractiveHeaderRows({
+const runtimeHeaderRows = stripAnsiForTest(formatHeaderRows(createRuntimeHeaderRows({
   mcpServers: Object.assign(Object.create(null), {
     narada: { tools: [{ name: 'fs_read_file' }] },
     __mcp_startup_failures: [{ server_name: 'polluted', code: 'mcp_stdout_pollution' }],
@@ -2242,9 +2221,9 @@ const interactiveHeaderRows = stripAnsiForTest(formatHeaderRows(createInteractiv
   sessionSettings: { model: 'gpt-5', thinking: 'medium', stream: true, goal: null },
   transcriptDisplaySettings: { toolOutputs: true },
 })));
-assert.equal(interactiveHeaderRows.includes('MCP state            runtime_faulted'), true);
-assert.equal(interactiveHeaderRows.includes('MCP startup failures 1 (polluted:mcp_stdout_pollution)'), true);
-assert.equal(interactiveHeaderRows.includes('MCP runtime faults   1 (narada:fs_read_file)'), true);
+assert.equal(runtimeHeaderRows.includes('MCP state            runtime_faulted'), true);
+assert.equal(runtimeHeaderRows.includes('MCP startup failures 1 (polluted:mcp_stdout_pollution)'), true);
+assert.equal(runtimeHeaderRows.includes('MCP runtime faults   1 (narada:fs_read_file)'), true);
 assert.equal(formatStartupMcpSummary({ event: 'session_started', mcp_operational_state: 'healthy' }), null);
 assert.deepEqual(formatStartupMcpEvent({ event: 'session_started', mcp_operational_state: 'healthy' }), null);
 assert.deepEqual(
@@ -2932,7 +2911,7 @@ assert.equal(windowsWrapperTemplate.includes("& node $AgentCliPath @preflightDia
 assert.equal(windowsWrapperTemplate.includes("& node $AgentCliPath @preflightDiagnosticsJsonArgs"), true);
 assert.equal(windowsWrapperTemplate.includes("'--mcp-preflight-diagnostics-filter', $McpPreflightDiagnosticsFilter"), true);
 assert.equal(windowsWrapperTemplate.includes('ConvertFrom-Json'), true);
-assert.equal(windowsWrapperTemplate.includes('MCP preflight reported degraded startup posture; continuing interactive attach.'), true);
+assert.equal(windowsWrapperTemplate.includes('MCP preflight reported degraded startup posture; continuing server attach.'), true);
 assert.equal(windowsWrapperTemplate.includes('MCP state:'), true);
 assert.equal(windowsWrapperTemplate.includes('Recommended action:'), true);
 assert.equal(windowsWrapperTemplate.includes('Preflight review:'), true);

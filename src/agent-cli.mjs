@@ -1169,7 +1169,7 @@ function createMcpPreflightArtifactSnapshot(preflightArtifact) {
   };
 }
 
-function createInteractiveHeaderRows({
+function createRuntimeHeaderRows({
   mcpServers,
   allTools,
   sessionSettings,
@@ -3169,7 +3169,9 @@ function collectSessionRootEntries(root) {
 
 function resolveSessionSyncDirectoryRoots({ siteRoot, session, naradaDir = NARADA_DIR } = {}) {
   const normalizedSiteRoot = resolve(siteRoot);
-  const agentSessionsRoot = existsSync(join(normalizedSiteRoot, 'agent-sessions'))
+  // Legacy sync/import compatibility only. Active runtime sessions live under
+  // .narada/crew/nars-sessions/<session>/session.jsonl.
+  const legacyAgentSessionsRoot = existsSync(join(normalizedSiteRoot, 'agent-sessions'))
     ? join(normalizedSiteRoot, 'agent-sessions')
     : (existsSync(join(normalizedSiteRoot, '.ai', 'runtime', 'agent-sessions'))
       ? join(normalizedSiteRoot, '.ai', 'runtime', 'agent-sessions')
@@ -3182,7 +3184,7 @@ function resolveSessionSyncDirectoryRoots({ siteRoot, session, naradaDir = NARAD
   if (existsSync(join(normalizedSiteRoot, 'nars-sessions', session))) {
     return {
       siteRoot: normalizedSiteRoot,
-      sessionDir: agentSessionsRoot,
+      sessionDir: legacyAgentSessionsRoot,
       carrierDir: join(normalizedSiteRoot, 'nars-sessions', session),
       naradaDir,
       hasCarrierDir: true,
@@ -3191,7 +3193,7 @@ function resolveSessionSyncDirectoryRoots({ siteRoot, session, naradaDir = NARAD
   if (existsSync(join(normalizedSiteRoot, 'agent-sessions', `${session}.jsonl`))) {
     return {
       siteRoot: normalizedSiteRoot,
-      sessionDir: agentSessionsRoot,
+      sessionDir: legacyAgentSessionsRoot,
       carrierDir: join(normalizedSiteRoot, '.narada', 'crew', 'nars-sessions', session),
       naradaDir,
       hasCarrierDir: true,
@@ -3199,7 +3201,7 @@ function resolveSessionSyncDirectoryRoots({ siteRoot, session, naradaDir = NARAD
   }
   return {
     siteRoot: normalizedSiteRoot,
-    sessionDir: agentSessionsRoot,
+    sessionDir: legacyAgentSessionsRoot,
     carrierDir: carrierSessionRoot,
     naradaDir,
     hasCarrierDir: true,
@@ -4367,7 +4369,7 @@ function writeDurableTextFile(path, text, encoding = 'utf8') {
   renameSync(tempPath, path);
 }
 
-function startInteractiveControlJsonlWatcher({ controlPath, inputQueue }) {
+function startControlJsonlWatcher({ controlPath, inputQueue }) {
   mkdirSync(resolve(controlPath, '..'), { recursive: true });
   if (!existsSync(controlPath)) {
     writeDurableTextFile(controlPath, '', 'utf8');
@@ -4392,7 +4394,7 @@ function startInteractiveControlJsonlWatcher({ controlPath, inputQueue }) {
     buffer = lines.pop() ?? '';
     for (const line of lines) {
       if (!line.trim()) continue;
-      chain = chain.then(() => handleInteractiveControlLine(line, { inputQueue })).catch((error) => {
+      chain = chain.then(() => handleControlLine(line, { inputQueue })).catch((error) => {
         printCliMessage(`Control directive failed: ${error instanceof Error ? error.message : String(error)}`);
       });
     }
@@ -4406,13 +4408,13 @@ function startInteractiveControlJsonlWatcher({ controlPath, inputQueue }) {
   };
 }
 
-function shouldDeferInteractiveInput(event, { rl, promptState } = {}) {
+function shouldDeferQueuedInput(event, { rl, promptState } = {}) {
   return classifyInputRuntimeHold(event, {
     composerHasDraft: Boolean(promptState?.active && readlineHasNonWhitespaceInput(rl)),
   }).should_defer;
 }
 
-async function handleInteractiveControlLine(line, { inputQueue }) {
+async function handleControlLine(line, { inputQueue }) {
   let request;
   try {
     request = JSON.parse(line);
@@ -5835,7 +5837,7 @@ async function submitUserInput({
   if (!emit && record.source !== 'manual_operator') {
     printInputRecord(record);
   }
-  const progress = !emit && !turn ? startInteractiveTurnProgress({
+  const progress = !emit && !turn ? startTurnProgress({
     readlineInterface: rl,
     onOperatorDirective: async (content) => {
       if (!inputQueue) return null;
@@ -6969,7 +6971,7 @@ function directiveAcceptedEvidence(event, { agentId, carrierSessionId, acceptedA
   };
 }
 
-function startInteractiveTurnProgress({ onOperatorDirective = null, readlineInterface = null } = {}) {
+function startTurnProgress({ onOperatorDirective = null, readlineInterface = null } = {}) {
   const abortController = new AbortController();
   const turn = {
     turnId: randomId(),
@@ -7157,22 +7159,6 @@ function normalizeInputRecord(input) {
     authority_ref: input?.authority_ref ?? null,
     directive_id: input?.directive_id ?? null,
   };
-}
-
-function buildProgrammaticInputs(opts) {
-  const inputs = [];
-  const source = opts.systemDirective === true
-    ? 'system_directive'
-    : opts.operatorDirective === true
-      ? 'operator_directive'
-      : 'programmatic_operator';
-  for (const message of opts.messages ?? []) {
-    inputs.push({ content: message, source, authority_ref: opts.authorityRef ?? null });
-  }
-  for (const filePath of opts.messageFiles ?? []) {
-    inputs.push({ content: readFileSync(resolve(filePath), 'utf8'), source, authority_ref: opts.authorityRef ?? null });
-  }
-  return inputs;
 }
 
 // ---------------------------------------------------------------------------
@@ -9831,7 +9817,7 @@ function parseArgs(argv) {
     } else if (argv[i] === '--no-color') {
       opts.color = false;
     } else if (argv[i] === '--control-jsonl' && i + 1 < argv.length) {
-      opts.controlJsonl = argv[i + 1];
+      markRemovedConversationArg('--control-jsonl');
       i++;
     } else if (argv[i] === '--model' && i + 1 < argv.length) {
       opts.model = argv[i + 1];
@@ -9925,7 +9911,6 @@ export {
   PROVIDER_SUPPORT_STATES,
   REQUEST_ADAPTERS,
   assertApiKeyConfigured,
-  buildProgrammaticInputs,
   buildAnthropicMessagesRequest,
   buildCodexExecArgs,
   buildCodexMcpServerArgs,
@@ -9941,7 +9926,7 @@ export {
   cleanOpenAiMessages,
   codexExecMcpToolEventSummary,
   consumeOperatorDirectiveInputText,
-  createInteractiveHeaderRows,
+  createRuntimeHeaderRows,
   createMcpPreflightArtifactSnapshot,
   createMcpPreflightDiagnosticEntry,
   createMcpPreflightPayload,
@@ -9955,7 +9940,7 @@ export {
   executeCarrierHostCommand,
   readCarrierHostCommandOutputRef,
   readMcpPreflightArtifact,
-  handleInteractiveControlLine,
+  handleControlLine,
   handleSlashCommand,
   messagesWithCarrierGoal,
   mcpToolEffectAdmissionEvidence,
@@ -9966,8 +9951,9 @@ export {
   normalizeThinkingLevel,
   normalizeCarrierGoal,
   normalizeInputRecord,
-  shouldDeferInteractiveInput,
-  startInteractiveControlJsonlWatcher,
+  shouldDeferQueuedInput,
+  startControlJsonlWatcher,
+  startTurnProgress,
   parseArgs,
   parseBooleanEnv,
   parseColorEnv,
@@ -10043,7 +10029,7 @@ export {
 
 if (isEntrypoint) {
   if (options.help) {
-    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] --server [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-diagnostics] [--mcp-preflight-diagnostics-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--mcp-preflight-diagnostics-filter <all|startup|runtime>] [--session-inventory] [--session-inventory-json] [--session-inventory-operations] [--session-inventory-operations-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-inventory-events-count <n>] [--session-operations] [--session-operations-json] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-events-count <n>] [--session-sync] [--session-sync-json] [--session-sync-dry-run] [--session-sync-delete] [--session-sync-target <file://url|path|site:alias|cloud:alias>] [--session-sync-direction <upload|download|bidirectional>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>]`);
+    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] --server [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-diagnostics] [--mcp-preflight-diagnostics-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--mcp-preflight-diagnostics-filter <all|startup|runtime>] [--session-inventory] [--session-inventory-json] [--session-inventory-operations] [--session-inventory-operations-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-inventory-events-count <n>] [--session-operations] [--session-operations-json] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-events-count <n>] [--session-sync] [--session-sync-json] [--session-sync-dry-run] [--session-sync-delete] [--session-sync-target <file://url|path|site:alias|cloud:alias>] [--session-sync-direction <upload|download|bidirectional>] [--stream|--no-stream] [--color|--no-color]`);
     console.log('Conversation runtime is server-only. Use agent-runtime-server or --server JSONL stdio; legacy terminal and one-shot message modes have been removed.');
     console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, KIMI_API_KEY, KIMI_API_BASE_URL, KIMI_MODEL, KIMI_CODE_API_KEY, KIMI_CODE_API_BASE_URL, KIMI_CODE_MODEL, ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, ANTHROPIC_MODEL, CODEX_MODEL, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_SITE_ROOT, NARADA_CLOUD_ROOT`);
     process.exit(0);

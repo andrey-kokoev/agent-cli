@@ -18,7 +18,7 @@ pnpm run verify:native-codex-mcp
 
 Agent CLI exposes discovered MCP tools in three places:
 
-- `/help` lists the interactive commands available in a running session.
+- `/help` lists the slash commands available in a running server-backed session.
 - `/tools [filter]` shows discovered MCP tools, their owning server, and compact input schemas.
 - Runtime status events include a structured `mcp_tools` array for programmatic callers.
 
@@ -43,10 +43,10 @@ starting the session. Nested Codex runs will use the JSON handoff fallback inste
 
 ## Carrier host commands
 
-In interactive mode, prefix a line with `!` to execute a command on the carrier host instead
-of sending it to the provider, for example `! git status`. Host commands emit carrier session
-evidence and do not create provider turns. Set `NARADA_AGENT_CLI_HOST_COMMANDS=false` to
-disable this execution path.
+In a server-backed session, prefix an operator input line with `!` to execute a command on
+the carrier host instead of sending it to the provider, for example `! git status`. Host
+commands emit carrier session evidence and do not create provider turns. Set
+`NARADA_AGENT_CLI_HOST_COMMANDS=false` to disable this execution path.
 
 ## Carrier session goal
 

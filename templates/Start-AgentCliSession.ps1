@@ -701,7 +701,7 @@ if ($preflightExitCode -eq 1) {
     exit 1
 }
 if ($preflightExitCode -eq 2) {
-    Write-Warning "MCP preflight reported degraded startup posture; continuing interactive attach."
+    Write-Warning "MCP preflight reported degraded startup posture; continuing server attach."
 }
 Write-Host ""
 Set-Location $WorkDir
