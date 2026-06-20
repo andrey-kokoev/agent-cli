@@ -22,9 +22,12 @@ import {
   buildAnthropicMessagesRequest,
   buildCodexMcpRequest,
   buildChildProcessEnv,
+  buildCodexMcpServerArgs,
+  buildCodexSubprocessEnv,
   buildCodexExecArgs,
   codexExecMcpConfigArgs,
   codexExecConfigToml,
+  codexRequestMcpServers,
   codexExecMcpToolEventSummary,
   buildOpenAiChatRequest,
   codexExecEventText,
@@ -467,6 +470,32 @@ assert.equal(nativeControlEvents.length, 1);
 assert.equal(nativeControlEvents[0].source, 'system_directive');
 assert.equal(nativeControlEvents[0].source_kind, 'system');
 assert.equal(nativeControlEvents[0].directive_id, 'dir_native');
+const carrierInputDeliverEvents = [];
+const carrierInputDeliverQueue = createInputQueue({
+  drain: async (event) => { carrierInputDeliverEvents.push(event); return { terminal_state: 'completed' }; },
+});
+await handleInteractiveControlLine(JSON.stringify({
+  method: 'carrier.input.deliver',
+  params: {
+    input: {
+      schema: 'narada.carrier.input_event.v1',
+      event_id: 'input_carrier_deliver_system_1',
+      source_kind: 'system',
+      source_id: 'sonar.system.directive_emitter',
+      transport: 'carrier_server_api',
+      delivery_mode: 'admit_for_current_turn',
+      hold_condition: null,
+      content: 'carrier input deliver directive',
+      created_at: '2026-05-30T00:00:00.000Z',
+      authority_ref: 'dir_carrier_deliver_system',
+      directive_id: 'dir_carrier_deliver_system',
+      metadata: { directive_provenance: { kind: 'system_directive' } },
+    },
+  },
+}), { inputQueue: carrierInputDeliverQueue });
+assert.equal(carrierInputDeliverEvents.length, 1);
+assert.equal(carrierInputDeliverEvents[0].source_kind, 'system');
+assert.equal(carrierInputDeliverEvents[0].directive_id, 'dir_carrier_deliver_system');
 const observerControlEvents = [];
 const observerControlQueue = createInputQueue({
   drain: async (event) => { observerControlEvents.push(event); return { terminal_state: 'completed_without_provider' }; },
@@ -2794,6 +2823,27 @@ const expectedAdapters = {
   'codex-subscription': 'codex-mcp-server',
 };
 assert.equal(windowsWrapperTemplate.includes("[ValidateSet('openai-api', 'kimi-api', 'kimi-code-api', 'anthropic-api', 'codex-subscription')]"), true);
+assert.equal(windowsWrapperTemplate.includes('$CredentialEnvNames = @($providerDefault.credential_env_names'), true);
+assert.equal(windowsWrapperTemplate.includes('$CredentialSecretRef = if ($providerDefault.credential_secret_ref)'), true);
+assert.equal(windowsWrapperTemplate.includes('function Get-ProviderCredentialFromSecretStore'), true);
+assert.equal(windowsWrapperTemplate.includes('Set-Secret -Name "$CredentialSecretRef"'), true);
+assert.equal(windowsWrapperTemplate.includes('$credentialHint = if ($CredentialEnvNames.Count -gt 0) { ($CredentialEnvNames -join \' or \') }'), true);
+assert.equal(windowsWrapperTemplate.includes('$ProviderConfigCredentialValue = $null'), true);
+assert.equal(windowsWrapperTemplate.includes('$ProviderConfigCredentialValue = [string]$config.api_key'), true);
+assert.equal(windowsWrapperTemplate.includes('Config file fallback: $ConfigPath'), true);
+assert.equal(/NARADA_[A-Z0-9_]*_API_KEY/.test(windowsWrapperTemplate), false);
+if (process.platform === 'win32') {
+  const wrapperSyntaxCheck = spawnSync('pwsh', [
+    '-NoProfile',
+    '-Command',
+    [
+      '$tokens=$null;$errors=$null;',
+      "[System.Management.Automation.Language.Parser]::ParseFile('templates/Start-AgentCliSession.ps1',[ref]$tokens,[ref]$errors) | Out-Null;",
+      'if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }',
+    ].join(''),
+  ], { cwd: fileURLToPath(new URL('..', import.meta.url)), encoding: 'utf8', windowsHide: true });
+  assert.equal(wrapperSyntaxCheck.status, 0, wrapperSyntaxCheck.stderr);
+}
 assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_API_BASE_URL"), true);
 assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_MODEL"), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventory'), true);
@@ -3012,11 +3062,39 @@ assert.equal(codexMcpRequest.arguments['developer-instructions'].includes('input
 assert.equal(codexMcpRequest.arguments['developer-instructions'].includes('"path":{"type":"string"}'), true);
 assert.equal(codexMcpRequest.arguments.native_mcp_tools, true);
 assert.equal(codexMcpRequest.arguments.mcpServers['local-filesystem'].config.command, 'node');
+assert.equal(codexRequestMcpServers(codexMcpRequest, {}).hasOwnProperty('local-filesystem'), true);
+assert.deepEqual(buildCodexMcpServerArgs(), ['mcp-server']);
+assert.equal(buildCodexMcpServerArgs().includes('-c'), false);
 if (process.platform === 'win32') {
   assert.equal(codexMcpRequest.arguments.sandbox, 'danger-full-access');
 } else {
   assert.equal(codexMcpRequest.arguments.sandbox, 'workspace-write');
 }
+const codexConfigSessionDir = join(tempDir, 'codex-config-session');
+rmSync(codexConfigSessionDir, { recursive: true, force: true });
+const ambientCodexHome = join(tempDir, 'real-codex-auth-home');
+mkdirSync(ambientCodexHome, { recursive: true });
+writeFileSync(join(ambientCodexHome, 'auth.json'), '{"access_token":"fixture"}\n');
+writeFileSync(join(ambientCodexHome, 'config.toml'), '[mcp_servers."narada-andrey-agent-context"]\ncommand = "node"\n');
+const previousCodexHome = process.env.CODEX_HOME;
+process.env.CODEX_HOME = ambientCodexHome;
+const codexSubprocessEnv = buildCodexSubprocessEnv(codexMcpRequest.arguments.mcpServers, {
+  sessionDir: codexConfigSessionDir,
+});
+if (previousCodexHome === undefined) {
+  delete process.env.CODEX_HOME;
+} else {
+  process.env.CODEX_HOME = previousCodexHome;
+}
+assert.equal(codexSubprocessEnv.CODEX_HOME, join(codexConfigSessionDir, 'codex-home'));
+assert.equal(codexSubprocessEnv.CODEX_CONFIG_DIR, codexSubprocessEnv.CODEX_HOME);
+assert.notEqual(codexSubprocessEnv.CODEX_HOME, ambientCodexHome);
+assert.equal(readFileSync(join(codexSubprocessEnv.CODEX_HOME, 'auth.json'), 'utf8'), '{"access_token":"fixture"}\n');
+const generatedCodexConfig = readFileSync(join(codexSubprocessEnv.CODEX_HOME, 'config.toml'), 'utf8');
+assert.equal(generatedCodexConfig.includes('[mcp_servers."local-filesystem"]'), true);
+assert.equal(generatedCodexConfig.includes('D:/code/mcp-surfaces/packages/local-filesystem-mcp/dist/src/main.js'), true);
+assert.equal(generatedCodexConfig.includes('narada-andrey-agent-context'), false);
+assert.equal(generatedCodexConfig.includes('C:/Users/Andrey/Narada'), false);
 const codexJsonFallbackRequest = buildCodexMcpRequest([
   { role: 'user', content: 'Say ok.' },
 ], tools, {
@@ -3601,11 +3679,15 @@ assert.equal(slashQueue.pendingSystemDirectiveCount, 1);
 
 assert.throws(
   () => assertApiKeyConfigured('anthropic-api', ''),
-  /Missing API key for anthropic-api\. Set ANTHROPIC_API_KEY or NARADA_AI_API_KEY\./,
+  /Missing API key for anthropic-api\. Set ANTHROPIC_API_KEY\./,
 );
 assert.throws(
   () => assertApiKeyConfigured('openai-api', ''),
-  /Missing API key for openai-api\. Set NARADA_AI_API_KEY\./,
+  /Missing API key for openai-api\. Set OPENAI_API_KEY\./,
+);
+assert.throws(
+  () => assertApiKeyConfigured('kimi-api', ''),
+  /Missing API key for kimi-api\. Set KIMI_API_KEY\./,
 );
 assert.doesNotThrow(() => assertApiKeyConfigured('codex-subscription', ''));
 

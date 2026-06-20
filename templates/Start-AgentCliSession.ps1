@@ -202,7 +202,54 @@ if (-not $providerDefault) {
     Write-Error "No provider metadata found for $IntelligenceProvider in $ProviderMetadataPath"
     exit 1
 }
+$CredentialEnvNames = @($providerDefault.credential_env_names | ForEach-Object { [string]$_ } | Where-Object { $_ })
+$PrimaryCredentialEnvName = if ($CredentialEnvNames.Count -gt 0) { $CredentialEnvNames[0] } else { $null }
+$CredentialSecretRef = if ($providerDefault.credential_secret_ref) { [string]$providerDefault.credential_secret_ref } elseif ($CredentialEnvNames.Count -gt 0) { "narada/provider/$IntelligenceProvider/api-key" } else { $null }
+$ProviderConfigCredentialValue = $null
 $env:NARADA_INTELLIGENCE_PROVIDER = $IntelligenceProvider
+
+function Test-ProviderSecretStoreEnabled {
+    $mode = [Environment]::GetEnvironmentVariable('NARADA_PROVIDER_SECRET_STORE', 'Process')
+    if (-not $mode) { return $true }
+    return @('0', 'false', 'off', 'disabled', 'none') -notcontains $mode.Trim().ToLowerInvariant()
+}
+
+function Get-ProviderCredentialFromSecretStore {
+    if (-not $CredentialSecretRef) { return $null }
+    if (-not (Test-ProviderSecretStoreEnabled)) { return $null }
+    if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.SecretManagement)) { return $null }
+    try {
+        Import-Module Microsoft.PowerShell.SecretManagement -ErrorAction Stop
+        $secret = Get-Secret -Name $CredentialSecretRef -AsPlainText -ErrorAction SilentlyContinue
+        if ($secret) { return [string]$secret }
+    } catch {
+        return $null
+    }
+    return $null
+}
+
+function Get-ProviderCredentialFromEnvironment {
+    foreach ($name in $CredentialEnvNames) {
+        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ($value) { return $value }
+    }
+    return $null
+}
+
+function Get-ProviderCredentialValue {
+    $secretValue = Get-ProviderCredentialFromSecretStore
+    if ($secretValue) { return $secretValue }
+    $envValue = Get-ProviderCredentialFromEnvironment
+    if ($envValue) { return $envValue }
+    return $ProviderConfigCredentialValue
+}
+
+function Set-PrimaryProviderCredential {
+    param([string]$Value)
+    if ($PrimaryCredentialEnvName -and $Value) {
+        [Environment]::SetEnvironmentVariable($PrimaryCredentialEnvName, $Value, 'Process')
+    }
+}
 
 function Import-DotEnvFile {
     param([Parameter(Mandatory)][string]$Path)
@@ -234,8 +281,8 @@ if ($EffectiveConfigPath) {
     $config = Get-Content $EffectiveConfigPath -Raw | ConvertFrom-Json
     $configProvider = if ($config.provider) { [string]$config.provider } else { 'openai-api' }
     if ($configProvider -eq $IntelligenceProvider) {
-        if ($config.api_key -and -not $env:NARADA_AI_API_KEY) {
-            $env:NARADA_AI_API_KEY = $config.api_key
+        if ($config.api_key) {
+            $ProviderConfigCredentialValue = [string]$config.api_key
         }
         if ($config.base_url -and -not $env:NARADA_AI_BASE_URL) {
             $env:NARADA_AI_BASE_URL = $config.base_url
@@ -245,6 +292,8 @@ if ($EffectiveConfigPath) {
         }
     }
 }
+$ProviderCredentialValue = Get-ProviderCredentialValue
+Set-PrimaryProviderCredential -Value $ProviderCredentialValue
 
 # Set window title for OSL binding and general identification
 $Host.UI.RawUI.WindowTitle = $IdentityName
@@ -265,16 +314,6 @@ if (-not $env:NARADA_AI_MODEL) {
         $env:NARADA_AI_MODEL = $providerDefault.default_model
     }
 }
-if ($IntelligenceProvider -eq 'kimi-api' -and -not $env:NARADA_AI_API_KEY -and $env:NARADA_KIMI_API_KEY) {
-    $env:NARADA_AI_API_KEY = $env:NARADA_KIMI_API_KEY
-}
-if ($IntelligenceProvider -eq 'kimi-code-api' -and -not $env:NARADA_AI_API_KEY -and $env:KIMI_CODE_API_KEY) {
-    $env:NARADA_AI_API_KEY = $env:KIMI_CODE_API_KEY
-}
-if ($IntelligenceProvider -eq 'anthropic-api' -and -not $env:NARADA_AI_API_KEY -and $env:ANTHROPIC_API_KEY) {
-    $env:NARADA_AI_API_KEY = $env:ANTHROPIC_API_KEY
-}
-
 # Validate node is available
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
@@ -289,13 +328,13 @@ if (-not (Test-Path $AgentCliPath)) {
 }
 
 # Validate API key is configured
-if ($IntelligenceProvider -ne 'codex-subscription' -and -not $env:NARADA_AI_API_KEY) {
+if ($IntelligenceProvider -ne 'codex-subscription' -and -not $ProviderCredentialValue) {
+    $credentialHint = if ($CredentialEnvNames.Count -gt 0) { ($CredentialEnvNames -join ' or ') } else { 'the provider-specific API key environment variable' }
     Write-Error @"
-No AI API key configured for provider '$IntelligenceProvider'. Set one of:
-  - Environment variable: `$env:NARADA_AI_API_KEY = 'sk-...'
-  - For kimi-api: `$env:NARADA_KIMI_API_KEY = '...'
-  - For anthropic-api: `$env:ANTHROPIC_API_KEY = 'sk-ant-...'
-  - Config file: $ConfigPath  (add `"api_key`": `"sk-...`" )
+No AI API key configured for provider '$IntelligenceProvider'.
+  - SecretStore: Set-Secret -Name "$CredentialSecretRef" -Secret "<api-key>"
+  - Environment fallback: $credentialHint
+  - Config file fallback: $ConfigPath  (add `"api_key`": `"<api-key>`" )
 "@
     exit 1
 }
@@ -602,10 +641,6 @@ if ($McpPreflightDiagnosticsJson) {
     exit $LASTEXITCODE
 }
 
-    & node $AgentCliPath @preflightRecoveryJsonArgs
-    exit $LASTEXITCODE
-}
-
 $argList = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName)
 if ($AutoApprove) {
     $argList += '--auto-approve'
@@ -649,7 +684,6 @@ if ($preflight) {
     if ($preflight.artifact_path) {
         Write-Host ("  Preflight artifact:  {0}" -f $preflight.artifact_path) -ForegroundColor DarkGray
     }
-}
 }
 if ($preflightExitCode -eq 1) {
     Write-Error "MCP preflight failed."

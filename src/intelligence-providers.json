@@ -18,7 +18,8 @@
       "support_state": "verified_supported",
       "base_url_env_names": ["NARADA_AI_BASE_URL"],
       "model_env_names": ["NARADA_AI_MODEL"],
-      "credential_env_names": ["NARADA_AI_API_KEY"]
+      "credential_env_names": ["OPENAI_API_KEY"],
+      "credential_secret_ref": "narada/provider/openai-api/api-key"
     },
     "kimi-api": {
       "meaning": "Kimi/Moonshot API via OpenAI-compatible chat completions.",
@@ -28,7 +29,8 @@
       "support_state": "verified_supported",
       "base_url_env_names": ["NARADA_KIMI_API_BASE_URL", "NARADA_AI_BASE_URL"],
       "model_env_names": ["NARADA_KIMI_MODEL", "NARADA_AI_MODEL"],
-      "credential_env_names": ["NARADA_KIMI_API_KEY", "NARADA_AI_API_KEY"]
+      "credential_env_names": ["KIMI_API_KEY"],
+      "credential_secret_ref": "narada/provider/kimi-api/api-key"
     },
     "kimi-code-api": {
       "meaning": "Kimi Code API via OpenAI-compatible chat completions; uses KIMI_CODE_API_KEY against api.kimi.com/coding/v1.",
@@ -38,7 +40,8 @@
       "support_state": "verified_supported",
       "base_url_env_names": ["NARADA_KIMI_CODE_API_BASE_URL", "NARADA_AI_BASE_URL"],
       "model_env_names": ["NARADA_KIMI_CODE_MODEL", "NARADA_AI_MODEL"],
-      "credential_env_names": ["KIMI_CODE_API_KEY", "NARADA_AI_API_KEY"]
+      "credential_env_names": ["KIMI_CODE_API_KEY"],
+      "credential_secret_ref": "narada/provider/kimi-code-api/api-key"
     },
     "anthropic-api": {
       "meaning": "Anthropic API via the Anthropic Messages API.",
@@ -48,7 +51,8 @@
       "support_state": "verified_supported",
       "base_url_env_names": ["NARADA_AI_BASE_URL"],
       "model_env_names": ["NARADA_AI_MODEL"],
-      "credential_env_names": ["ANTHROPIC_API_KEY", "NARADA_AI_API_KEY"]
+      "credential_env_names": ["ANTHROPIC_API_KEY"],
+      "credential_secret_ref": "narada/provider/anthropic-api/api-key"
     },
     "codex-subscription": {
       "meaning": "Local Codex CLI subscription auth via codex mcp-server; no OpenAI API key or API billing path.",
