@@ -5465,9 +5465,10 @@ function runCodexTranscriptStats(value = '') {
   const configuredRoot = process.env.NARADA_TOOLS_ROOT;
   const defaultRoot = process.platform === 'win32' ? 'D:/code/narada-tools' : '/home/andrey/src/narada-tools';
   const candidateRoot = configuredRoot || defaultRoot;
-  const scriptPath = join(candidateRoot, 'packages', 'codex-transcript-stats', 'src', 'codex-transcript-stats.mjs');
-  const command = existsSync(scriptPath) ? process.execPath : 'codex-transcript-stats';
-  const args = existsSync(scriptPath) ? [scriptPath, ...defaultArgs] : defaultArgs;
+  const scriptPath = join(candidateRoot, 'packages', 'codex-transcript-stats', 'bin', 'codex-transcript-stats.js');
+  const hasLocalWrapper = existsSync(scriptPath);
+  const command = hasLocalWrapper ? process.execPath : 'codex-transcript-stats';
+  const args = hasLocalWrapper ? [scriptPath, ...defaultArgs] : defaultArgs;
   const cwd = existsSync(candidateRoot) ? candidateRoot : process.cwd();
   const result = spawnSync(command, args, {
     cwd,
@@ -5481,7 +5482,7 @@ function runCodexTranscriptStats(value = '') {
       status: 'unavailable',
       message: [
         'Codex transcript stats unavailable.',
-        `Expected tool at ${scriptPath} or codex-transcript-stats on PATH.`,
+        `Expected package bin wrapper at ${scriptPath} or codex-transcript-stats on PATH.`,
         `Error: ${result.error.message}`,
       ].join('\n'),
     };
@@ -7427,11 +7428,25 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
   input.setEncoding('utf8');
   let buffer = '';
   let orderedServerRequests = Promise.resolve();
+  let orderedServerRequestActive = false;
   const dispatchRequestLine = (line) => {
     const runRequest = () => handleServerRequestLine(line, { state, messages, allTools, mcpServers, mcpPreflightArtifact, emit, callChatApiFn });
-    const pending = isConcurrentServerRequestLine(line)
-      ? runRequest()
-      : (orderedServerRequests = orderedServerRequests.then(runRequest, runRequest));
+    let pending;
+    if (isConcurrentServerRequestLine(line)) {
+      pending = runRequest();
+    } else {
+      const runOrderedRequest = async () => {
+        orderedServerRequestActive = true;
+        try {
+          return await runRequest();
+        } finally {
+          orderedServerRequestActive = false;
+        }
+      };
+      pending = orderedServerRequestActive
+        ? (orderedServerRequests = orderedServerRequests.then(runOrderedRequest, runOrderedRequest))
+        : (orderedServerRequests = runOrderedRequest());
+    }
     const tracked = pending
       .catch((error) => {
         emit('error', {
@@ -7468,6 +7483,7 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
 function isConcurrentServerRequestLine(line) {
   try {
     const request = JSON.parse(line);
+    if (request?.method === 'conversation.interrupt') return true;
     if (request?.method === 'session.operations') return false;
     if (request?.method === 'session.recovery') return false;
     if (request?.method === 'preflight.recovery') return false;

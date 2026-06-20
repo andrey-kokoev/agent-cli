@@ -3284,6 +3284,29 @@ try {
   process.stdout.write = originalSlashStdoutWrite;
 }
 assert.equal(printedStatsMessages.some((message) => message.includes('stats args: --date 2026-06-01 --top 3')), true);
+const statsToolsRoot = mkdtempSync(join(tmpdir(), 'narada-agent-cli-stats-tools-'));
+const originalNaradaToolsRoot = process.env.NARADA_TOOLS_ROOT;
+try {
+  const statsBinDir = join(statsToolsRoot, 'packages', 'codex-transcript-stats', 'bin');
+  mkdirSync(statsBinDir, { recursive: true });
+  writeFileSync(join(statsBinDir, 'codex-transcript-stats.js'), `
+console.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));
+`, 'utf8');
+  process.env.NARADA_TOOLS_ROOT = statsToolsRoot;
+  const statsResult = runCodexTranscriptStats('--date 2026-06-01 --top 3');
+  assert.equal(statsResult.status, 'ok');
+  assert.deepEqual(JSON.parse(statsResult.message), {
+    argv: ['--date', '2026-06-01', '--top', '3'],
+    cwd: statsToolsRoot,
+  });
+} finally {
+  if (originalNaradaToolsRoot === undefined) {
+    delete process.env.NARADA_TOOLS_ROOT;
+  } else {
+    process.env.NARADA_TOOLS_ROOT = originalNaradaToolsRoot;
+  }
+  rmSync(statsToolsRoot, { recursive: true, force: true });
+}
 assert.equal(normalizeCarrierGoal('  ship   the  carrier   goal  '), 'ship the carrier goal');
 const goalSettings = { goal: '' };
 assert.deepEqual(handleGoalCommand('', goalSettings), {
@@ -5258,6 +5281,39 @@ try {
   if (previousSiteRoot === undefined) delete process.env.NARADA_SITE_ROOT;
   else process.env.NARADA_SITE_ROOT = previousSiteRoot;
   rmSync(interruptServerSite, { recursive: true, force: true });
+}
+
+const sameChunkInterruptServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-same-chunk-interrupt-server-'));
+mkdirSync(join(sameChunkInterruptServerSite, '.ai', 'mcp'), { recursive: true });
+process.env.NARADA_SITE_ROOT = sameChunkInterruptServerSite;
+try {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let interruptStdout = '';
+  output.setEncoding('utf8');
+  output.on('data', (chunk) => { interruptStdout += chunk; });
+  const serverDone = runServerMode({
+    input,
+    output,
+    callChatApiFn: async () => {
+      await delayForTest(75);
+      return { choices: [{ message: { role: 'assistant', content: 'late ack' } }] };
+    },
+  });
+  input.write([
+    JSON.stringify({ id: 'send-same-chunk-1', method: 'conversation.send', params: { message: 'long turn' } }),
+    JSON.stringify({ id: 'interrupt-same-chunk-1', method: 'conversation.interrupt', params: {} }),
+    '',
+  ].join('\n'));
+  input.end();
+  await serverDone;
+  const interruptEvents = interruptStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+  assert.equal(interruptEvents.some((event) => event.event === 'turn_interrupted' && event.request_id === 'interrupt-same-chunk-1'), true);
+  assert.equal(interruptEvents.some((event) => event.event === 'turn_complete' && event.request_id === 'send-same-chunk-1' && event.terminal_state === 'interrupted'), true);
+} finally {
+  if (previousSiteRoot === undefined) delete process.env.NARADA_SITE_ROOT;
+  else process.env.NARADA_SITE_ROOT = previousSiteRoot;
+  rmSync(sameChunkInterruptServerSite, { recursive: true, force: true });
 }
 
 const closedServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-closed-server-'));
