@@ -591,14 +591,16 @@ assert.equal(classifyCarrierHostCommandInput('! git status', { approvalMode: 'pr
 assert.deepEqual(parseArgs(['--stream', '--model', 'gpt-x']), { stream: true, model: 'gpt-x' });
 assert.deepEqual(parseArgs(['--no-stream', '--thinking', 'low']), { stream: false, thinking: 'low' });
 assert.deepEqual(parseArgs(['--color', '--no-color']), { color: false });
-assert.deepEqual(parseArgs(['--operator-directive', '--system-directive']), { operatorDirective: true, systemDirective: true });
-assert.deepEqual(parseArgs(['--enable-startup-system-directive']), { startupSystemDirective: true });
+assert.deepEqual(parseArgs(['--message', 'hello']), { removedConversationArgs: ['--message'] });
+assert.deepEqual(parseArgs(['--message-file', 'message.txt']), { removedConversationArgs: ['--message-file'] });
+assert.deepEqual(parseArgs(['--operator-directive', '--system-directive']), { removedConversationArgs: ['--operator-directive', '--system-directive'] });
+assert.deepEqual(parseArgs(['--enable-startup-system-directive']), { removedConversationArgs: ['--enable-startup-system-directive'] });
 assert.deepEqual(parseArgs(['--startup-system-directive', 'run startup sequence', '--startup-system-directive-delay-ms', '10000']), {
-  startupSystemDirective: true,
-  startupSystemDirectiveText: 'run startup sequence',
-  startupSystemDirectiveDelayMs: 10000,
+  removedConversationArgs: ['--startup-system-directive', '--startup-system-directive-delay-ms'],
 });
-assert.deepEqual(parseArgs(['--no-startup-system-directive']), { startupSystemDirective: false });
+assert.deepEqual(parseArgs(['--no-startup-system-directive']), { removedConversationArgs: ['--no-startup-system-directive'] });
+assert.deepEqual(parseArgs(['--interactive-after-message']), { removedConversationArgs: ['--interactive-after-message'] });
+assert.deepEqual(parseArgs(['--auto-approve']), { removedConversationArgs: ['--auto-approve'] });
 assert.deepEqual(parseArgs(['--control-jsonl', '.narada/control.jsonl']), { controlJsonl: '.narada/control.jsonl' });
 assert.deepEqual(parseArgs(['--mcp-preflight']), { mcpPreflight: true });
 assert.deepEqual(parseArgs(['--mcp-preflight-json']), { mcpPreflightJson: true });
@@ -2682,7 +2684,7 @@ assert.deepEqual(createSessionActivitySnapshot({
 }), {
   agent_id: 'narada.architect',
   runtime: 'agent-cli',
-  mode: 'interactive',
+  mode: 'server',
   started_at: '2026-06-14T00:00:00.000Z',
   session_event_count: 3,
   last_event_kind: 'input_completed',

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { createInterface, emitKeypressEvents } from 'node:readline';
 import { StringDecoder } from 'node:string_decoder';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync, openSync, writeSync, closeSync, fsyncSync, copyFileSync, renameSync, unlinkSync, rmSync } from 'node:fs';
 import { resolve, join, basename, dirname } from 'node:path';
@@ -83,9 +82,7 @@ let codexSubscriptionThreadId = null;
 const options = parseArgs(process.argv.slice(2));
 const IDENTITY = options.identity ?? 'narada.architect';
 const SESSION = options.session ?? IDENTITY.replace(/\./g, '-');
-const AUTO_APPROVE = true;
-const PROGRAMMATIC_INPUTS = buildProgrammaticInputs(options);
-const EXIT_AFTER_PROGRAMMATIC_INPUT = PROGRAMMATIC_INPUTS.length > 0 && options.interactiveAfterMessage !== true;
+const REMOVED_CONVERSATION_ARGS = options.removedConversationArgs ?? [];
 const MCP_PREFLIGHT_MODE = options.mcpPreflight === true;
 const MCP_PREFLIGHT_JSON_MODE = options.mcpPreflightJson === true;
 const MCP_PREFLIGHT_READ_MODE = options.mcpPreflightRead === true;
@@ -145,28 +142,13 @@ const UTILITY_COMMAND_MODE = isAgentCliUtilityCommandMode(options);
 const sessionSettings = {
   model: options.model ?? MODEL,
   thinking: normalizeThinkingLevel(options.thinking ?? THINKING_LEVEL),
-  stream: options.stream ?? parseBooleanEnv(process.env.NARADA_AGENT_CLI_STREAM, !SERVER_MODE),
+  stream: options.stream ?? parseBooleanEnv(process.env.NARADA_AGENT_CLI_STREAM, true),
   goal: createCarrierGoalState(process.env.NARADA_AGENT_CLI_GOAL ?? process.env.NARADA_CARRIER_GOAL ?? process.env.NARADA_GOAL ?? ''),
 };
 const transcriptDisplaySettings = {
   toolOutputs: parseBooleanEnv(process.env.NARADA_AGENT_CLI_TOOL_OUTPUTS, true),
   observerMuted: parseBooleanEnv(process.env.NARADA_AGENT_CLI_OBSERVER_MUTED, false),
 };
-const STARTUP_SYSTEM_DIRECTIVE = options.startupSystemDirectiveText
-  ?? process.env.NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE
-  ?? 'run startup sequence';
-const STARTUP_SYSTEM_DIRECTIVE_DELAY_MS = Number(options.startupSystemDirectiveDelayMs ?? process.env.NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_DELAY_MS ?? 10000);
-const STARTUP_SYSTEM_DIRECTIVE_ENABLED = options.startupSystemDirective === true
-  || options.startupSystemDirectiveText !== undefined
-  || parseBooleanEnv(process.env.NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_ENABLE, false);
-const SHOULD_RUN_STARTUP_SYSTEM_DIRECTIVE = STARTUP_SYSTEM_DIRECTIVE_ENABLED
-  && !SERVER_MODE
-  && !UTILITY_COMMAND_MODE
-  && PROGRAMMATIC_INPUTS.length === 0
-  && STARTUP_SYSTEM_DIRECTIVE.trim().length > 0
-  && Number.isFinite(STARTUP_SYSTEM_DIRECTIVE_DELAY_MS)
-  && STARTUP_SYSTEM_DIRECTIVE_DELAY_MS >= 0;
-
 const CHILD_PROCESS_ENV_ALLOWLIST = Object.freeze([
   'PATH',
   'Path',
@@ -1242,7 +1224,7 @@ function terminateChildProcessTree(child, { forceAfterMs = 1500 } = {}) {
 }
 
 const terminalStyle = createTerminalStyle({
-  enabled: options.color ?? parseColorEnv(process.env.NARADA_AGENT_CLI_COLOR, process.stdout.isTTY && !SERVER_MODE),
+  enabled: options.color ?? parseColorEnv(process.env.NARADA_AGENT_CLI_COLOR, false),
 });
 
 // Session persistence
@@ -1423,6 +1405,11 @@ async function main() {
     });
     return;
   }
+  if (REMOVED_CONVERSATION_ARGS.length > 0) {
+    console.error(`agent-cli removed conversation input flag(s): ${REMOVED_CONVERSATION_ARGS.join(', ')}. Use agent-runtime-server JSONL control input instead.`);
+    process.exitCode = 2;
+    return;
+  }
   if (!SERVER_MODE) {
     console.error('agent-cli non-server conversation runtime has been removed; launch through agent-runtime-server or pass --server for JSONL server mode.');
     process.exitCode = 2;
@@ -1440,162 +1427,6 @@ async function main() {
     });
   }
   await runServerMode();
-  return;
-
-  const mcpServers = await discoverAndStartMcpServers(SITE_ROOT);
-  const mcpPreflightArtifact = readMcpPreflightArtifact();
-
-  recordMcpStartupFailures(mcpServers);
-  const allTools = aggregateTools(mcpServers);
-  const rolePrompt = loadRolePrompt(IDENTITY, SITE_ROOT);
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  let controlWatcher = null;
-  const promptState = { active: false };
-
-  printHeaderRows(createInteractiveHeaderRows({
-    mcpServers,
-    allTools,
-    sessionSettings,
-    transcriptDisplaySettings,
-  }), { before: true, after: true });
-
-  let messages = loadSession(SESSION_PATH);
-  if (messages.length === 0 && rolePrompt) {
-    messages.push({ role: 'system', content: rolePrompt });
-  }
-  recordMcpPreflightArtifactLinkage({ preflightArtifact: mcpPreflightArtifact });
-
-  if (process.stdin.isTTY) {
-    emitKeypressEvents(process.stdin, rl);
-    process.stdin.on('keypress', (str, key) => {
-      if (!key) return;
-      if (key.ctrl && key.name === 'o') {
-        const lastAssistant = messages.slice().reverse().find((m) => m.role === 'assistant');
-        if (lastAssistant) {
-          const content = typeof lastAssistant.content === 'string'
-            ? lastAssistant.content
-            : JSON.stringify(lastAssistant.content);
-          if (copyToClipboard(content)) {
-            printCliMessage('Copied last assistant message to clipboard.');
-          } else {
-            printCliMessage('Failed to copy to clipboard.');
-          }
-        } else {
-          printCliMessage('No assistant message to copy.');
-        }
-      }
-    });
-    process.stdout.write('\x1b[?2004h');
-  }
-
-  const inputQueue = createInputQueue({
-    drain: (event) => submitUserInput({
-      input: event,
-      messages,
-      tools: allTools,
-      mcpServers,
-      rl,
-      inputQueue,
-      displaySettings: transcriptDisplaySettings,
-    }),
-    shouldDefer: (event) => shouldDeferInteractiveInput(event, { rl, promptState }),
-    onDeferred: (event, queueState) => {
-      if (event.source === 'system_directive') {
-        const count = queueState.pendingSystemDirectiveCount ?? 1;
-        printCliMessage(`Queued ${count} system directive${count === 1 ? '' : 's'}; waiting for operator input to be submitted or cleared.`);
-      }
-    },
-  });
-
-  for (const input of PROGRAMMATIC_INPUTS) {
-    await inputQueue.enqueue(normalizeInputEvent(input, { transport: 'programmatic' }), { drain: true });
-  }
-  if (EXIT_AFTER_PROGRAMMATIC_INPUT) {
-    inputQueue.finalizeSession();
-    rl.close();
-    for (const server of Object.values(mcpServers)) {
-      if (server.process) server.process.kill();
-    }
-    printHeader('Programmatic input processed. Goodbye.', { before: true });
-    return;
-  }
-
-  if (SHOULD_RUN_STARTUP_SYSTEM_DIRECTIVE) {
-    printCliMessage(`System directive scheduled in ${formatDuration(STARTUP_SYSTEM_DIRECTIVE_DELAY_MS)}.`);
-    setTimeout(() => {
-      inputQueue.enqueue(normalizeInputEvent({
-        content: STARTUP_SYSTEM_DIRECTIVE,
-        source: 'system_directive',
-        authority_ref: 'agent-cli-startup-system-directive',
-      }, { transport: 'programmatic' }), { drain: true }).catch((error) => {
-        printCliMessage(`Startup system directive failed: ${error instanceof Error ? error.message : String(error)}`);
-      });
-    }, STARTUP_SYSTEM_DIRECTIVE_DELAY_MS);
-  }
-
-  if (options.controlJsonl) {
-    controlWatcher = startInteractiveControlJsonlWatcher({
-      controlPath: resolve(options.controlJsonl),
-      inputQueue,
-    });
-  }
-
-  while (true) {
-    try {
-      const promptLabel = `operator -> ${IDENTITY}`;
-      promptState.active = true;
-      const userInput = await question(rl, `${styleInputRouteLabel(promptLabel)}${terminalStyle.muted('>')} `);
-      promptState.active = false;
-      if (userInput === '__READLINE_CLOSED__') break;
-      rewriteSubmittedPrompt(promptLabel, userInput);
-      const slashCommand = await handleSlashCommand(userInput, { mcpServers, allTools, inputQueue, carrierState: {}, mcpPreflightArtifact, executeGoalOnSet: true });
-      if (slashCommand === 'exit') break;
-      if (slashCommand && typeof slashCommand === 'object' && slashCommand.action === 'dispatch_goal') {
-        await inputQueue.enqueue(normalizeInputEvent(
-          { content: slashCommand.content, source: 'manual_operator' },
-          { transport: 'terminal' },
-        ), { drain: true });
-        continue;
-      }
-      if (slashCommand === 'handled') {
-        await inputQueue.drainUntilIdle();
-        continue;
-      }
-      const hostCommand = classifyCarrierHostCommandInput(userInput);
-      if (hostCommand.is_host_command) {
-        await executeCarrierHostCommand(hostCommand);
-        await inputQueue.drainUntilIdle();
-        continue;
-      }
-      if (userInput.trim().length === 0) {
-        await inputQueue.drainUntilIdle();
-        continue;
-      }
-
-      await inputQueue.enqueue(normalizeInputEvent(
-        { content: userInput, source: 'manual_operator' },
-        { transport: 'terminal' },
-      ), { drain: true });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      printCliMessage(`Turn failed: ${message}`);
-      appendSession(SESSION_PATH, carrierSessionEventEntry('interactive_loop_error', {
-        error_message: message,
-        error_stack: error instanceof Error ? error.stack : null,
-      }));
-    }
-  }
-
-  if (process.stdin.isTTY) {
-    process.stdout.write('\x1b[?2004l');
-  }
-  rl.close();
-  inputQueue.finalizeSession();
-  controlWatcher?.stop();
-  for (const server of Object.values(mcpServers)) {
-    if (server.process) server.process.kill();
-  }
-  printHeader('Session saved. Goodbye.', { before: true });
 }
 
 async function runMcpPreflight({ jsonOutput = false } = {}) {
@@ -6504,11 +6335,6 @@ async function discoverAndStartMcpServers(siteRoot) {
   for (const [serverName, serverConfig] of Object.entries(fabric.servers)) {
     try {
       const args = [...serverConfig.args];
-      // Interactive agent-cli keeps its legacy shell affordance. Agent Runtime Server
-      // mode must not widen authority when materializing the MCP fabric.
-      if (!SERVER_MODE && serverName.includes('shell')) {
-        if (!args.includes('--auto-approve')) args.push('--auto-approve');
-      }
 
       const proc = spawn(serverConfig.command, args, {
         cwd: siteRoot,
@@ -9843,58 +9669,11 @@ function parseColorEnv(value, defaultValue) {
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
-function question(rl, prompt) {
-  return new Promise((resolve) => {
-    if (rl.closed) {
-      resolve('__READLINE_CLOSED__');
-      return;
-    }
-    const onClose = () => resolve('__READLINE_CLOSED__');
-    rl.once('close', onClose);
-    rl.setPrompt(prompt);
-    rl.prompt();
-
-    let accumulated = '';
-    let lastLineTime = 0;
-    let settleTimer = null;
-    let completed = false;
-
-    const cleanup = () => {
-      completed = true;
-      clearTimeout(settleTimer);
-      rl.removeListener('line', onLine);
-      rl.removeListener('close', onClose);
-    };
-
-    const commit = () => {
-      if (completed) return;
-      cleanup();
-      resolve(accumulated.trimEnd());
-    };
-
-    const onLine = (line) => {
-      const now = performance.now();
-      const gap = lastLineTime ? now - lastLineTime : Infinity;
-      lastLineTime = now;
-
-      accumulated += (accumulated ? '\n' : '') + line;
-      clearTimeout(settleTimer);
-
-      if (gap < 25) {
-        settleTimer = setTimeout(commit, 60);
-      } else if (accumulated.includes('\n')) {
-        settleTimer = setTimeout(commit, 60);
-      } else {
-        settleTimer = setTimeout(commit, 10);
-      }
-    };
-
-    rl.on('line', onLine);
-  });
-}
-
 function parseArgs(argv) {
   const opts = {};
+  const markRemovedConversationArg = (flag) => {
+    opts.removedConversationArgs = [...(opts.removedConversationArgs ?? []), flag];
+  };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--identity' && i + 1 < argv.length) {
       opts.identity = argv[i + 1];
@@ -9903,33 +9682,32 @@ function parseArgs(argv) {
       opts.session = argv[i + 1];
       i++;
     } else if (argv[i] === '--message' && i + 1 < argv.length) {
-      opts.messages = [...(opts.messages ?? []), argv[i + 1]];
+      markRemovedConversationArg('--message');
       i++;
     } else if (argv[i] === '--message-file' && i + 1 < argv.length) {
-      opts.messageFiles = [...(opts.messageFiles ?? []), argv[i + 1]];
+      markRemovedConversationArg('--message-file');
       i++;
     } else if (argv[i] === '--authority-ref' && i + 1 < argv.length) {
-      opts.authorityRef = argv[i + 1];
+      markRemovedConversationArg('--authority-ref');
       i++;
     } else if (argv[i] === '--operator-directive') {
-      opts.operatorDirective = true;
+      markRemovedConversationArg('--operator-directive');
     } else if (argv[i] === '--system-directive') {
-      opts.systemDirective = true;
+      markRemovedConversationArg('--system-directive');
     } else if (argv[i] === '--enable-startup-system-directive') {
-      opts.startupSystemDirective = true;
+      markRemovedConversationArg('--enable-startup-system-directive');
     } else if (argv[i] === '--startup-system-directive' && i + 1 < argv.length) {
-      opts.startupSystemDirective = true;
-      opts.startupSystemDirectiveText = argv[i + 1];
+      markRemovedConversationArg('--startup-system-directive');
       i++;
     } else if (argv[i] === '--startup-system-directive-delay-ms' && i + 1 < argv.length) {
-      opts.startupSystemDirectiveDelayMs = Number(argv[i + 1]);
+      markRemovedConversationArg('--startup-system-directive-delay-ms');
       i++;
     } else if (argv[i] === '--no-startup-system-directive') {
-      opts.startupSystemDirective = false;
+      markRemovedConversationArg('--no-startup-system-directive');
     } else if (argv[i] === '--interactive-after-message') {
-      opts.interactiveAfterMessage = true;
+      markRemovedConversationArg('--interactive-after-message');
     } else if (argv[i] === '--auto-approve') {
-      opts.autoApprove = true;
+      markRemovedConversationArg('--auto-approve');
     } else if (argv[i] === '--server') {
       opts.server = true;
     } else if (argv[i] === '--mcp-preflight') {
@@ -10267,7 +10045,7 @@ if (isEntrypoint) {
   if (options.help) {
     console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] --server [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-diagnostics] [--mcp-preflight-diagnostics-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--mcp-preflight-diagnostics-filter <all|startup|runtime>] [--session-inventory] [--session-inventory-json] [--session-inventory-operations] [--session-inventory-operations-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-inventory-events-count <n>] [--session-operations] [--session-operations-json] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-events-count <n>] [--session-sync] [--session-sync-json] [--session-sync-dry-run] [--session-sync-delete] [--session-sync-target <file://url|path|site:alias|cloud:alias>] [--session-sync-direction <upload|download|bidirectional>] [--stream|--no-stream] [--color|--no-color] [--control-jsonl <path>]`);
     console.log('Conversation runtime is server-only. Use agent-runtime-server or --server JSONL stdio; legacy terminal and one-shot message modes have been removed.');
-    console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, KIMI_API_KEY, KIMI_API_BASE_URL, KIMI_MODEL, KIMI_CODE_API_KEY, KIMI_CODE_API_BASE_URL, KIMI_CODE_MODEL, ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, ANTHROPIC_MODEL, CODEX_MODEL, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_ENABLE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE, NARADA_AGENT_CLI_STARTUP_SYSTEM_DIRECTIVE_DELAY_MS, NARADA_SITE_ROOT, NARADA_CLOUD_ROOT`);
+    console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, KIMI_API_KEY, KIMI_API_BASE_URL, KIMI_MODEL, KIMI_CODE_API_KEY, KIMI_CODE_API_BASE_URL, KIMI_CODE_MODEL, ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, ANTHROPIC_MODEL, CODEX_MODEL, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_SITE_ROOT, NARADA_CLOUD_ROOT`);
     process.exit(0);
   }
 
