@@ -224,7 +224,7 @@ $BaseUrlEnvNames = @($providerDefault.base_url_env_names | ForEach-Object { [str
 $PrimaryBaseUrlEnvName = if ($BaseUrlEnvNames.Count -gt 0) { $BaseUrlEnvNames[0] } else { $null }
 $ModelEnvNames = @($providerDefault.model_env_names | ForEach-Object { [string]$_ } | Where-Object { $_ })
 $PrimaryModelEnvName = if ($ModelEnvNames.Count -gt 0) { $ModelEnvNames[0] } else { $null }
-$CredentialSecretRef = if ($providerDefault.credential_secret_ref) { [string]$providerDefault.credential_secret_ref } elseif ($CredentialEnvNames.Count -gt 0) { "provider/$IntelligenceProvider/credential" } else { $null }
+$CredentialSecretRef = if ($providerDefault.credential_secret_ref) { [string]$providerDefault.credential_secret_ref } elseif ($CredentialEnvNames.Count -gt 0) { "narada/provider/$IntelligenceProvider/api-key" } else { $null }
 $ProviderConfigCredentialValue = $null
 $env:NARADA_INTELLIGENCE_PROVIDER = $IntelligenceProvider
 
