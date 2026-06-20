@@ -117,6 +117,22 @@ if (-not ([string]$env:NODE_OPTIONS -match '(^|\s)--no-warnings(=|\s|$)')) {
     $env:NODE_OPTIONS = (($env:NODE_OPTIONS, '--no-warnings=ExperimentalWarning') | Where-Object { $_ }) -join ' '
 }
 
+function Get-FirstProviderEnvironmentValue {
+    param([string[]]$Names)
+    foreach ($name in $Names) {
+        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ($value) { return $value }
+    }
+    return $null
+}
+
+function Set-PrimaryProviderEnvironmentValue {
+    param([string]$Name, [string]$Value)
+    if ($Name -and $Value) {
+        [Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
+    }
+}
+
 function Resolve-NaradaPackageRoot {
     param([Parameter(Mandatory)][string]$PackageName)
 
@@ -204,7 +220,11 @@ if (-not $providerDefault) {
 }
 $CredentialEnvNames = @($providerDefault.credential_env_names | ForEach-Object { [string]$_ } | Where-Object { $_ })
 $PrimaryCredentialEnvName = if ($CredentialEnvNames.Count -gt 0) { $CredentialEnvNames[0] } else { $null }
-$CredentialSecretRef = if ($providerDefault.credential_secret_ref) { [string]$providerDefault.credential_secret_ref } elseif ($CredentialEnvNames.Count -gt 0) { "narada/provider/$IntelligenceProvider/api-key" } else { $null }
+$BaseUrlEnvNames = @($providerDefault.base_url_env_names | ForEach-Object { [string]$_ } | Where-Object { $_ })
+$PrimaryBaseUrlEnvName = if ($BaseUrlEnvNames.Count -gt 0) { $BaseUrlEnvNames[0] } else { $null }
+$ModelEnvNames = @($providerDefault.model_env_names | ForEach-Object { [string]$_ } | Where-Object { $_ })
+$PrimaryModelEnvName = if ($ModelEnvNames.Count -gt 0) { $ModelEnvNames[0] } else { $null }
+$CredentialSecretRef = if ($providerDefault.credential_secret_ref) { [string]$providerDefault.credential_secret_ref } elseif ($CredentialEnvNames.Count -gt 0) { "provider/$IntelligenceProvider/credential" } else { $null }
 $ProviderConfigCredentialValue = $null
 $env:NARADA_INTELLIGENCE_PROVIDER = $IntelligenceProvider
 
@@ -284,11 +304,11 @@ if ($EffectiveConfigPath) {
         if ($config.api_key) {
             $ProviderConfigCredentialValue = [string]$config.api_key
         }
-        if ($config.base_url -and -not $env:NARADA_AI_BASE_URL) {
-            $env:NARADA_AI_BASE_URL = $config.base_url
+        if ($config.base_url -and $PrimaryBaseUrlEnvName -and -not (Get-FirstProviderEnvironmentValue -Names $BaseUrlEnvNames)) {
+            Set-PrimaryProviderEnvironmentValue -Name $PrimaryBaseUrlEnvName -Value ([string]$config.base_url)
         }
-        if ($config.model -and -not $env:NARADA_AI_MODEL) {
-            $env:NARADA_AI_MODEL = $config.model
+        if ($config.model -and $PrimaryModelEnvName -and -not (Get-FirstProviderEnvironmentValue -Names $ModelEnvNames)) {
+            Set-PrimaryProviderEnvironmentValue -Name $PrimaryModelEnvName -Value ([string]$config.model)
         }
     }
 }
@@ -298,21 +318,11 @@ Set-PrimaryProviderCredential -Value $ProviderCredentialValue
 # Set window title for OSL binding and general identification
 $Host.UI.RawUI.WindowTitle = $IdentityName
 
-if (-not $env:NARADA_AI_BASE_URL) {
-    if ($IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_API_BASE_URL) {
-        $env:NARADA_AI_BASE_URL = $env:NARADA_KIMI_CODE_API_BASE_URL
-    } else {
-        $env:NARADA_AI_BASE_URL = $providerDefault.base_url
-    }
+if ($PrimaryBaseUrlEnvName -and -not (Get-FirstProviderEnvironmentValue -Names $BaseUrlEnvNames)) {
+    Set-PrimaryProviderEnvironmentValue -Name $PrimaryBaseUrlEnvName -Value ([string]$providerDefault.base_url)
 }
-if (-not $env:NARADA_AI_MODEL) {
-    if ($IntelligenceProvider -eq 'kimi-api' -and $env:NARADA_KIMI_MODEL) {
-        $env:NARADA_AI_MODEL = $env:NARADA_KIMI_MODEL
-    } elseif ($IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_MODEL) {
-        $env:NARADA_AI_MODEL = $env:NARADA_KIMI_CODE_MODEL
-    } else {
-        $env:NARADA_AI_MODEL = $providerDefault.default_model
-    }
+if ($PrimaryModelEnvName -and -not (Get-FirstProviderEnvironmentValue -Names $ModelEnvNames)) {
+    Set-PrimaryProviderEnvironmentValue -Name $PrimaryModelEnvName -Value ([string]$providerDefault.default_model)
 }
 # Validate node is available
 $node = Get-Command node -ErrorAction SilentlyContinue
@@ -649,7 +659,8 @@ if ($AutoApprove) {
 Write-Host "Starting agent-cli for $IdentityName..." -ForegroundColor Cyan
 Write-Host "  Session: $SessionName" -ForegroundColor DarkGray
 Write-Host "  WorkDir: $WorkDir" -ForegroundColor DarkGray
-$displayModel = if ($env:NARADA_AI_MODEL) { $env:NARADA_AI_MODEL } else { 'gpt-4o' }
+$displayModel = if ($PrimaryModelEnvName) { [Environment]::GetEnvironmentVariable($PrimaryModelEnvName, 'Process') } else { $null }
+if (-not $displayModel) { $displayModel = $providerDefault.default_model }
 Write-Host "  Provider: $IntelligenceProvider" -ForegroundColor DarkGray
 Write-Host "  Model:   $displayModel" -ForegroundColor DarkGray
 Write-Host ""

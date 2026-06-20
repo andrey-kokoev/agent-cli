@@ -16,10 +16,10 @@
       "default_model": "gpt-5.5",
       "adapter_kind": "openai-compatible-chat-completions",
       "support_state": "verified_supported",
-      "base_url_env_names": ["NARADA_AI_BASE_URL"],
-      "model_env_names": ["NARADA_AI_MODEL"],
+      "base_url_env_names": ["OPENAI_BASE_URL"],
+      "model_env_names": ["OPENAI_MODEL"],
       "credential_env_names": ["OPENAI_API_KEY"],
-      "credential_secret_ref": "narada/provider/openai-api/api-key"
+      "credential_secret_ref": "provider/openai-api/credential"
     },
     "kimi-api": {
       "meaning": "Kimi/Moonshot API via OpenAI-compatible chat completions.",
@@ -27,10 +27,10 @@
       "default_model": "kimi-k2.6",
       "adapter_kind": "openai-compatible-chat-completions",
       "support_state": "verified_supported",
-      "base_url_env_names": ["NARADA_KIMI_API_BASE_URL", "NARADA_AI_BASE_URL"],
-      "model_env_names": ["NARADA_KIMI_MODEL", "NARADA_AI_MODEL"],
+      "base_url_env_names": ["KIMI_API_BASE_URL"],
+      "model_env_names": ["KIMI_MODEL"],
       "credential_env_names": ["KIMI_API_KEY"],
-      "credential_secret_ref": "narada/provider/kimi-api/api-key"
+      "credential_secret_ref": "provider/kimi-api/credential"
     },
     "kimi-code-api": {
       "meaning": "Kimi Code API via OpenAI-compatible chat completions; uses KIMI_CODE_API_KEY against api.kimi.com/coding/v1.",
@@ -38,10 +38,10 @@
       "default_model": "kimi-k2.6",
       "adapter_kind": "openai-compatible-chat-completions",
       "support_state": "verified_supported",
-      "base_url_env_names": ["NARADA_KIMI_CODE_API_BASE_URL", "NARADA_AI_BASE_URL"],
-      "model_env_names": ["NARADA_KIMI_CODE_MODEL", "NARADA_AI_MODEL"],
+      "base_url_env_names": ["KIMI_CODE_API_BASE_URL"],
+      "model_env_names": ["KIMI_CODE_MODEL"],
       "credential_env_names": ["KIMI_CODE_API_KEY"],
-      "credential_secret_ref": "narada/provider/kimi-code-api/api-key"
+      "credential_secret_ref": "provider/kimi-code-api/credential"
     },
     "anthropic-api": {
       "meaning": "Anthropic API via the Anthropic Messages API.",
@@ -49,10 +49,10 @@
       "default_model": "claude-sonnet-4.6",
       "adapter_kind": "anthropic-messages",
       "support_state": "verified_supported",
-      "base_url_env_names": ["NARADA_AI_BASE_URL"],
-      "model_env_names": ["NARADA_AI_MODEL"],
+      "base_url_env_names": ["ANTHROPIC_BASE_URL"],
+      "model_env_names": ["ANTHROPIC_MODEL"],
       "credential_env_names": ["ANTHROPIC_API_KEY"],
-      "credential_secret_ref": "narada/provider/anthropic-api/api-key"
+      "credential_secret_ref": "provider/anthropic-api/credential"
     },
     "codex-subscription": {
       "meaning": "Local Codex CLI subscription auth via codex mcp-server; no OpenAI API key or API billing path.",
@@ -61,7 +61,7 @@
       "adapter_kind": "codex-mcp-server",
       "support_state": "verified_supported",
       "base_url_env_names": [],
-      "model_env_names": ["NARADA_CODEX_MODEL", "NARADA_AI_MODEL"],
+      "model_env_names": ["CODEX_MODEL", "NARADA_CODEX_MODEL"],
       "credential_env_names": []
     }
   }

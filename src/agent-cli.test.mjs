@@ -293,7 +293,7 @@ const hugeEnv = {
   NARADA_AGENT_ID: 'narada-andrey.Kevin',
   NARADA_SITE_ROOT: 'C:\\Users\\Andrey\\Narada',
   NARADA_PROPER_ROOT: 'D:\\code\\narada',
-  NARADA_AI_MODEL: 'gpt-5.5',
+  OPENAI_MODEL: 'gpt-5.5',
   GIANT_UNRELATED_ENV: 'x'.repeat(100000),
 };
 const childEnv = buildChildProcessEnv({ MCP_SERVER_NAME: 'narada-andrey-task-lifecycle' }, hugeEnv);
@@ -301,7 +301,7 @@ assert.equal(childEnv.Path, hugeEnv.Path);
 assert.equal(childEnv.NARADA_AGENT_ID, 'narada-andrey.Kevin');
 assert.equal(childEnv.NARADA_SITE_ROOT, 'C:\\Users\\Andrey\\Narada');
 assert.equal(childEnv.NARADA_PROPER_ROOT, 'D:\\code\\narada');
-assert.equal(childEnv.NARADA_AI_MODEL, 'gpt-5.5');
+assert.equal(childEnv.OPENAI_MODEL, 'gpt-5.5');
 assert.equal(childEnv.MCP_SERVER_NAME, 'narada-andrey-task-lifecycle');
 assert.equal(childEnv.GIANT_UNRELATED_ENV, undefined);
 assert.equal(childEnv.FORCE_COLOR, '0');
@@ -2844,8 +2844,10 @@ if (process.platform === 'win32') {
   ], { cwd: fileURLToPath(new URL('..', import.meta.url)), encoding: 'utf8', windowsHide: true });
   assert.equal(wrapperSyntaxCheck.status, 0, wrapperSyntaxCheck.stderr);
 }
-assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_API_BASE_URL"), true);
-assert.equal(windowsWrapperTemplate.includes("$IntelligenceProvider -eq 'kimi-code-api' -and $env:NARADA_KIMI_CODE_MODEL"), true);
+assert.equal(windowsWrapperTemplate.includes('$BaseUrlEnvNames = @($providerDefault.base_url_env_names'), true);
+assert.equal(windowsWrapperTemplate.includes('$ModelEnvNames = @($providerDefault.model_env_names'), true);
+assert.equal(windowsWrapperTemplate.includes('Set-PrimaryProviderEnvironmentValue -Name $PrimaryBaseUrlEnvName'), true);
+assert.equal(windowsWrapperTemplate.includes('Set-PrimaryProviderEnvironmentValue -Name $PrimaryModelEnvName'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventory'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventoryJson'), true);
 assert.equal(windowsWrapperTemplate.includes('[switch]$SessionInventoryOperations'), true);
