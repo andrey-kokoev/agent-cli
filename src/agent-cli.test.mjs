@@ -67,6 +67,7 @@ import {
   handleToolOutputDisplayCommand,
   runCodexTranscriptStats,
   inputRecordDisplayLabel,
+  isAgentCliUtilityCommandMode,
   normalizeDisplayTerms,
   normalizeInputEvent,
   normalizeInputRecord,
@@ -638,6 +639,10 @@ assert.deepEqual(parseArgs(['--session-sync-target', 'cloud:beta']), { sessionSy
 assert.deepEqual(parseArgs(['--session-sync-direction', 'bidirectional']), { sessionSyncDirection: 'bidirectional' });
 assert.deepEqual(parseArgs(['--session-sync-dry-run']), { sessionSyncDryRun: true });
 assert.deepEqual(parseArgs(['--session-sync-delete']), { sessionSyncDelete: true });
+assert.equal(isAgentCliUtilityCommandMode(parseArgs(['--session-read'])), true);
+assert.equal(isAgentCliUtilityCommandMode(parseArgs(['--mcp-preflight'])), true);
+assert.equal(isAgentCliUtilityCommandMode(parseArgs(['--message', 'hello'])), false);
+assert.equal(isAgentCliUtilityCommandMode(parseArgs(['--server'])), false);
 
 const sessionSyncSourceRoot = mkdtempSync(join(tmpdir(), 'agent-cli-session-sync-source-'));
 const sessionSyncTargetRoot = mkdtempSync(join(tmpdir(), 'agent-cli-session-sync-target-'));
