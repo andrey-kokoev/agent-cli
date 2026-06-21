@@ -10,13 +10,15 @@
   "exports": {
     ".": "./src/agent-cli.mjs",
     "./provider-resolution": "./src/provider-resolution.mjs",
+    "./projected-terminal": "./src/projected-terminal.mjs",
+    "./terminal-style": "./src/terminal-style.mjs",
     "./intelligence-providers": "./src/intelligence-providers.json",
     "./windows-wrapper-template": "./templates/Start-AgentCliSession.ps1",
     "./package.json": "./package.json"
   },
   "scripts": {
     "test": "node --test src/agent-cli.test.mjs",
-    "typecheck": "tsc --noEmit --allowJs --checkJs false bin/narada-agent-cli.mjs bin/agent-runtime-server.mjs src/agent-cli.mjs src/provider-resolution.mjs",
+    "typecheck": "tsc --noEmit --allowJs --checkJs false bin/narada-agent-cli.mjs bin/agent-runtime-server.mjs src/agent-cli.mjs src/provider-resolution.mjs src/projected-terminal.mjs src/terminal-style.mjs",
     "verify:native-codex-mcp": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-native-codex-mcp.ps1"
   },
   "dependencies": {

@@ -46,6 +46,7 @@ import {
   loadProviderMetadata,
   providerEnvironment,
 } from './provider-resolution.mjs';
+import { createTerminalStyle, formatTerminalMessageBlockLines } from './terminal-style.mjs';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -198,8 +199,10 @@ const CHILD_PROCESS_ENV_ALLOWLIST = Object.freeze([
   'KIMI_API_KEY',
   'ANTHROPIC_API_KEY',
   'KIMI_CODE_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'DEEPSEEK_API_BASE_URL',
+  'NARADA_WORKER_MCP_CONFIG',
 ]);
-
 const CODEX_AUTH_FILE_NAMES = Object.freeze([
   'auth.json',
   'credentials.json',
@@ -209,6 +212,7 @@ const CODEX_AUTH_FILE_NAMES = Object.freeze([
   'session.json',
   'sessions.json',
 ]);
+const CODEX_AUTH_HOME_ENV = 'NARADA_CODEX_AUTH_HOME';
 const MCP_STARTUP_FAILURES_KEY = '__mcp_startup_failures';
 const MCP_RUNTIME_DIAGNOSTICS_KEY = '__mcp_runtime_diagnostics';
 
@@ -218,6 +222,119 @@ function buildChildProcessEnv(extra = {}, baseEnv = process.env) {
     if (baseEnv[key] !== undefined) env[key] = baseEnv[key];
   }
   return { ...env, ...extra, FORCE_COLOR: '0', NO_COLOR: '1' };
+}
+
+function serverCommandMessage({ requestId, command, message, terminalState = 'completed', fields = null }) {
+  return {
+    request_id: requestId,
+    transport: 'jsonl_stdio',
+    event: 'carrier_command_result',
+    command,
+    terminal_state: terminalState,
+    message,
+    ...(fields && typeof fields === 'object' ? { fields } : {}),
+  };
+}
+
+function serverToolCatalog({ requestId, mcpServers, filter = '' }) {
+  return serverCommandMessage({
+    requestId,
+    command: '/tools',
+    message: formatMcpToolCatalog(mcpServers, { filter }),
+  });
+}
+
+function serverQueueCommand({ requestId, value, inputQueue }) {
+  if (!inputQueue) {
+    return serverCommandMessage({ requestId, command: '/queue', message: 'Queue is unavailable in this mode.', terminalState: 'unavailable' });
+  }
+  const result = handleQueueCommand(value, inputQueue);
+  if (result.mutated) {
+    appendSession(SESSION_PATH, carrierSessionEventEntry('carrier_command_executed', {
+      command: `/queue${value ? ` ${value}` : ''}`,
+      mutation: result.mutation,
+    }));
+  }
+  return serverCommandMessage({
+    requestId,
+    command: '/queue',
+    message: result.message,
+    terminalState: result.status ?? 'completed',
+  });
+}
+
+function serverGoalCommand({ requestId, value, state }) {
+  const result = handleGoalCommand(value, state.sessionSettings ?? sessionSettings);
+  appendSession(SESSION_PATH, sessionEventEntry(result.changed ? 'session_setting_changed' : 'carrier_command_executed', {
+    command: '/goal',
+    setting: 'goal',
+    value: result.goal.value,
+    status: result.goal.status,
+    action: result.action,
+  }));
+  return serverCommandMessage({
+    requestId,
+    command: '/goal',
+    message: result.message,
+    fields: {
+      goal: result.goal.value,
+      status: result.goal.status,
+      action: result.action,
+    },
+  });
+}
+
+function serverToolOutputCommand({ requestId, value, state }) {
+  const result = handleToolOutputDisplayCommand(value, state.displaySettings ?? transcriptDisplaySettings);
+  appendSession(SESSION_PATH, sessionEventEntry('session_setting_changed', {
+    setting: 'tool_outputs_display',
+    value: result.state ? 'shown' : 'hidden',
+    command: '/tool-output',
+    arguments: value,
+  }));
+  return serverCommandMessage({
+    requestId,
+    command: '/tool-output',
+    message: result.message,
+    fields: { tool_outputs: result.state ? 'shown' : 'hidden' },
+  });
+}
+
+function serverModelCommand({ requestId, value, state }) {
+  const settings = state.sessionSettings ?? sessionSettings;
+  const next = String(value ?? '').trim();
+  if (!next) {
+    return serverCommandMessage({ requestId, command: '/model', message: `Current model: ${settings.model}` });
+  }
+  settings.model = next;
+  appendSession(SESSION_PATH, sessionEventEntry('session_setting_changed', { setting: 'model', value: next }));
+  return serverCommandMessage({ requestId, command: '/model', message: `Model set to ${settings.model}`, fields: { model: settings.model } });
+}
+
+function serverThinkingCommand({ requestId, value, state }) {
+  const settings = state.sessionSettings ?? sessionSettings;
+  const nextValue = String(value ?? '').trim();
+  if (!nextValue) {
+    return serverCommandMessage({ requestId, command: '/thinking', message: `Current thinking: ${settings.thinking}` });
+  }
+  const next = normalizeThinkingLevel(nextValue);
+  if (next !== nextValue.toLowerCase()) {
+    return serverCommandMessage({ requestId, command: '/thinking', terminalState: 'invalid', message: 'Usage: /thinking none|low|medium|high' });
+  }
+  settings.thinking = next;
+  appendSession(SESSION_PATH, sessionEventEntry('session_setting_changed', { setting: 'thinking', value: next }));
+  return serverCommandMessage({ requestId, command: '/thinking', message: `Thinking set to ${settings.thinking}`, fields: { thinking: settings.thinking } });
+}
+
+function serverStatsCommand({ requestId, value, statsRunner = runCodexTranscriptStats }) {
+  const result = statsRunner(value);
+  appendSession(SESSION_PATH, sessionEventEntry('session_command', {
+    command: '/stats',
+    arguments: value,
+    status: result.status,
+    runtime_scope: 'codex_transcript_store',
+  }));
+  return serverCommandMessage({ requestId, command: '/stats', terminalState: result.status ?? 'completed', message: result.message });
 }
 
 function summarizeSessionInventoryHostCommands(inventory = []) {
@@ -1196,6 +1313,15 @@ function createRuntimeHeaderRows({
     ['Approvals', 'disabled'],
     ['Help', '/help'],
   ];
+}
+
+function mcpServerSummaryEntries(mcpServers) {
+  return Object.entries(mcpServers ?? {})
+    .filter(([, server]) => Array.isArray(server?.tools))
+    .map(([name, server]) => ({
+      name,
+      tool_count: server.tools.length,
+    }));
 }
 
 function environmentBlockLength(env) {
@@ -5311,6 +5437,7 @@ function handleObserverCommand(value = '', displaySettings = transcriptDisplaySe
 function runCodexTranscriptStats(value = '') {
   const extraArgs = shellLikeWords(value);
   const defaultArgs = extraArgs.length === 0 ? ['--top', '10'] : extraArgs;
+  const timeoutMs = Math.max(1000, Math.min(30000, Number(process.env.NARADA_AGENT_CLI_STATS_TIMEOUT_MS ?? 5000) || 5000));
   const configuredRoot = process.env.NARADA_TOOLS_ROOT;
   const defaultRoot = process.platform === 'win32' ? 'D:/code/narada-tools' : '/home/andrey/src/narada-tools';
   const candidateRoot = configuredRoot || defaultRoot;
@@ -5325,7 +5452,14 @@ function runCodexTranscriptStats(value = '') {
     windowsHide: true,
     maxBuffer: 8 * 1024 * 1024,
     env: process.env,
+    timeout: timeoutMs,
   });
+  if (result.error?.code === 'ETIMEDOUT' || result.signal === 'SIGTERM') {
+    return {
+      status: 'timeout',
+      message: `Codex transcript stats timed out after ${timeoutMs}ms.`,
+    };
+  }
   if (result.error) {
     return {
       status: 'unavailable',
@@ -5774,6 +5908,7 @@ async function submitObserverInput({
   emit = null,
   callChatApiFn = callChatApi,
   displaySettings = transcriptDisplaySettings,
+  carrierSessionSettings = sessionSettings,
 }) {
   const admission = classifyInputRuntimeAdmission(input, displaySettings);
   if (admission.visibility === 'record_only') {
@@ -5801,7 +5936,7 @@ async function submitObserverInput({
     eventId: input?.event_id,
     transport: input?.transport,
   }));
-  return await runConversationTurn(messages, tools, mcpServers, rl, { turn, emit, callChatApiFn, inputEventId: input?.event_id ?? null });
+  return await runConversationTurn(messages, tools, mcpServers, rl, { turn, emit, callChatApiFn, inputEventId: input?.event_id ?? null, carrierSessionSettings });
 }
 
 async function submitUserInput({
@@ -5815,10 +5950,11 @@ async function submitUserInput({
   emit = null,
   callChatApiFn = callChatApi,
   displaySettings = transcriptDisplaySettings,
+  carrierSessionSettings = sessionSettings,
 }) {
   const record = normalizeInputRecord(input);
   if (isObserverInputEvent(input, record)) {
-    return submitObserverInput({ input, record, messages, tools, mcpServers, rl, turn, emit, callChatApiFn, displaySettings });
+    return submitObserverInput({ input, record, messages, tools, mcpServers, rl, turn, emit, callChatApiFn, displaySettings, carrierSessionSettings });
   }
   const runtimeAdmission = classifyInputRuntimeAdmission(input, displaySettings);
   if (runtimeAdmission.is_directive && runtimeAdmission.complete_without_provider) {
@@ -5850,7 +5986,7 @@ async function submitUserInput({
     },
   }) : null;
   try {
-    return await runConversationTurn(messages, tools, mcpServers, rl, { turn: turn ?? progress?.turn ?? null, emit, callChatApiFn, inputEventId: input?.event_id ?? null });
+    return await runConversationTurn(messages, tools, mcpServers, rl, { turn: turn ?? progress?.turn ?? null, emit, callChatApiFn, inputEventId: input?.event_id ?? null, carrierSessionSettings });
   } finally {
     progress?.stop();
   }
@@ -5860,6 +5996,7 @@ async function runConversationTurn(messages, tools, mcpServers, rl, options = {}
   const emit = options.emit ?? null;
   const turn = options.turn ?? null;
   const callChatApiFn = options.callChatApiFn ?? callChatApi;
+  const carrierSessionSettings = options.carrierSessionSettings ?? sessionSettings;
   let turnStartedRecorded = false;
   let turnTerminalRecorded = false;
   const recordTurnStarted = () => {
@@ -5889,7 +6026,7 @@ async function runConversationTurn(messages, tools, mcpServers, rl, options = {}
     let response;
     try {
       recordTurnStarted();
-      response = await callChatApiFn(messagesWithCarrierGoal(messages, sessionSettings.goal), tools, { ...sessionSettings, turn, abortSignal: turn?.abortSignal, emit, mcpServers });
+      response = await callChatApiFn(messagesWithCarrierGoal(messages, carrierSessionSettings.goal), tools, { ...carrierSessionSettings, turn, abortSignal: turn?.abortSignal, emit, mcpServers });
     } catch (error) {
       if (turn?.interruptRequested || isAbortError(error)) {
         emit?.('turn_interrupted', { turn_id: turn?.turnId ?? null, terminal_state: 'interrupted' });
@@ -7175,6 +7312,7 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
     activeTurn: null,
     closed: false,
     displaySettings: { ...transcriptDisplaySettings },
+    sessionSettings: { ...sessionSettings },
     pendingRequests: new Set(),
     startedAt: new Date().toISOString(),
     sessionEventCount: 0,
@@ -7231,14 +7369,21 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
     transport: 'jsonl_stdio',
     site_root: SITE_ROOT,
     provider: INTELLIGENCE_PROVIDER,
-    model: sessionSettings.model,
-    thinking: sessionSettings.thinking,
+    model: state.sessionSettings.model,
+    thinking: state.sessionSettings.thinking,
+    stream: state.sessionSettings.stream,
+    goal: normalizeCarrierGoalState(state.sessionSettings.goal).value || null,
+    goal_display: carrierGoalStatusLabel(state.sessionSettings.goal),
     mcp_server_count: Object.keys(mcpServers).length,
     ...mcpStatus,
     ...mcpPreflightSnapshot,
     ...createSessionActivitySnapshot(state),
     ...createOperationalPostureSnapshot({ state, mcpOperationalState: mcpStatus.mcp_operational_state }),
     tool_count: allTools.length,
+    mcp_servers: mcpServerSummaryEntries(mcpServers),
+    tool_outputs: transcriptDisplaySettings.toolOutputs ? 'shown' : 'hidden',
+    approvals: 'disabled',
+    help: '/help',
     session_path: SESSION_PATH,
     events_path: EVENTS_PATH,
   });
@@ -7687,6 +7832,46 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
       });
       return;
     }
+    if (controlRequest.method_kind === 'agent_cli_command') {
+      const command = String(request?.params?.command ?? '').trim().toLowerCase();
+      const value = String(request?.params?.value ?? '').trim();
+      noteSessionActivity(state, 'carrier_command_requested');
+      if (command === '/goal') {
+        emit('carrier_command_result', serverGoalCommand({ requestId, value, state }));
+        return;
+      }
+      if (command === '/stats') {
+        emit('carrier_command_result', serverStatsCommand({ requestId, value }));
+        return;
+      }
+      if (command === '/model') {
+        emit('carrier_command_result', serverModelCommand({ requestId, value, state }));
+        return;
+      }
+      if (command === '/thinking') {
+        emit('carrier_command_result', serverThinkingCommand({ requestId, value, state }));
+        return;
+      }
+      if (command === '/tool-output' || command === '/tool-outputs') {
+        emit('carrier_command_result', serverToolOutputCommand({ requestId, value, state }));
+        return;
+      }
+      if (command === '/tools' || command === '/tool') {
+        emit('carrier_command_result', serverToolCatalog({ requestId, mcpServers, filter: value }));
+        return;
+      }
+      if (command === '/queue') {
+        emit('carrier_command_result', serverQueueCommand({ requestId, value, inputQueue: state.inputQueue }));
+        return;
+      }
+      emit('carrier_command_result', serverCommandMessage({
+        requestId,
+        command: command || 'unknown',
+        terminalState: 'unsupported',
+        message: `Unsupported command: ${command || '<missing>'}`,
+      }));
+      return;
+    }
     if (controlRequest.method_kind === 'session_status') {
       const operation_id = operatorWorkflowId({ requestId, method: request?.method ?? 'session.status' });
       const startedAt = new Date();
@@ -7959,7 +8144,8 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
     }
     await state.inputQueue.enqueue(normalizeInputEvent({
       content: message,
-      source: 'automation_jsonl',
+      source: request?.params?.source ?? 'automation_jsonl',
+      source_id: request?.params?.source_id ?? null,
       authority_ref: request?.params?.authority_ref ?? null,
       request_id: requestId,
     }, { transport: 'jsonl_stdio' }), { drain: true, state });
@@ -7997,6 +8183,7 @@ async function runServerInputEvent({ requestId, state, messages, allTools, mcpSe
       emit,
       callChatApiFn,
       displaySettings: state.displaySettings,
+      carrierSessionSettings: state.sessionSettings,
     });
     emitVisibleObserverInput({ requestId, input, emit, admission: runtimeAdmission });
     noteSessionActivity(state, 'observer_input_complete', new Date().toISOString(), result?.terminal_state ?? 'completed_without_provider');
@@ -8113,6 +8300,7 @@ async function runServerConversationTurn({ requestId, state, messages, allTools,
       emit,
       callChatApiFn,
       displaySettings: state.displaySettings,
+      carrierSessionSettings: state.sessionSettings,
     });
     const terminalState = turn.interruptRequested ? 'interrupted' : (result?.terminal_state ?? 'completed');
     if (terminalState === 'failed') {
@@ -8145,7 +8333,8 @@ async function runServerConversationTurn({ requestId, state, messages, allTools,
 }
 
 function serverStatus({ requestId, state, allTools, mcpServers, mcpPreflightArtifact = readMcpPreflightArtifact() }) {
-  const goal = normalizeCarrierGoalState(sessionSettings.goal);
+  const carrierSessionSettings = state?.sessionSettings ?? sessionSettings;
+  const goal = normalizeCarrierGoalState(carrierSessionSettings.goal);
   const mcpStatus = createMcpStatusSnapshot(mcpServers);
   const mcpPreflightSnapshot = createMcpPreflightArtifactSnapshot(mcpPreflightArtifact);
   const sessionActivity = createSessionActivitySnapshot(state);
@@ -8157,9 +8346,9 @@ function serverStatus({ requestId, state, allTools, mcpServers, mcpPreflightArti
     request_id: requestId,
     transport: 'jsonl_stdio',
     provider: INTELLIGENCE_PROVIDER,
-    model: sessionSettings.model,
-    thinking: sessionSettings.thinking,
-    stream: sessionSettings.stream,
+    model: carrierSessionSettings.model,
+    thinking: carrierSessionSettings.thinking,
+    stream: carrierSessionSettings.stream,
     goal: goal.value || null,
     goal_status: goal.status,
     goal_display: carrierGoalStatusLabel(goal),
@@ -8171,6 +8360,7 @@ function serverStatus({ requestId, state, allTools, mcpServers, mcpPreflightArti
     ...sessionActivity,
     ...operationalPosture,
     tool_count: allTools.length,
+    mcp_servers: mcpServerSummaryEntries(mcpServers),
     mcp_tools: mcpToolCatalogEntries(mcpServers),
     observer_muted: (state?.displaySettings ?? transcriptDisplaySettings).observerMuted === true,
     observer_visibilities: OBSERVER_VISIBILITIES,
@@ -8724,6 +8914,17 @@ function sendCodexExecJsonRequest(request, settings = {}) {
     let rendered = false;
     let aborted = false;
     const nativeMcpEventState = { startedAtById: new Map() };
+    const emitText = (text) => {
+      if (!text) return;
+      content += text;
+      if (isPotentialNaradaToolCallText(content) || parseNaradaToolCall(content)) return;
+      if (settings.emit) {
+        settings.emit('assistant_message_stream', { turn_id: settings.turn?.turnId ?? null, content: text });
+      } else {
+        process.stdout.write('\r\x1b[K');
+        rendered = printAgentMessage(text) || rendered;
+      }
+    };
     const abortChild = () => {
       aborted = true;
       terminateChildProcessTree(child);
@@ -8747,16 +8948,7 @@ function sendCodexExecJsonRequest(request, settings = {}) {
           threadId = event.thread_id;
         }
         const text = codexExecEventText(event);
-        if (text) {
-          content += text;
-          if (isPotentialNaradaToolCallText(content) || parseNaradaToolCall(content)) continue;
-          if (settings.emit) {
-            settings.emit('assistant_message_stream', { turn_id: settings.turn?.turnId ?? null, content: text });
-          } else {
-            process.stdout.write('\r\x1b[K');
-            rendered = printAgentMessage(text) || rendered;
-          }
-        }
+        emitText(text);
       }
     });
     child.stderr.on('data', (chunk) => { stderr += chunk; });
@@ -8770,7 +8962,7 @@ function sendCodexExecJsonRequest(request, settings = {}) {
       if (stdoutBuffer.trim()) {
         const event = parseCodexExecJsonLine(stdoutBuffer.trim());
         const text = event ? codexExecEventText(event) : '';
-        if (text) content += text;
+        emitText(text);
       }
       if (code !== 0) {
         rejectRequest(new Error(`codex exec --json failed with exit ${code}${stderr.trim() ? `; ${stderr.trim().slice(0, 1000)}` : ''}`));
@@ -8957,11 +9149,17 @@ function findOnPath(names) {
   return null;
 }
 
-function defaultCodexHome() {
-  const explicit = process.env.CODEX_HOME;
-  if (explicit) return explicit;
+function defaultUserCodexHome() {
   const userRoot = process.env.USERPROFILE || process.env.HOME;
   return userRoot ? join(userRoot, '.codex') : null;
+}
+
+function defaultCodexAuthHome() {
+  const explicit = process.env[CODEX_AUTH_HOME_ENV];
+  if (explicit) return explicit;
+  const userHome = defaultUserCodexHome();
+  if (userHome) return userHome;
+  return process.env.CODEX_HOME || null;
 }
 
 function projectCodexAuthFiles(sourceHome, targetHome) {
@@ -8981,7 +9179,7 @@ function projectCodexAuthFiles(sourceHome, targetHome) {
   }
 }
 
-function writeCodexExecHome(mcpServers, sessionDir = SESSION_DIR, { sourceHome = defaultCodexHome() } = {}) {
+function writeCodexExecHome(mcpServers, sessionDir = SESSION_DIR, { sourceHome = defaultCodexAuthHome() } = {}) {
   const codexHome = join(sessionDir, 'codex-home');
   mkdirSync(codexHome, { recursive: true });
   projectCodexAuthFiles(sourceHome, codexHome);
@@ -8995,9 +9193,13 @@ function codexRequestMcpServers(request, settings = {}) {
 
 function buildCodexSubprocessEnv(mcpServers, settings = {}) {
   const codexHome = writeCodexExecHome(mcpServers, settings.sessionDir ?? SESSION_DIR, {
-    sourceHome: settings.codexAuthHome ?? defaultCodexHome(),
+    sourceHome: settings.codexAuthHome ?? defaultCodexAuthHome(),
   });
-  return buildChildProcessEnv({ CODEX_HOME: codexHome, CODEX_CONFIG_DIR: codexHome });
+  const env = buildChildProcessEnv({ CODEX_HOME: codexHome, CODEX_CONFIG_DIR: codexHome });
+  delete env.OPENAI_API_KEY;
+  delete env.OPENAI_BASE_URL;
+  delete env.OPENAI_MODEL;
+  return env;
 }
 
 function buildCodexMcpServerArgs() {
@@ -9173,33 +9375,9 @@ function formatCompactJsonSchema(schema, { limit = 1200 } = {}) {
   const text = stableStringify(normalized);
   return text.length > limit ? `${text.slice(0, Math.max(0, limit - 3))}...` : text;
 }
-
 // ---------------------------------------------------------------------------
 // Terminal presentation
 // ---------------------------------------------------------------------------
-function createTerminalStyle({ enabled = true } = {}) {
-  const color = (code, text) => enabled ? `\x1b[${code}m${text}\x1b[0m` : text;
-  return {
-    enabled,
-    header: (text) => color('36', text),
-    tool: (text) => color('35', text),
-    assistant: (text) => color('37', text),
-    label: (text) => color('1;36', text),
-    operator: (text) => color('1;32', text),
-    operatorDirective: (text) => color('1;33', text),
-    systemDirective: (text) => color('1;35', text),
-    muted: (text) => color('2', text),
-    source: (text) => color('90', text),
-    timestamp: (text) => color('38;5;240', text),
-    key: (text) => color('33', text),
-    code: (text) => color('90', text),
-    success: (text) => color('32', text),
-    prompt: (text) => color('1;32', text),
-    progress: (text) => color('2;33', text),
-    warn: (text) => color('33', text),
-    error: (text) => color('38;5;167', text),
-  };
-}
 
 function printHeader(text, { before = false, after = false, level = 'info' } = {}) {
   const styled = level === 'warn'
@@ -9426,13 +9604,15 @@ function formatSubmittedPrompt(promptLabel, text, columns = 80, now = new Date()
 
 function printMessageBlock({ label, text, before = false, after = false, timestamp = false, labelStyle = (value) => value, bodyStyle = (value) => value }) {
   const width = terminalWidth();
-  const labelLine = `${labelStyle(label)}${terminalStyle.muted(':')}`;
   const bodyWidth = Math.max(32, width - 2);
   const lines = String(text ?? '').split(/\r?\n/).flatMap((line) => wrapTerminalLine(line, bodyWidth));
-  const renderedLines = [
-    labelLine,
-    ...lines.map((line) => `  ${bodyStyle(line)}`),
-  ];
+  const renderedLines = formatTerminalMessageBlockLines({
+    label,
+    lines,
+    style: terminalStyle,
+    labelStyle,
+    bodyStyle,
+  });
   if (timestamp) appendSuffixToLastLine(renderedLines, ` ${terminalStyle.timestamp(formatTimestamp())}`);
   const rendered = renderedLines.join('\n');
   writeTerminalRecord(`${rendered}${after ? '\n\n' : '\n'}`, { before });
@@ -10031,7 +10211,7 @@ if (isEntrypoint) {
   if (options.help) {
     console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] --server [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-diagnostics] [--mcp-preflight-diagnostics-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--mcp-preflight-diagnostics-filter <all|startup|runtime>] [--session-inventory] [--session-inventory-json] [--session-inventory-operations] [--session-inventory-operations-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-inventory-events-count <n>] [--session-operations] [--session-operations-json] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-events-count <n>] [--session-sync] [--session-sync-json] [--session-sync-dry-run] [--session-sync-delete] [--session-sync-target <file://url|path|site:alias|cloud:alias>] [--session-sync-direction <upload|download|bidirectional>] [--stream|--no-stream] [--color|--no-color]`);
     console.log('Conversation runtime is server-only. Use agent-runtime-server or --server JSONL stdio; legacy terminal and one-shot message modes have been removed.');
-    console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, KIMI_API_KEY, KIMI_API_BASE_URL, KIMI_MODEL, KIMI_CODE_API_KEY, KIMI_CODE_API_BASE_URL, KIMI_CODE_MODEL, ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, ANTHROPIC_MODEL, CODEX_MODEL, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_SITE_ROOT, NARADA_CLOUD_ROOT`);
+    console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, KIMI_API_KEY, KIMI_API_BASE_URL, KIMI_MODEL, KIMI_CODE_API_KEY, KIMI_CODE_API_BASE_URL, KIMI_CODE_MODEL, ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, ANTHROPIC_MODEL, DEEPSEEK_API_KEY, DEEPSEEK_API_BASE_URL, CODEX_MODEL, NARADA_CODEX_AUTH_HOME, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_SITE_ROOT, NARADA_CLOUD_ROOT`);
     process.exit(0);
   }
 

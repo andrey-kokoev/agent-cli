@@ -211,6 +211,7 @@ function Resolve-NaradaPackageExport {
 }
 
 $AgentCliPath = Resolve-NaradaPackageBin -PackageName '@narada2/agent-cli' -BinName 'narada-agent-cli'
+$AgentRuntimeServerPath = Resolve-NaradaPackageBin -PackageName '@narada2/agent-cli' -BinName 'agent-runtime-server'
 $ProviderMetadataPath = Resolve-NaradaPackageExport -PackageName '@narada2/agent-cli' -ExportName './intelligence-providers'
 $ProviderMetadata = (Get-Content $ProviderMetadataPath -Raw | ConvertFrom-Json).providers
 $providerDefault = $ProviderMetadata.PSObject.Properties[$IntelligenceProvider].Value
@@ -331,9 +332,12 @@ if (-not $node) {
     exit 1
 }
 
-# Validate agent-cli exists
 if (-not (Test-Path $AgentCliPath)) {
     Write-Error "Agent CLI not found at $AgentCliPath"
+    exit 1
+}
+if (-not (Test-Path $AgentRuntimeServerPath)) {
+    Write-Error "Agent runtime server not found at $AgentRuntimeServerPath"
     exit 1
 }
 
@@ -651,7 +655,7 @@ if ($McpPreflightDiagnosticsJson) {
     exit $LASTEXITCODE
 }
 
-$argList = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName)
+$argList = @($AgentRuntimeServerPath, '--identity', $IdentityName, '--session', $SessionName)
 if ($AutoApprove) {
     $argList += '--auto-approve'
 }

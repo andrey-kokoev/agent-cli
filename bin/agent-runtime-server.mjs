@@ -3,6 +3,7 @@
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createProjectedTerminalBridge } from '../src/projected-terminal.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const carrierPath = join(__dirname, '..', 'src', 'agent-cli.mjs');
@@ -10,7 +11,6 @@ const carrierPath = join(__dirname, '..', 'src', 'agent-cli.mjs');
 const isEntrypoint = process.argv[1]
   ? import.meta.url === pathToFileURL(process.argv[1]).href
   : false;
-
 function formatStartupMcpSummary(event) {
   if (!event || event.event !== 'session_started') return null;
   if (event.mcp_operational_state === 'healthy') return null;
@@ -223,10 +223,11 @@ function formatWrapperStatusEvent(event) {
 async function main() {
   const requestedArgs = process.argv.slice(2);
   const wrapperEventsJsonl = requestedArgs.includes('--wrapper-events-jsonl');
-  const forwardedArgs = requestedArgs.filter((arg) => arg !== '--wrapper-events-jsonl');
+  const rawJsonl = requestedArgs.includes('--raw-jsonl');
+  const forwardedArgs = requestedArgs.filter((arg) => arg !== '--wrapper-events-jsonl' && arg !== '--raw-jsonl');
   const args = forwardedArgs.includes('--server') ? forwardedArgs : ['--server', ...forwardedArgs];
   const child = spawn(process.execPath, [carrierPath, ...args], {
-    stdio: ['inherit', 'pipe', 'pipe'],
+    stdio: [rawJsonl ? 'inherit' : 'pipe', 'pipe', 'pipe'],
     env: process.env,
     cwd: process.cwd(),
     windowsHide: false,
@@ -236,10 +237,21 @@ async function main() {
   const runtimeFaultSummaries = new Set();
   const workflowSummaries = new Set();
   let stdoutBuffer = '';
+  let writeProjectedOutput = (text) => process.stdout.write(text);
+  let renderProjectedEvent = () => [];
 
+  if (!rawJsonl) {
+    const projectedTerminal = createProjectedTerminalBridge({
+      input: process.stdin,
+      output: process.stdout,
+      childStdin: child.stdin,
+    });
+    writeProjectedOutput = projectedTerminal.writeProjectedOutput;
+    renderProjectedEvent = projectedTerminal.renderEvent;
+  }
   child.stdout.on('data', (chunk) => {
     const text = String(chunk);
-    process.stdout.write(text);
+    if (rawJsonl) process.stdout.write(text);
     stdoutBuffer += text;
     while (true) {
       const newlineIndex = stdoutBuffer.indexOf('\n');
@@ -249,6 +261,16 @@ async function main() {
       if (!line) continue;
       try {
         const event = JSON.parse(line);
+        if (!rawJsonl) {
+          for (const rendered of renderProjectedEvent(event)) {
+            if (typeof rendered === 'string') {
+              writeProjectedOutput(`${rendered}\n`, { preserveCurrentLine: rendered.startsWith('\n') });
+            } else if (rendered?.raw) {
+              writeProjectedOutput(rendered.raw, { preserveCurrentLine: rendered.raw.startsWith('\n'), prompt: rendered.newline !== false });
+              if (rendered.newline) writeProjectedOutput('\n', { preserveCurrentLine: true });
+            }
+          }
+        }
         if (wrapperEventsJsonl) {
           const statusEvent = formatWrapperStatusEvent(event);
           if (statusEvent) console.error(JSON.stringify(statusEvent));
