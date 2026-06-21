@@ -6824,6 +6824,9 @@ function removeInvalidToolHistory(messages) {
   const cleaned = [];
   const pendingToolCallIds = new Set();
   for (const message of messages) {
+    if (!['system', 'user', 'assistant', 'tool'].includes(message?.role)) {
+      continue;
+    }
     if (message.role === 'assistant') {
       for (const toolCall of message.tool_calls ?? []) {
         if (toolCall?.id) pendingToolCallIds.add(toolCall.id);

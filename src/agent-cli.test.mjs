@@ -540,6 +540,8 @@ assert.equal(observerControlEvents[0].source, 'observer');
 assert.equal(observerControlEvents[0].source_kind, 'agent');
 assert.equal(observerControlEvents[0].metadata.observer.visibility, 'operator_visible');
 assert.deepEqual(removeInvalidToolHistory([
+  { schema: 'narada.carrier.session_event.v1', event_kind: 'session_started' },
+  { role: undefined, content: 'not a provider message' },
   { role: 'user', content: 'run startup sequence' },
   { role: 'tool', content: '{}', tool_call_id: 'orphan:0' },
   {
