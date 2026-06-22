@@ -98,6 +98,24 @@ import {
   parseCodexMcpResponse,
   parseNaradaToolCall,
 } from './provider-adapters.mjs';
+import {
+  classifyCarrierHostCommandInput as classifyCarrierHostCommandInputRuntime,
+  executeCarrierHostCommand as executeCarrierHostCommandRuntime,
+  readCarrierHostCommandOutputRef as readCarrierHostCommandOutputRefRuntime,
+} from './host-command-runtime.mjs';
+import {
+  createInputQueue as createInputQueueRuntime,
+  inputWithObserverMetadata,
+  isObserverInputEvent,
+  normalizeInputEvent as normalizeInputEventRuntime,
+  normalizeInputRecord,
+  observerMetadata,
+  observerPayload,
+  observerVisibility,
+  readlineHasNonWhitespaceInput,
+  readlineHasPartialInput,
+  shouldDeferQueuedInput as shouldDeferQueuedInputRuntime,
+} from './input-queue.mjs';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -4473,9 +4491,7 @@ function startControlJsonlWatcher({ controlPath, inputQueue }) {
 }
 
 function shouldDeferQueuedInput(event, { rl, promptState } = {}) {
-  return classifyInputRuntimeHold(event, {
-    composerHasDraft: Boolean(promptState?.active && readlineHasNonWhitespaceInput(rl)),
-  }).should_defer;
+  return shouldDeferQueuedInputRuntime(event, { rl, promptState });
 }
 
 async function handleControlLine(line, { inputQueue }) {
@@ -4634,45 +4650,7 @@ function recordMcpRuntimeFault({ mcpServers = null, serverName, toolName, error,
 }
 
 function classifyCarrierHostCommandInput(input, { enabled = HOST_COMMANDS_ENABLED, approvalMode = 'execute' } = {}) {
-  const rawInput = String(input ?? '');
-  const trimmedStart = rawInput.trimStart();
-  const isHostCommand = trimmedStart.startsWith('!');
-  const commandText = isHostCommand ? trimmedStart.slice(1).trim() : '';
-  const base = {
-    is_host_command: isHostCommand,
-    command_text: commandText,
-    admission_action: 'none',
-    admission_reason: null,
-    execution_surface: 'carrier_host_shell',
-    creates_provider_turn: false,
-  };
-  if (!isHostCommand) return base;
-  if (!commandText) {
-    return {
-      ...base,
-      admission_action: 'reject',
-      admission_reason: 'empty_host_command',
-    };
-  }
-  if (enabled !== true) {
-    return {
-      ...base,
-      admission_action: 'reject',
-      admission_reason: 'host_commands_disabled',
-    };
-  }
-  if (approvalMode === 'prompt_for_approval') {
-    return {
-      ...base,
-      admission_action: 'prompt_for_approval',
-      admission_reason: 'approval_required',
-    };
-  }
-  return {
-    ...base,
-    admission_action: 'execute',
-    admission_reason: 'host_command_enabled',
-  };
+  return classifyCarrierHostCommandInputRuntime(input, { enabled, approvalMode });
 }
 
 async function executeCarrierHostCommand(admission, {
@@ -4685,183 +4663,26 @@ async function executeCarrierHostCommand(admission, {
   spawnFn = spawn,
   now = () => new Date(),
 } = {}) {
-  if (!admission?.is_host_command) return { handled: false };
-  const commandText = String(admission.command_text ?? '').trim();
-  const requestedPayload = {
-    command_id: commandId,
-    command_text: commandText,
-    command_summary: summarizeHostCommandText(commandText),
-    redaction_applied: false,
-    working_directory: cwd,
-    execution_surface: admission.execution_surface ?? 'carrier_host_shell',
-  };
-  appendSessionFn(carrierSessionEventEntry('carrier_host_command_requested', requestedPayload));
-  if (admission.admission_action !== 'execute') {
-    const terminalState = admission.admission_action === 'prompt_for_approval' ? 'rejected' : 'rejected';
-    const result = {
-      handled: true,
-      command_id: commandId,
-      terminal_state: terminalState,
-      admission_action: admission.admission_action,
-      admission_reason: admission.admission_reason,
-      exit_code: null,
-      stdout: '',
-      stderr: '',
-      output_truncated: false,
-      creates_provider_turn: false,
-    };
-    appendSessionFn(carrierSessionEventEntry('carrier_host_command_rejected', {
-      ...requestedPayload,
-      admission_action: admission.admission_action,
-      admission_reason: admission.admission_reason,
-      terminal_state: terminalState,
-    }));
-    if (printResult) printHostCommandResult({ ...result, command_text: commandText });
-    return result;
-  }
-
-  appendSessionFn(carrierSessionEventEntry('carrier_host_command_admitted', {
-    ...requestedPayload,
-    admission_action: admission.admission_action,
-    admission_reason: admission.admission_reason,
-  }));
-  const startedAt = now();
-  appendSessionFn(carrierSessionEventEntry('carrier_host_command_started', {
-    command_id: commandId,
-    started_at: startedAt.toISOString(),
-  }));
-
-  const shell = shellCommandForHost(commandText);
-  return await new Promise((resolveResult) => {
-    let stdout = '';
-    let stderr = '';
-    let outputTruncated = false;
-    let settled = false;
-    const capture = (current, chunk) => {
-      const next = current + String(chunk ?? '');
-      if (next.length <= HOST_COMMAND_OUTPUT_CAPTURE_LIMIT) return next;
-      outputTruncated = true;
-      return next.slice(0, HOST_COMMAND_OUTPUT_CAPTURE_LIMIT);
-    };
-    const finish = ({ eventKind, exitCode = null, error = null }) => {
-      if (settled) return;
-      settled = true;
-      const completedAt = now();
-      const terminalState = error ? 'failed' : exitCode === 0 ? 'completed' : 'failed';
-      const outputEvidence = hostCommandOutputEvidence({
-        commandId,
-        stdout,
-        stderr,
-        outputTruncated,
-        outputDir,
-      });
-      const payload = {
-        command_id: commandId,
-        command_text: commandText,
-        command_summary: summarizeHostCommandText(commandText),
-        redaction_applied: false,
-        working_directory: cwd,
-        exit_code: exitCode,
-        terminal_state: terminalState,
-        duration_ms: Math.max(0, completedAt.getTime() - startedAt.getTime()),
-        output_truncated: outputTruncated,
-        ...outputEvidence,
-        ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}),
-      };
-      appendSessionFn(carrierSessionEventEntry(eventKind, payload));
-      const result = {
-        handled: true,
-        command_id: commandId,
-        command_text: commandText,
-        terminal_state: terminalState,
-        exit_code: exitCode,
-        stdout,
-        stderr,
-        output_truncated: outputTruncated,
-        output_ref: outputEvidence.output_ref ?? null,
-        output_path: outputEvidence.output_path ?? null,
-        creates_provider_turn: false,
-      };
-      if (printResult) printHostCommandResult(result);
-      resolveResult(result);
-    };
-
-    let child;
-    try {
-      child = spawnFn(shell.command, shell.args, {
-        cwd,
-        env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true,
-      });
-    } catch (error) {
-      finish({ eventKind: 'carrier_host_command_failed', error });
-      return;
-    }
-    child.stdout?.on('data', (chunk) => { stdout = capture(stdout, chunk); });
-    child.stderr?.on('data', (chunk) => { stderr = capture(stderr, chunk); });
-    child.once('error', (error) => finish({ eventKind: 'carrier_host_command_failed', error }));
-    child.once('close', (code) => {
-      setImmediate(() => finish({
-        eventKind: code === 0 ? 'carrier_host_command_completed' : 'carrier_host_command_failed',
-        exitCode: typeof code === 'number' ? code : null,
-      }));
-    });
+  return await executeCarrierHostCommandRuntime(admission, {
+    commandId,
+    cwd,
+    env,
+    appendSessionFn,
+    outputDir,
+    printResult,
+    spawnFn,
+    now,
+    carrierSessionEventEntryFn: carrierSessionEventEntry,
+    printHostCommandResultFn: printHostCommandResult,
+    randomIdFn: randomId,
+    writeDurableTextFileFn: writeDurableTextFile,
+    outputInlineLimit: HOST_COMMAND_OUTPUT_INLINE_LIMIT,
+    outputCaptureLimit: HOST_COMMAND_OUTPUT_CAPTURE_LIMIT,
   });
 }
 
-function shellCommandForHost(commandText) {
-  if (process.platform === 'win32') {
-    return {
-      command: process.env.ComSpec || 'cmd.exe',
-      args: ['/d', '/s', '/c', commandText],
-    };
-  }
-  return {
-    command: process.env.SHELL || '/bin/sh',
-    args: ['-lc', commandText],
-  };
-}
-
-function summarizeHostCommandText(commandText) {
-  const text = String(commandText ?? '').replace(/\s+/g, ' ').trim();
-  return text.length > 240 ? `${text.slice(0, 239)}…` : text;
-}
-
-function hostCommandOutputEvidence({ commandId, stdout, stderr, outputTruncated, outputDir }) {
-  const output = { stdout, stderr };
-  const inline = JSON.stringify(output).length <= HOST_COMMAND_OUTPUT_INLINE_LIMIT && !outputTruncated;
-  if (inline) {
-    return {
-      stdout,
-      stderr,
-    };
-  }
-  mkdirSync(outputDir, { recursive: true });
-  const outputPath = join(outputDir, `${commandId}.json`);
-  writeDurableTextFile(outputPath, `${JSON.stringify({
-    schema: 'narada.carrier.host_command_output.v1',
-    command_id: commandId,
-    output_truncated: outputTruncated,
-    stdout,
-    stderr,
-  }, null, 2)}\n`, 'utf8');
-  return {
-    output_ref: createPayloadRef({
-      payload_ref: `mcp_payload:carrier_host_command_output:${commandId}@v1`,
-      reader_tool: 'carrier_host_command_output_read',
-      summary: `carrier host command output stored at ${outputPath}`,
-    }),
-    output_path: outputPath,
-  };
-}
-
 function readCarrierHostCommandOutputRef(payloadRef, { outputDir = join(CARRIER_SESSION_DIR, 'host-command-output') } = {}) {
-  const ref = typeof payloadRef === 'string' ? payloadRef : payloadRef?.payload_ref;
-  const match = /^mcp_payload:carrier_host_command_output:([A-Za-z0-9_.:-]+)@v\d+$/.exec(String(ref ?? ''));
-  if (!match) throw new Error(`invalid_carrier_host_command_output_ref:${String(ref ?? '')}`);
-  const outputPath = join(outputDir, `${match[1]}.json`);
-  return JSON.parse(readFileSync(outputPath, 'utf8'));
+  return readCarrierHostCommandOutputRefRuntime(payloadRef, { outputDir });
 }
 
 async function handleSlashCommand(input, {
@@ -5477,111 +5298,7 @@ function firstLinePreview(text, limit = 96) {
 // Conversation loop
 // ---------------------------------------------------------------------------
 function normalizeInputEvent(input, defaults = {}) {
-  const record = normalizeInputRecord(input);
-  const receivedAt = defaults.received_at ?? input?.received_at ?? new Date().toISOString();
-  const legacySource = record.source;
-  const protocolSourceKind = input?.source_kind ?? sourceKindForLegacyInputSource(legacySource);
-  const protocolMetadata = {
-    ...(input?.metadata ?? {}),
-    legacy_source: legacySource,
-    ...(protocolSourceKind === 'system' && record.directive_id ? { directive_provenance: { kind: 'system_directive' } } : {}),
-    ...(legacySource === 'operator_directive' ? { directive_provenance: { kind: 'explicit_operator_directive_surface' } } : {}),
-    ...(legacySource === 'observer' && !input?.metadata?.observer ? { observer: defaultObserverMetadata(input) } : {}),
-  };
-  const protocolEvent = normalizeCarrierInputEvent({
-    schema: 'narada.carrier.input_event.v1',
-    event_id: input?.event_id ?? `input_${randomId()}`,
-    source_kind: protocolSourceKind,
-    source_id: input?.source_id ?? sourceIdForLegacyInputSource(legacySource),
-    transport: normalizeLegacyTransport(input?.transport ?? defaults.transport ?? transportForInputSource(legacySource)),
-    delivery_mode: input?.delivery_mode ?? deliveryModeForLegacyInputSource(legacySource),
-    hold_condition: input?.hold_condition ?? null,
-    content: record.content,
-    created_at: receivedAt,
-    authority_ref: record.authority_ref,
-    directive_id: input?.directive_id ?? record.directive_id ?? null,
-    metadata: protocolMetadata,
-  });
-  return {
-    ...protocolEvent,
-    received_at: protocolEvent.created_at,
-    content: record.content,
-    source: legacySource,
-    authority_ref: record.authority_ref,
-    directive_id: protocolEvent.directive_id,
-    request_id: input?.request_id ?? null,
-    transport: protocolEvent.transport,
-  };
-}
-
-function transportForInputSource(source) {
-  if (source === 'automation_jsonl') return 'control_jsonl';
-  if (source === 'observer') return 'control_jsonl';
-  if (source === 'programmatic_operator' || source === 'operator_directive' || source === 'system_directive') return 'carrier_server_api';
-  return 'interactive_terminal';
-}
-
-function normalizeLegacyTransport(transport) {
-  if (transport === 'terminal') return 'interactive_terminal';
-  if (transport === 'programmatic') return 'carrier_server_api';
-  if (transport === 'jsonl_stdio') return 'control_jsonl';
-  return transport;
-}
-
-function sourceKindForLegacyInputSource(source) {
-  if (source === 'system_directive') return 'system';
-  if (source === 'observer') return 'agent';
-  return 'operator';
-}
-
-function sourceIdForLegacyInputSource(source) {
-  if (source === 'system_directive') return 'agent-cli.system_directive';
-  if (source === 'observer') return 'narada.observer';
-  return 'operator';
-}
-
-function deliveryModeForLegacyInputSource(source) {
-  if (source === 'operator_steering' || source === 'observer') return 'admit_after_active_turn';
-  return 'admit_for_current_turn';
-}
-
-function defaultObserverMetadata(input = {}) {
-  return {
-    role: 'observer',
-    rule_id: input?.rule_id ?? 'manual-observer-interjection',
-    visibility: input?.visibility ?? 'operator_visible',
-    ...(input?.confidence ? { confidence: input.confidence } : {}),
-  };
-}
-
-function isObserverInputEvent(input, record = null) {
-  return Boolean(isProtocolObserverInputEvent(input) || input?.source === 'observer' || record?.source === 'observer');
-}
-
-function observerMetadata(input = {}) {
-  return protocolObserverMetadata(input) ?? defaultObserverMetadata(input);
-}
-
-function observerVisibility(input = {}) {
-  return isProtocolObserverInputEvent(input)
-    ? protocolObserverVisibility(input)
-    : protocolObserverVisibility(inputWithObserverMetadata(input));
-}
-
-function observerPayload(input = {}, extra = {}) {
-  return protocolObserverPayload(inputWithObserverMetadata(input), extra);
-}
-
-function inputWithObserverMetadata(input = {}) {
-  if (isProtocolObserverInputEvent(input)) return input;
-  if (input?.source !== 'observer') return input;
-  return {
-    ...input,
-    metadata: {
-      ...(input.metadata ?? {}),
-      observer: defaultObserverMetadata(input),
-    },
-  };
+  return normalizeInputEventRuntime(input, defaults, { randomIdFn: randomId });
 }
 
 function classifyObserverInput(input = {}, displaySettings = transcriptDisplaySettings) {
@@ -5630,209 +5347,25 @@ function shouldAdmitInputToTurn(input) {
 }
 
 function createInputQueue({ drain, shouldDefer = () => false, onDeferred = null } = {}) {
-  const pending = [];
-  const state = { running: false, deferredNotified: new Set(), heldSystemDirectives: new Set() };
-  return {
-    get isRunning() { return state.running; },
-    get pendingCount() { return pending.length; },
-    get pendingSystemDirectiveCount() { return pending.filter((event) => event.source === 'system_directive').length; },
-    get pendingOperatorDirectiveCount() { return pending.filter((event) => event.source === 'operator_steering').length; },
-    get pendingObserverCount() { return pending.filter((event) => isObserverInputEvent(event)).length; },
-    enqueue: async (event, options = {}) => {
-      const normalized = normalizeInputEvent(event);
-      pending.push(normalized);
-      noteSessionActivity(options.state, 'input_event_queued', normalized.created_at ?? normalized.received_at ?? new Date().toISOString());
-      appendSession(SESSION_PATH, sessionEventEntry('input_event_queued', {
-        event_id: normalized.event_id,
-        source: normalized.source,
-        transport: normalized.transport,
-        source_kind: normalized.source_kind,
-        authority_ref: normalized.authority_ref,
-        directive_id: normalized.directive_id,
-      }));
-      recordObserverInputQueued(normalized);
-      const queueAdmission = classifyInputRuntimeQueueAdmission(normalized, transcriptDisplaySettings, {
-        activeTurn: state.running,
-      });
-      for (const queueEvent of queueAdmission.queue_events) {
-        appendSession(SESSION_PATH, carrierSessionEventEntry(queueEvent.event_kind, queueEvent.payload));
-      }
-      if (options.drain) await drainUntilIdle();
-      return normalized;
-    },
-    drainOnce,
-    drainUntilIdle,
-    state: queueSnapshot,
-    items: queueItems,
-    clearOperatorSteering,
-    dropOperatorSteering,
-    finalizeSession,
-  };
-
-  function queueSnapshot() {
-    return {
-      running: state.running,
-      pendingCount: pending.length,
-      pendingSystemDirectiveCount: pending.filter((event) => event.source === 'system_directive').length,
-      pendingOperatorDirectiveCount: pending.filter((event) => event.source === 'operator_steering').length,
-      pendingObserverCount: pending.filter((event) => isObserverInputEvent(event)).length,
-    };
-  }
-
-  function queueItems() {
-    return pending.map((event, index) => ({
-      index: index + 1,
-      event_id: event.event_id,
-      source: event.source,
-      source_kind: event.source_kind,
-      source_id: event.source_id,
-      transport: event.transport,
-      delivery_mode: event.delivery_mode,
-      hold_condition: event.hold_condition ?? null,
-      created_at: event.created_at,
-      received_at: event.received_at,
-      content: event.content,
-    }));
-  }
-
-  function clearOperatorSteering() {
-    const dropped = [];
-    for (let index = pending.length - 1; index >= 0; index--) {
-      if (pending[index].source !== 'operator_steering') continue;
-      const [event] = pending.splice(index, 1);
-      dropped.unshift(event);
-    }
-    for (const event of dropped) recordDroppedByOperator(event, 'queue_clear');
-    return dropped;
-  }
-
-  function dropOperatorSteering(index) {
-    const operatorSteering = pending
-      .map((event, pendingIndex) => ({ event, pendingIndex }))
-      .filter(({ event }) => event.source === 'operator_steering');
-    const target = operatorSteering[index - 1];
-    if (!target) return null;
-    const [event] = pending.splice(target.pendingIndex, 1);
-    recordDroppedByOperator(event, 'queue_drop');
-    return event;
-  }
-
-  function recordDroppedByOperator(event, dropReason) {
-    appendSession(SESSION_PATH, carrierSessionEventEntry('input_dropped_by_operator', {
-      input_event_id: event.event_id,
-      drop_reason: dropReason,
-    }));
-  }
-
-  function finalizeSession() {
-    const abandoned = pending.splice(0, pending.length);
-    for (const event of abandoned) {
-      appendSession(SESSION_PATH, carrierSessionEventEntry('input_abandoned_on_session_end', {
-        input_event_id: event.event_id,
-      }));
-      state.deferredNotified.delete(event.event_id);
-      state.heldSystemDirectives.delete(event.event_id);
-    }
-    return abandoned;
-  }
-
-  async function drainOnce() {
-    if (state.running || pending.length === 0) return null;
-    if (shouldDefer(pending[0])) {
-      const event = pending[0];
-      if (event && !state.deferredNotified.has(event.event_id)) {
-        state.deferredNotified.add(event.event_id);
-        recordSystemDirectiveHeld(event);
-        onDeferred?.(event, queueSnapshot());
-      }
-      return null;
-    }
-    const event = pending.shift();
-    state.deferredNotified.delete(event.event_id);
-    recordSystemDirectiveReleased(event);
-    state.running = true;
-    appendSession(SESSION_PATH, sessionEventEntry('input_event_started', {
-      event_id: event.event_id,
-      source: event.source,
-      transport: event.transport,
-      authority_ref: event.authority_ref,
-      directive_id: event.directive_id,
-    }));
-    const runtimeAdmission = classifyInputRuntimeAdmission(event);
-    for (const admissionEvent of runtimeAdmission.admission_events) {
-      if (admissionEvent.event_kind === 'input_admitted_to_turn') {
-        appendSession(SESSION_PATH, carrierSessionEventEntry(admissionEvent.event_kind, admissionEvent.payload));
-      }
-    }
-    if (event.source === 'system_directive' && event.directive_id) {
-      appendSession(SESSION_PATH, sessionEventEntry('directive_receipt_recorded', directiveReceiptEvidence(event, {
-        agentId: IDENTITY,
-        carrierSessionId: SESSION,
-      })));
-      appendSession(SESSION_PATH, sessionEventEntry('directive_carrier_accepted_recorded', directiveAcceptedEvidence(event, {
-        agentId: IDENTITY,
-        carrierSessionId: SESSION,
-      })));
-    }
-    try {
-      const result = await drain(event);
-      appendSession(SESSION_PATH, sessionEventEntry('input_event_completed', {
-        event_id: event.event_id,
-        terminal_state: result?.terminal_state ?? 'completed',
-      }));
-      appendSession(SESSION_PATH, carrierSessionEventEntry('input_completed', {
-        input_event_id: event.event_id,
-        terminal_state: result?.terminal_state ?? 'completed',
-      }));
-      return result;
-    } finally {
-      state.running = false;
-    }
-  }
-
-  function recordSystemDirectiveHeld(event) {
-    if (state.heldSystemDirectives.has(event.event_id)) return;
-    const hold = classifyInputRuntimeHold(event, {
-      composerHasDraft: true,
-      alreadyHeld: false,
-      occurredAt: new Date().toISOString(),
-    });
-    if (hold.hold_action !== 'hold') return;
-    state.heldSystemDirectives.add(event.event_id);
-    for (const holdEvent of hold.hold_events) {
-      appendSession(SESSION_PATH, carrierSessionEventEntry(holdEvent.event_kind, holdEvent.payload));
-    }
-  }
-
-  function recordSystemDirectiveReleased(event) {
-    if (!state.heldSystemDirectives.has(event.event_id)) return;
-    const release = classifyInputRuntimeHold(event, {
-      release: true,
-      alreadyHeld: true,
-      occurredAt: new Date().toISOString(),
-    });
-    state.heldSystemDirectives.delete(event.event_id);
-    for (const releaseEvent of release.release_events) {
-      appendSession(SESSION_PATH, carrierSessionEventEntry(releaseEvent.event_kind, releaseEvent.payload));
-    }
-  }
-
-  async function drainUntilIdle() {
-    let last = null;
-    while (!state.running && pending.length > 0 && !shouldDefer(pending[0])) {
-      last = await drainOnce();
-    }
-    if (!state.running && pending.length > 0 && shouldDefer(pending[0])) await drainOnce();
-    return last;
-  }
-}
-
-function readlineHasPartialInput(rl) {
-  return Boolean(rl && typeof rl.line === 'string' && rl.line.length > 0);
-}
-
-function readlineHasNonWhitespaceInput(rl) {
-  return Boolean(rl && typeof rl.line === 'string' && rl.line.trim().length > 0);
+  return createInputQueueRuntime({
+    drain,
+    shouldDefer,
+    onDeferred,
+    appendSessionFn: (entry) => appendSession(SESSION_PATH, entry),
+    sessionEventEntryFn: sessionEventEntry,
+    carrierSessionEventEntryFn: carrierSessionEventEntry,
+    noteSessionActivityFn: noteSessionActivity,
+    recordObserverInputQueuedFn: recordObserverInputQueued,
+    classifyInputRuntimeQueueAdmissionFn: classifyInputRuntimeQueueAdmission,
+    classifyInputRuntimeAdmissionFn: classifyInputRuntimeAdmission,
+    classifyInputRuntimeHoldFn: classifyInputRuntimeHold,
+    directiveReceiptEvidenceFn: directiveReceiptEvidence,
+    directiveAcceptedEvidenceFn: directiveAcceptedEvidence,
+    identity: IDENTITY,
+    session: SESSION,
+    transcriptDisplaySettings,
+    randomIdFn: randomId,
+  });
 }
 
 async function submitObserverInput({
@@ -6839,40 +6372,6 @@ function isAbortError(error) {
     || error?.code === 'ABORT_ERR'
     || message.includes('agent_cli_interrupt_requested')
     || message.includes('The operation was aborted');
-}
-
-function normalizeInputRecord(input) {
-  if (typeof input === 'string') return { content: input, source: 'manual_operator' };
-  if (input?.metadata?.observer || input?.source === 'observer') {
-    return {
-      content: String(input?.content ?? ''),
-      source: 'observer',
-      authority_ref: input?.authority_ref ?? null,
-      directive_id: input?.directive_id ?? null,
-    };
-  }
-  if (input?.source_kind === 'system' && !input?.source) {
-    return {
-      content: String(input?.content ?? ''),
-      source: 'system_directive',
-      authority_ref: input?.authority_ref ?? null,
-      directive_id: input?.directive_id ?? null,
-    };
-  }
-  if (input?.delivery_mode === 'admit_after_active_turn' && !input?.source) {
-    return {
-      content: String(input?.content ?? ''),
-      source: 'operator_steering',
-      authority_ref: input?.authority_ref ?? null,
-      directive_id: input?.directive_id ?? null,
-    };
-  }
-  return {
-    content: String(input?.content ?? ''),
-    source: input?.source ?? 'manual_operator',
-    authority_ref: input?.authority_ref ?? null,
-    directive_id: input?.directive_id ?? null,
-  };
 }
 
 // ---------------------------------------------------------------------------

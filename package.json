@@ -18,7 +18,7 @@
     "./terminal-rendering": "./src/terminal-rendering.mjs"
   },
   "scripts": {
-    "test": "node --test src/agent-cli.test.mjs",
+    "test": "node --test src/*.test.mjs",
     "typecheck": "tsc --noEmit --allowJs --checkJs false bin/narada-agent-cli.mjs bin/agent-runtime-server.mjs src/agent-cli.mjs src/provider-resolution.mjs src/projected-terminal.mjs src/terminal-style.mjs src/terminal-rendering.mjs",
     "verify:native-codex-mcp": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-native-codex-mcp.ps1"
   },
