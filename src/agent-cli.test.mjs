@@ -33,6 +33,9 @@ import {
   codexRequestMcpServers,
   codexExecMcpToolEventSummary,
   buildOpenAiChatRequest,
+  aggregateTools,
+  providerToolNameForOriginal,
+  originalToolNameForProvider,
   codexExecEventText,
   copyToClipboard,
   consumeOperatorDirectiveInputText,
@@ -3050,6 +3053,20 @@ assert.equal(openAiRequest.headers.Authorization, 'Bearer test-openai-key');
 assert.equal(openAiRequest.body.messages[0].role, 'system');
 assert.equal(openAiRequest.body.tools[0].function.name, 'fs_read_file');
 
+const dottedToolServers = {
+  'narada-proper': {
+    tools: [{
+      name: 'site_task_lifecycle.plan_init',
+      description: 'Plan a task',
+      inputSchema: { type: 'object', properties: { title: { type: 'string' } } },
+    }],
+  },
+};
+const dottedProviderTools = aggregateTools(dottedToolServers);
+assert.equal(dottedProviderTools[0].function.name, 'site_task_lifecycle_plan_init');
+assert.match(dottedProviderTools[0].function.name, /^[A-Za-z][A-Za-z0-9_-]*$/);
+assert.equal(providerToolNameForOriginal('site_task_lifecycle.plan_init', dottedToolServers), 'site_task_lifecycle_plan_init');
+assert.equal(originalToolNameForProvider('site_task_lifecycle_plan_init', dottedToolServers), 'site_task_lifecycle.plan_init');
 const codexMcpRequest = buildCodexMcpRequest([
   { role: 'system', content: 'You are a test agent.' },
   { role: 'user', content: 'Say ok.' },
@@ -3147,6 +3164,7 @@ assert.equal(Object.hasOwn(codexSubprocessEnv, 'OPENAI_MODEL'), false);
 const generatedCodexConfig = readFileSync(join(codexSubprocessEnv.CODEX_HOME, 'config.toml'), 'utf8');
 assert.equal(generatedCodexConfig.includes('[mcp_servers."local-filesystem"]'), true);
 assert.equal(generatedCodexConfig.includes('D:/code/mcp-surfaces/packages/local-filesystem-mcp/dist/src/main.js'), true);
+assert.equal(generatedCodexConfig.includes('env_vars = ["NARADA_AGENT_ID","NARADA_AGENT_START_EVENT_ID","NARADA_CARRIER_SESSION_ID","NARADA_SITE_ROOT","NARADA_WORKSPACE_ROOT","NARADA_AGENT_CONTEXT_DB"]'), true);
 assert.equal(generatedCodexConfig.includes('narada-andrey-agent-context'), false);
 assert.equal(generatedCodexConfig.includes('C:/Users/Andrey/Narada'), false);
 const codexJsonFallbackRequest = buildCodexMcpRequest([
@@ -3238,22 +3256,26 @@ const codexConfigToml = codexExecConfigToml({
     config: {
       command: 'node',
       args: ['--import', 'tsx', 'D:\\code\\narada\\packages\\narada-proper-mcp\\src\\main.ts'],
+      env_vars: ['EXISTING_ENV'],
     },
   },
 });
 assert.match(codexConfigToml, /\[mcp_servers\."narada-proper"\]/);
 assert.match(codexConfigToml, /default_tools_approval_mode = "approve"/);
 assert.match(codexConfigToml, /packages\/narada-proper-mcp\/src\/main\.ts/);
+assert.match(codexConfigToml, /env_vars = \["EXISTING_ENV","NARADA_AGENT_ID","NARADA_AGENT_START_EVENT_ID","NARADA_CARRIER_SESSION_ID","NARADA_SITE_ROOT","NARADA_WORKSPACE_ROOT","NARADA_AGENT_CONTEXT_DB"\]/);
 const codexMcpConfigArgs = codexExecMcpConfigArgs({
   'narada-proper': {
     config: {
       command: 'node',
       args: ['--import', 'tsx', 'D:\\code\\narada\\packages\\narada-proper-mcp\\src\\main.ts'],
+      env_vars: ['EXISTING_ENV'],
     },
   },
 });
 assert.equal(codexMcpConfigArgs.includes('-c'), true);
 assert.equal(codexMcpConfigArgs.some((arg) => arg.includes('mcp_servers."narada-proper".command=')), true);
+assert.equal(codexMcpConfigArgs.some((arg) => arg.includes('mcp_servers."narada-proper".env_vars=["EXISTING_ENV","NARADA_AGENT_ID","NARADA_AGENT_START_EVENT_ID","NARADA_CARRIER_SESSION_ID","NARADA_SITE_ROOT","NARADA_WORKSPACE_ROOT","NARADA_AGENT_CONTEXT_DB"]')), true);
 assert.equal(codexMcpConfigArgs.some((arg) => arg.includes('default_tools_approval_mode="approve"')), true);
 const event = parseCodexExecJsonLine('\u001b[32m{"type":"item.completed","item":{"type":"agent_message","text":"hello"}}\u001b[0m');
 assert.equal(codexExecEventText(event), 'hello');
@@ -4250,6 +4272,37 @@ try {
   assert.equal(discoveredEvidence.request.requested_action.classifier_metadata.surface_id, 'fixture.surface');
   assert.equal(discoveredEvidence.request.requested_action.classifier_metadata.server_name, 'fixture');
   assert.equal(discoveredEvents.find((event) => event.event === 'tool_call').classifier_source, 'surface_registry');
+
+  discoveredServers.fixture.registry_tools.fs_read_file = {
+    name: 'fs_read_file',
+    read_only: true,
+    family: 'read_only_context',
+    authority_owner: 'target_site_read_policy',
+    source: 'surface_registry',
+    surface_id: 'fixture.surface',
+    server_name: 'fixture',
+    reason: 'surface_registry_read_only_tool',
+  };
+  const listedRead = await executeMcpTool(
+    {
+      id: 'call_discovered_listed_read',
+      type: 'function',
+      function: { name: 'fs_read_file', arguments: '{"path":"package.json"}' },
+    },
+    discoveredServers,
+    null,
+    {
+      turnId: 'turn_discovered_listed_read',
+      serverMode: true,
+      agentId: 'narada.test',
+      carrierSessionId: 'carrier-discovered',
+      siteRoot: discoveredSite,
+      emit: (event, payload) => discoveredEvents.push({ event, ...payload }),
+    },
+  );
+  assert.deepEqual(JSON.parse(listedRead.content), { status: 'executed' });
+  assert.equal(discoveredEvents.some((event) => event.event === 'tool_result' && event.tool === 'fs_read_file' && event.status === 'ok' && event.decision === 'read_only_admitted'), true);
+  delete discoveredServers.fixture.registry_tools.fs_read_file;
 
   const unlistedRead = await executeMcpTool(
     {
@@ -5347,15 +5400,18 @@ assert.deepEqual(renderOperatorEvent({ event_kind: 'carrier_host_command_complet
 assert.deepEqual(renderOperatorEvent({ event: 'carrier_host_command_failed', command_text: 'fail-for-test', terminal_state: 'failed', exit_code: 7, stderr: 'bad\n' }, renderStateForTest), ['carrier host:', '  $ fail-for-test', '  status: failed (7)', '  bad']);
 assert.deepEqual(renderOperatorEvent({ event: 'directive_received', directive_id: 'dir_heartbeat', terminal_state: 'accepted', source: 'system_directive' }, renderStateForTest), []);
 assert.deepEqual(renderOperatorEvent({ event: 'directive_complete', directive_id: 'dir_heartbeat', terminal_state: 'completed_without_provider', source: 'system_directive' }, renderStateForTest), []);
+assert.deepEqual(renderOperatorEvent({ event: 'turn_started', agent_id: 'narada.test' }, { streamedTurns: new Set(), now: '2026-06-22T13:23:00.000Z' }), ['narada.test: thinking...']);
 assert.deepEqual(formatTerminalMessageBlockLines({ label: 'agent', lines: ['line one', 'line two'] }), ['agent:', '  line one', '  line two']);
 assert.deepEqual(renderOperatorEvent({ event: 'assistant_message', agent_id: 'narada.test', content: 'line one\nline two' }, renderStateForTest), ['narada.test:', '  line one', '  line two']);
 assert.deepEqual(renderOperatorEvent({ event: 'assistant_message', agent_id: 'narada.test', content: '# Heading\n- facade_only\n| A | B |\n|---|---|\n| one | `two` |' }, renderStateForTest), ['narada.test:', '  Heading', '  • facade_only', '  A    B  ', '  one  two']);
+assert.deepEqual(renderOperatorEvent({ event: 'assistant_message', agent_id: 'narada.test', content: 'line one\nline two' }, { streamedTurns: new Set(), now: '2026-06-22T13:24:00.000Z' }), ['narada.test:', '  line one', '  line two 2026-06-22Z13:24']);
 const renderedInlineCodeForTest = renderOperatorEvent({ event: 'assistant_message', agent_id: 'narada.test', content: 'Use `narada-sonar` now.' }, { streamedTurns: new Set(), style: { ...sharedColorStyleForTest, agent: sharedColorStyleForTest.label, ok: sharedColorStyleForTest.success } });
 assert.equal(stripAnsiForTest(renderedInlineCodeForTest.join('\n')).includes('Use narada-sonar now.'), true);
 assert.equal(renderedInlineCodeForTest.join('\n').includes('\x1b[90mnarada-sonar\x1b[0m'), true);
 assert.deepEqual(renderOperatorEvent({ event: 'assistant_message', agent_id: 'narada.test', content: 'alpha beta gamma delta epsilon zeta eta theta iota kappa' }, { streamedTurns: new Set(), terminalColumns: 50, timestamps: false }), ['narada.test:', '  alpha beta gamma delta epsilon zeta eta theta', '  iota kappa']);
 const streamRenderStateForTest = { streamedTurns: new Set(), timestamps: false };
 assert.deepEqual(renderOperatorEvent({ event: 'assistant_message_stream', turn_id: 'turn_stream_test', agent_id: 'narada.test', content: 'line one\nline two' }, streamRenderStateForTest), [{ raw: 'narada.test:\n  line one\n  line two', newline: false }]);
+assert.deepEqual(renderOperatorEvent({ event: 'assistant_message_stream', turn_id: 'turn_stream_timestamp_test', agent_id: 'narada.test', content: 'line one\nline two' }, { streamedTurns: new Set(), now: '2026-06-22T13:25:00.000Z' }), [{ raw: 'narada.test:\n  line one\n  line two', newline: false }]);
 const renderedStreamInlineCodeForTest = renderOperatorEvent({ event: 'assistant_message_stream', turn_id: 'turn_stream_code_test', agent_id: 'narada.test', content: 'Use `narada-sonar` now.' }, { streamedTurns: new Set(), style: { ...sharedColorStyleForTest, agent: sharedColorStyleForTest.label, ok: sharedColorStyleForTest.success } });
 assert.equal(stripAnsiForTest(renderedStreamInlineCodeForTest[0].raw).includes('Use narada-sonar now.'), true);
 assert.equal(renderedStreamInlineCodeForTest[0].raw.includes('\x1b[90mnarada-sonar\x1b[0m'), true);

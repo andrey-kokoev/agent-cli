@@ -7,7 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { request as httpsRequest } from 'node:https';
 import { request as httpRequest } from 'node:http';
 import { pathToFileURL } from 'node:url';
-import { loadSiteMcpFabric, projectServerEnvironment } from '@narada2/mcp-fabric';
+import { codexMcpEnvVarNames, loadSiteMcpFabric, projectServerEnvironment } from '@narada2/mcp-fabric';
 import {
   argumentSummary,
   classifyCarrierActionRequest,
@@ -6729,23 +6729,63 @@ function shouldSuppressMcpStderr(message) {
 }
 
 function aggregateTools(mcpServers) {
+  return aggregateToolBindings(mcpServers).map(({ providerToolName, tool }) => ({
+    type: 'function',
+    function: {
+      name: providerToolName,
+      description: tool.description ?? '',
+      parameters: tool.inputSchema ?? { type: 'object', properties: {} },
+    },
+  }));
+}
+
+function aggregateToolBindings(mcpServers) {
   const all = [];
-  const seen = new Set();
+  const seenProviderNames = new Set();
+  const seenOriginalNames = new Set();
   for (const [serverName, server] of Object.entries(mcpServers)) {
     for (const tool of server.tools) {
-      if (seen.has(tool.name)) continue;
-      seen.add(tool.name);
-      all.push({
-        type: 'function',
-        function: {
-          name: tool.name,
-          description: tool.description ?? '',
-          parameters: tool.inputSchema ?? { type: 'object', properties: {} },
-        },
-      });
+      if (seenOriginalNames.has(tool.name)) continue;
+      seenOriginalNames.add(tool.name);
+      const providerToolName = providerSafeToolName(tool.name, seenProviderNames);
+      seenProviderNames.add(providerToolName);
+      all.push({ serverName, server, tool, providerToolName });
     }
   }
   return all;
+}
+
+function providerSafeToolName(toolName, seenProviderNames = new Set()) {
+  const raw = String(toolName ?? '');
+  let name = raw.replace(/[^A-Za-z0-9_-]/g, '_');
+  if (!/^[A-Za-z]/.test(name)) name = `tool_${name}`;
+  if (!name) name = 'tool';
+  if (!seenProviderNames.has(name)) return name;
+  const hash = shortStableHash(raw);
+  const withHash = `${name}_${hash}`;
+  if (!seenProviderNames.has(withHash)) return withHash;
+  let index = 2;
+  while (seenProviderNames.has(`${withHash}_${index}`)) index += 1;
+  return `${withHash}_${index}`;
+}
+
+function shortStableHash(value) {
+  let hash = 2166136261;
+  for (const char of String(value ?? '')) {
+    hash ^= char.codePointAt(0);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return hash.toString(36).slice(0, 6);
+}
+
+function providerToolNameForOriginal(toolName, mcpServers) {
+  const binding = aggregateToolBindings(mcpServers).find(({ tool }) => tool.name === toolName);
+  return binding?.providerToolName ?? providerSafeToolName(toolName);
+}
+
+function originalToolNameForProvider(providerToolName, mcpServers) {
+  const binding = aggregateToolBindings(mcpServers).find(({ providerToolName: candidate }) => candidate === providerToolName);
+  return binding?.tool?.name ?? providerToolName;
 }
 
 function findToolServer(name, mcpServers) {
@@ -6757,9 +6797,10 @@ function findToolBinding(name, mcpServers) {
     const tool = server.tools.find((t) => t.name === name);
     if (tool) return { server: { ...server, name: serverName }, tool };
   }
+  const originalName = originalToolNameForProvider(name, mcpServers);
+  if (originalName !== name) return findToolBinding(originalName, mcpServers);
   return null;
 }
-
 async function sendMcpRequest(server, request, abortSignal = null) {
   if (abortSignal?.aborted) {
     throw new Error('agent_cli_interrupt_requested');
@@ -6768,7 +6809,6 @@ async function sendMcpRequest(server, request, abortSignal = null) {
   if (response.error) throw new Error(response.error.message);
   return response.result;
 }
-
 // ---------------------------------------------------------------------------
 // Role Prompt Loading
 // ---------------------------------------------------------------------------
@@ -9213,11 +9253,17 @@ function codexExecMcpConfigArgs(mcpServers) {
   const args = [];
   for (const [name, server] of Object.entries(mcpServers)) {
     const config = server.config ?? {};
+    const envVars = codexMcpServerEnvVars(config);
     args.push('-c', `mcp_servers."${tomlKey(name)}".command=${tomlString(config.command ?? '')}`);
     args.push('-c', `mcp_servers."${tomlKey(name)}".args=${JSON.stringify((config.args ?? []).map((arg) => String(arg).replaceAll('\\', '/')))}`);
+    args.push('-c', `mcp_servers."${tomlKey(name)}".env_vars=${JSON.stringify(envVars)}`);
     args.push('-c', `mcp_servers."${tomlKey(name)}".default_tools_approval_mode="approve"`);
   }
   return args;
+}
+
+function codexMcpServerEnvVars(config = {}) {
+  return [...new Set([...(config.env_vars ?? []).map(String), ...codexMcpEnvVarNames()])];
 }
 
 function codexExecConfigToml(mcpServers) {
@@ -9231,6 +9277,7 @@ function codexExecConfigToml(mcpServers) {
     lines.push(`[mcp_servers."${tomlKey(name)}"]`);
     lines.push(`command = ${tomlString(config.command ?? '')}`);
     lines.push(`args = ${JSON.stringify((config.args ?? []).map((arg) => String(arg).replaceAll('\\', '/')))}`);
+    lines.push(`env_vars = ${JSON.stringify(codexMcpServerEnvVars(config))}`);
     lines.push('default_tools_approval_mode = "approve"');
     lines.push('');
   }
@@ -10115,10 +10162,15 @@ export {
   createMcpPreflightPayload,
   createMcpPreflightWorkflowSnapshot,
   createSessionActivitySnapshot,
+  executeMcpTool,
+  aggregateTools,
+  aggregateToolBindings,
+  providerSafeToolName,
+  providerToolNameForOriginal,
+  originalToolNameForProvider,
   codexExecEventText,
   discoverAndStartMcpServers,
   environmentBlockLength,
-  executeMcpTool,
   classifyCarrierHostCommandInput,
   executeCarrierHostCommand,
   readCarrierHostCommandOutputRef,

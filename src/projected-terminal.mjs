@@ -284,6 +284,29 @@ function timestampSuffix(state, style) {
   return ` ${style.timestamp(formatTimestamp(now ?? new Date()))}`;
 }
 
+function assistantEmissionHeader(state, style, fallbackLabel = 'assistant') {
+  return `${style.agent(fallbackLabel)}${style.muted(':')}`;
+}
+
+function projectedAgentId(state) {
+  return state?.agentId ?? process.env.NARADA_AGENT_ID ?? 'agent';
+}
+
+function consumeLocalThinkingForEvent(state, event) {
+  if (!state.localThinkingRendered) return false;
+  const expectedAgentId = state.localThinkingAgentId ?? projectedAgentId(state);
+  if ((event.agent_id ?? expectedAgentId) !== expectedAgentId) return false;
+  state.localThinkingRendered = false;
+  state.localThinkingAgentId = null;
+  return true;
+}
+
+function clearLocalThinking(state) {
+  if (!state.localThinkingRendered) return;
+  state.localThinkingRendered = false;
+  state.localThinkingAgentId = null;
+}
+
 function appendSuffixToLastLine(lines, suffix) {
   if (!Array.isArray(lines) || lines.length === 0 || !suffix) return lines;
   lines[lines.length - 1] = `${lines[lines.length - 1]}${suffix}`;
@@ -618,8 +641,12 @@ export function renderOperatorEvent(event, state = {}) {
         style,
       })]);
     case 'turn_started':
-      return withStreamBoundary(state, [`${style.agent(event.agent_id ?? 'agent')}: thinking...`]);
+      if (consumeLocalThinkingForEvent(state, event)) {
+        return withStreamBoundary(state, []);
+      }
+      return withStreamBoundary(state, [`${assistantEmissionHeader(state, style, event.agent_id ?? 'agent')} thinking...`]);
     case 'assistant_message_stream': {
+      clearLocalThinking(state);
       const content = String(event.content ?? '');
       if (!content) return [];
       const turnKey = event.turn_id ?? '__default_stream_turn';
@@ -627,7 +654,7 @@ export function renderOperatorEvent(event, state = {}) {
       state.streamedContentByTurn.set(turnKey, `${state.streamedContentByTurn.get(turnKey) ?? ''}${content}`);
       const prefix = state.streamOpen && state.openStreamTurnKey === turnKey
         ? ''
-        : `${style.agent(event.agent_id ?? 'assistant')}${style.muted(':')}\n  `;
+        : `${assistantEmissionHeader(state, style, event.agent_id ?? 'assistant')}\n  `;
       const bodyWidth = terminalColumns(state) - 2;
       const shouldHardWrap = stripAnsi(content).length > bodyWidth;
       const renderedContent = shouldHardWrap
@@ -640,6 +667,7 @@ export function renderOperatorEvent(event, state = {}) {
       return [{ raw, newline: false }];
     }
     case 'assistant_message': {
+      clearLocalThinking(state);
       const turnKey = event.turn_id ?? '__default_stream_turn';
       const finalContent = String(event.content ?? '');
       const streamedContent = state.streamedContentByTurn.get(turnKey) ?? '';
@@ -661,6 +689,7 @@ export function renderOperatorEvent(event, state = {}) {
       return withStreamBoundary(state, block);
     }
     case 'tool_call': {
+      clearLocalThinking(state);
       if (state.toolOutputs === 'hidden') return withStreamBoundary(state, []);
       const tool = toolDisplayName(event);
       const label = `${event.agent_id ?? 'agent'} -> agent-cli`;
@@ -674,6 +703,7 @@ export function renderOperatorEvent(event, state = {}) {
       })]);
     }
     case 'tool_result': {
+      clearLocalThinking(state);
       if (state.toolOutputs === 'hidden') return withStreamBoundary(state, []);
       const status = String(event.status ?? '').toLowerCase();
       const normal = !status || ['success', 'complete', 'completed', 'ok'].includes(status);
@@ -726,7 +756,7 @@ export function createProjectedTerminalBridge({
         if (interactive) {
           const rewritten = rewriteSubmittedOperatorPromptForTest({
             line,
-            agentId: operatorState.agentId ?? 'agent',
+            agentId: projectedAgentId(operatorState),
             columns: output.columns || 80,
             style,
           });
@@ -742,7 +772,7 @@ export function createProjectedTerminalBridge({
       if (interactive) {
         const rewritten = rewriteSubmittedOperatorPromptForTest({
           line,
-          agentId: operatorState.agentId ?? 'agent',
+          agentId: projectedAgentId(operatorState),
           columns: output.columns || 80,
           style,
         });
@@ -769,11 +799,15 @@ export function createProjectedTerminalBridge({
     if (frame && interactive) {
       const rewritten = rewriteSubmittedOperatorPromptForTest({
         line,
-        agentId: operatorState.agentId ?? 'agent',
+        agentId: projectedAgentId(operatorState),
         columns: output.columns || 80,
         style,
       });
       if (rewritten) output.write(rewritten);
+      const agentId = projectedAgentId(operatorState);
+      output.write(`${assistantEmissionHeader(operatorState, style, agentId)} thinking...\n`);
+      operatorState.localThinkingRendered = true;
+      operatorState.localThinkingAgentId = agentId;
     }
     if (frame) childStdin?.write(`${JSON.stringify(frame)}\n`);
   });
