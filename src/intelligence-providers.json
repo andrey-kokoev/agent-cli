@@ -24,7 +24,7 @@
     "kimi-api": {
       "meaning": "Kimi/Moonshot API via OpenAI-compatible chat completions.",
       "base_url": "https://api.moonshot.ai",
-      "default_model": "kimi-k2.6",
+      "default_model": "kimi-k2.7",
       "adapter_kind": "openai-compatible-chat-completions",
       "support_state": "verified_supported",
       "base_url_env_names": ["KIMI_API_BASE_URL"],
@@ -35,7 +35,7 @@
     "kimi-code-api": {
       "meaning": "Kimi Code API via OpenAI-compatible chat completions; uses KIMI_CODE_API_KEY against api.kimi.com/coding/v1.",
       "base_url": "https://api.kimi.com/coding/",
-      "default_model": "kimi-k2.6",
+      "default_model": "kimi-k2.7",
       "adapter_kind": "openai-compatible-chat-completions",
       "support_state": "verified_supported",
       "base_url_env_names": ["KIMI_CODE_API_BASE_URL"],
