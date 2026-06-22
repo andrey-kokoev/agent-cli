@@ -7,7 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { request as httpsRequest } from 'node:https';
 import { request as httpRequest } from 'node:http';
 import { pathToFileURL } from 'node:url';
-import { codexMcpEnvVarNames, loadSiteMcpFabric, projectServerEnvironment } from '@narada2/mcp-fabric';
+import { loadSiteMcpFabric, projectServerEnvironment } from '@narada2/mcp-fabric';
 import {
   argumentSummary,
   classifyCarrierActionRequest,
@@ -46,7 +46,37 @@ import {
   loadProviderMetadata,
   providerEnvironment,
 } from './provider-resolution.mjs';
-import { createTerminalStyle, formatTerminalMessageBlockLines } from './terminal-style.mjs';
+import {
+  isAgentCliUtilityCommandMode,
+  parseArgs,
+  parseBooleanEnv,
+  parseColorEnv,
+} from './cli-options.mjs';
+import { createTerminalStyle } from './terminal-style.mjs';
+import { createTerminalRendering, stripAnsi } from './terminal-rendering.mjs';
+import {
+  REQUEST_ADAPTERS,
+  buildAnthropicMessagesRequest,
+  buildCodexExecArgs,
+  buildCodexMcpRequest,
+  buildCodexMcpServerArgs,
+  buildCodexSubprocessEnv,
+  buildOpenAiChatRequest,
+  cleanAnthropicMessages,
+  cleanOpenAiMessages,
+  codexExecConfigToml,
+  codexExecEventText,
+  codexExecMcpConfigArgs,
+  codexExecMcpToolEventSummary,
+  codexExecPrompt,
+  codexRequestMcpServers,
+  configureProviderAdapterContext,
+  isPotentialNaradaToolCallText,
+  parseAnthropicMessagesResponse,
+  parseCodexExecJsonLine,
+  parseCodexMcpResponse,
+  parseNaradaToolCall,
+} from './provider-adapters.mjs';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -64,22 +94,6 @@ const CODEX_SUBSCRIPTION_TRANSPORT = process.env.NARADA_CODEX_SUBSCRIPTION_TRANS
 const CODEX_NATIVE_MCP_TOOLS = parseBooleanEnv(process.env.NARADA_CODEX_NATIVE_MCP_TOOLS, true);
 const SITE_ROOT = resolve(process.env.NARADA_SITE_ROOT ?? process.cwd());
 const SITE_ID = process.env.NARADA_SITE_ID ?? process.env.NARADA_SITE_NAME ?? 'unknown-site';
-const REQUEST_ADAPTERS = Object.freeze({
-  'openai-compatible-chat-completions': {
-    buildRequest: buildOpenAiChatRequest,
-    parseResponse: (response) => response,
-  },
-  'anthropic-messages': {
-    buildRequest: buildAnthropicMessagesRequest,
-    parseResponse: parseAnthropicMessagesResponse,
-  },
-  'codex-mcp-server': {
-    buildRequest: buildCodexMcpRequest,
-    parseResponse: parseCodexMcpResponse,
-  },
-});
-let codexSubscriptionThreadId = null;
-
 const options = parseArgs(process.argv.slice(2));
 const IDENTITY = options.identity ?? 'narada.architect';
 const SESSION = options.session ?? IDENTITY.replace(/\./g, '-');
@@ -203,16 +217,6 @@ const CHILD_PROCESS_ENV_ALLOWLIST = Object.freeze([
   'DEEPSEEK_API_BASE_URL',
   'NARADA_WORKER_MCP_CONFIG',
 ]);
-const CODEX_AUTH_FILE_NAMES = Object.freeze([
-  'auth.json',
-  'credentials.json',
-  'credential.json',
-  'token.json',
-  'tokens.json',
-  'session.json',
-  'sessions.json',
-]);
-const CODEX_AUTH_HOME_ENV = 'NARADA_CODEX_AUTH_HOME';
 const MCP_STARTUP_FAILURES_KEY = '__mcp_startup_failures';
 const MCP_RUNTIME_DIAGNOSTICS_KEY = '__mcp_runtime_diagnostics';
 
@@ -1349,9 +1353,55 @@ function terminateChildProcessTree(child, { forceAfterMs = 1500 } = {}) {
   }, forceAfterMs).unref?.();
 }
 
-const terminalStyle = createTerminalStyle({
-  enabled: options.color ?? parseColorEnv(process.env.NARADA_AGENT_CLI_COLOR, false),
+const terminalRendering = createTerminalRendering({
+  identity: IDENTITY,
+  terminalStyle: createTerminalStyle({
+    enabled: options.color ?? parseColorEnv(process.env.NARADA_AGENT_CLI_COLOR, false),
+  }),
+  isObserverInputEvent,
+  observerVisibility,
+  stringifySummary,
 });
+const {
+  terminalStyle,
+  printHeader,
+  clearTerminalDisplay,
+  printHeaderRow,
+  printHeaderRows,
+  formatHeaderRows,
+  formatHeaderRow,
+  printToolRequestLine,
+  printToolResultLine,
+  toolDirectionLabel,
+  styleInputRouteLabel,
+  printInlineEvent,
+  printAgentMessage,
+  printCliMessage,
+  copyToClipboard,
+  printHostCommandResult,
+  printInputRecord,
+  inputRecordDisplayLabel,
+  printOperatorMessage,
+  rewriteSubmittedPrompt,
+  rewriteSubmittedPromptForTest,
+  clearPreviousTerminalRows,
+  formatSubmittedPrompt,
+  printMessageBlock,
+  writeTerminalRecord,
+  appendSuffixToLastLine,
+  formatTimestamp,
+  renderMarkdownForTerminal,
+  styleInlineCode,
+  normalizeDisplayTerms,
+  transformOutsideInlineCode,
+  terminalWidth,
+  wrapTerminalLine,
+  formatToolResultContent,
+  formatKeyValueRows,
+  formatDuration,
+  formatProgressStatus,
+  sanitizeOperatorDirectiveDraftForDisplay,
+} = terminalRendering;
 
 // Session persistence
 const NARADA_DIR = basename(SITE_ROOT) === '.narada' ? SITE_ROOT : join(SITE_ROOT, '.narada');
@@ -1359,8 +1409,24 @@ const SESSION_DIR = join(NARADA_DIR, 'crew', 'nars-sessions', SESSION);
 if (!UTILITY_COMMAND_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
 const SESSION_PATH = join(SESSION_DIR, 'session.jsonl');
 const EVENTS_PATH = join(SESSION_DIR, 'events.jsonl');
+
+configureProviderAdapterContext({
+  provider: INTELLIGENCE_PROVIDER,
+  apiKey: API_KEY,
+  baseUrl: BASE_URL,
+  model: MODEL,
+  thinking: THINKING_LEVEL,
+  siteRoot: SITE_ROOT,
+  nativeMcpTools: CODEX_NATIVE_MCP_TOOLS,
+  sessionDir: SESSION_DIR,
+  buildChildProcessEnv,
+  writeDurableTextFile,
+});
 const CARRIER_SESSION_DIR = join(NARADA_DIR, 'crew', 'nars-sessions', SESSION);
-const ENABLE_SESSION_FSYNC = process.env.NARADA_SESSION_FSYNC !== '0';
+const ENABLE_SESSION_FSYNC = parseBooleanEnv(
+  process.env.NARADA_SESSION_FSYNC ?? process.env.NARADA_AGENT_CLI_SESSION_FSYNC,
+  false,
+);
 const HEARTBEAT_PATH = join(CARRIER_SESSION_DIR, 'heartbeat.json');
 const MCP_PREFLIGHT_ARTIFACT_DIR = join(NARADA_DIR, 'runtime', 'agent-cli', 'mcp-preflight');
 const HEARTBEAT_ENABLED = parseBooleanEnv(process.env.NARADA_AGENT_CLI_HEARTBEAT_ENABLE, true);
@@ -8518,337 +8584,6 @@ function normalizeThinkingLevel(value) {
   return 'medium';
 }
 
-function reasoningEffort(thinking) {
-  if (thinking === 'none') return null;
-  if (thinking === 'low') return 'low';
-  if (thinking === 'high') return 'high';
-  return 'medium';
-}
-
-function buildCodexMcpRequest(messages, tools = [], { model = MODEL, thinking = THINKING_LEVEL, siteRoot = SITE_ROOT, nativeMcpTools = CODEX_NATIVE_MCP_TOOLS, mcpServers = {} } = {}) {
-  const latestUserIndex = findLastMessageIndex(messages, 'user');
-  const latestToolIndex = findLastMessageIndex(messages, 'tool');
-  const latestUser = latestUserIndex >= 0 ? messages[latestUserIndex] : null;
-  const latestTool = latestToolIndex >= 0 ? messages[latestToolIndex] : null;
-  const system = messages
-    .filter((message) => message.role === 'system')
-    .map((message) => String(message.content ?? ''))
-    .filter(Boolean)
-    .join('\n\n');
-  const prompt = latestTool && latestToolIndex > latestUserIndex
-    ? [
-      `Narada tool result (${latestTool.tool_call_id ?? 'tool'}):`,
-      String(latestTool.content ?? ''),
-      '',
-      'Answer the original request using this tool result.',
-    ].join('\n')
-    : latestUser ? String(latestUser.content ?? '') : '';
-  if (!prompt.trim()) throw new Error('codex_subscription_prompt_missing');
-  const developerInstructions = [system, codexToolProtocolInstructions(tools, { nativeMcpTools })].filter(Boolean).join('\n\n');
-
-  if (codexSubscriptionThreadId) {
-    return {
-      tool: 'codex-reply',
-      arguments: {
-        threadId: codexSubscriptionThreadId,
-        prompt,
-        model,
-        native_mcp_tools: nativeMcpTools,
-        ...(nativeMcpTools ? { mcpServers } : {}),
-        ...(reasoningEffort(thinking) ? { 'reasoning-effort': reasoningEffort(thinking) } : {}),
-      },
-    };
-  }
-
-  return {
-    tool: 'codex',
-    arguments: {
-      prompt,
-      cwd: siteRoot,
-      model,
-      native_mcp_tools: nativeMcpTools,
-      ...(nativeMcpTools ? { mcpServers } : {}),
-      ...(reasoningEffort(thinking) ? { 'reasoning-effort': reasoningEffort(thinking) } : {}),
-      sandbox: process.platform === 'win32' ? 'danger-full-access' : 'workspace-write',
-      'approval-policy': 'never',
-      ...(developerInstructions ? { 'developer-instructions': developerInstructions } : {}),
-    },
-  };
-}
-
-function findLastMessageIndex(messages, role) {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    if (messages[index]?.role === role) return index;
-  }
-  return -1;
-}
-
-function codexToolProtocolInstructions(tools = [], { nativeMcpTools = false } = {}) {
-  if (!Array.isArray(tools) || tools.length === 0) return '';
-  const toolLines = tools
-    .map((tool) => {
-      const fn = tool.function ?? {};
-      const description = String(fn.description ?? '').replace(/\s+/g, ' ').trim().slice(0, 220);
-      const schema = formatCompactJsonSchema(fn.parameters ?? { type: 'object', properties: {} });
-      return [
-        `- ${fn.name}${description ? `: ${description}` : ''}`,
-        `  input_schema: ${schema}`,
-      ].join('\n');
-    })
-    .join('\n');
-  const header = nativeMcpTools
-    ? [
-      'Narada MCP tools are registered with nested Codex as native MCP tools for this turn.',
-      'Prefer native MCP tool calls when a listed tool is needed.',
-      'If native MCP tool discovery is unavailable in the nested runtime, fall back by responding with exactly one JSON object and no prose:',
-      '{"narada_tool_call":{"name":"tool_name","arguments":{}}}',
-    ]
-    : [
-      'Narada MCP tools are available through agent-cli, not through native Codex tool discovery.',
-      'When a Narada MCP tool is needed, respond with exactly one JSON object and no prose:',
-      '{"narada_tool_call":{"name":"tool_name","arguments":{}}}',
-    ];
-  return [
-    ...header,
-    'Use each listed input_schema to construct arguments. Do not invent arguments outside the schema unless the schema explicitly allows them.',
-    'Do not claim a listed Narada MCP tool is unavailable.',
-    'Available Narada MCP tools:',
-    toolLines,
-  ].join('\n');
-}
-
-function parseCodexMcpResponse(response) {
-  if (response?.threadId) codexSubscriptionThreadId = response.threadId;
-  const toolCall = parseNaradaToolCall(response?.content ?? '');
-  if (toolCall) {
-    return {
-      id: response?.threadId ?? `codex-${Date.now()}`,
-      object: 'chat.completion',
-      streaming_rendered: false,
-      choices: [{
-        index: 0,
-        message: {
-          role: 'assistant',
-          content: null,
-          tool_calls: [{
-            id: `narada_tool_${Date.now()}`,
-            type: 'function',
-            function: {
-              name: toolCall.name,
-              arguments: JSON.stringify(toolCall.arguments ?? {}),
-            },
-          }],
-        },
-        finish_reason: 'tool_calls',
-      }],
-    };
-  }
-  return {
-    id: response?.threadId ?? `codex-${Date.now()}`,
-    object: 'chat.completion',
-    streaming_rendered: response?.streaming_rendered === true,
-    choices: [{
-      index: 0,
-      message: {
-        role: 'assistant',
-        content: response?.content ?? '',
-      },
-      finish_reason: 'stop',
-    }],
-  };
-}
-
-function parseNaradaToolCall(content) {
-  const text = stripAnsi(String(content ?? '')).trim();
-  if (!text) return null;
-  const candidates = [
-    text,
-    text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim(),
-    extractJsonObject(text),
-  ].filter(Boolean);
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate);
-      const call = parsed?.narada_tool_call;
-      if (call && typeof call.name === 'string') {
-        return {
-          name: call.name,
-          arguments: call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments)
-            ? call.arguments
-            : {},
-        };
-      }
-    } catch {
-      // Try next candidate.
-    }
-  }
-  return null;
-}
-
-function isPotentialNaradaToolCallText(content) {
-  const text = stripAnsi(String(content ?? '')).trimStart();
-  if (!text) return false;
-  if (text.startsWith('```')) return /^```(?:json)?\s*\{?/i.test(text);
-  if (!text.startsWith('{')) return false;
-  const compactPrefix = text.replace(/\s+/g, '').slice(0, 48);
-  return '{"narada_tool_call"'.startsWith(compactPrefix)
-    || compactPrefix.startsWith('{"narada_tool_call"');
-}
-
-function extractJsonObject(text) {
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  return start >= 0 && end > start ? text.slice(start, end + 1) : null;
-}
-
-function buildOpenAiChatRequest(messages, tools, { baseUrl = BASE_URL, model = MODEL, apiKey = API_KEY, thinking = THINKING_LEVEL } = {}) {
-  const isKimiProvider = INTELLIGENCE_PROVIDER === 'kimi-api' || INTELLIGENCE_PROVIDER === 'kimi-code-api';
-  const body = {
-    model,
-    messages: cleanOpenAiMessages(messages),
-    tools: tools.length > 0 ? tools : undefined,
-    tool_choice: tools.length > 0 ? 'auto' : undefined,
-    temperature: isKimiProvider ? 1 : 0.2,
-  };
-  const effort = reasoningEffort(thinking);
-  if (effort && INTELLIGENCE_PROVIDER === 'openai-api') body.reasoning_effort = effort;
-  if (INTELLIGENCE_PROVIDER === 'deepseek-api') {
-    body.thinking = { type: thinking === 'none' ? 'disabled' : 'enabled' };
-    if (thinking !== 'none') {
-      body.reasoning_effort = thinking === 'xhigh' ? 'max' : 'high';
-    }
-  }
-  const headers = {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${apiKey}`,
-  };
-  if (INTELLIGENCE_PROVIDER === 'kimi-code-api') {
-    headers['User-Agent'] = 'KimiCLI/1.0';
-  }
-  return {
-    url: new URL('v1/chat/completions', baseUrl),
-    body,
-    headers,
-  };
-}
-
-function cleanOpenAiMessages(messages) {
-  return messages.map((m) => {
-    const clean = { role: m.role };
-    if (m.role === 'tool') {
-      clean.content = m.content ?? '';
-      clean.tool_call_id = m.tool_call_id ?? '';
-    } else if (m.role === 'assistant') {
-      clean.content = m.content ?? null;
-      if (m.tool_calls && m.tool_calls.length > 0) {
-        clean.tool_calls = m.tool_calls;
-        if (INTELLIGENCE_PROVIDER === 'kimi-api' || INTELLIGENCE_PROVIDER === 'kimi-code-api' || INTELLIGENCE_PROVIDER === 'deepseek-api') {
-          clean.reasoning_content = m.reasoning_content ?? '';
-        }
-      }
-    } else {
-      clean.content = m.content ?? '';
-    }
-    return clean;
-  });
-}
-
-function buildAnthropicMessagesRequest(messages, tools, { baseUrl = BASE_URL, model = MODEL, apiKey = API_KEY, thinking = THINKING_LEVEL } = {}) {
-  const { system, anthropicMessages } = cleanAnthropicMessages(messages);
-  const body = {
-    model,
-    max_tokens: 4096,
-    messages: anthropicMessages,
-    tools: tools.length > 0 ? tools.map(toAnthropicTool) : undefined,
-    temperature: 0.2,
-  };
-  if (system) body.system = system;
-  if (thinking === 'high') body.thinking = { type: 'enabled', budget_tokens: 4096 };
-  else if (thinking === 'medium') body.thinking = { type: 'enabled', budget_tokens: 2048 };
-  return {
-    url: new URL('/v1/messages', baseUrl),
-    body,
-    headers: {
-      'Content-Type': 'application/json',
-      'anthropic-version': '2023-06-01',
-      'x-api-key': apiKey,
-    },
-  };
-}
-
-function cleanAnthropicMessages(messages) {
-  const systemParts = [];
-  const anthropicMessages = [];
-  for (const message of messages) {
-    if (message.role === 'system') {
-      systemParts.push(String(message.content ?? ''));
-    } else if (message.role === 'tool') {
-      anthropicMessages.push({
-        role: 'user',
-        content: [{
-          type: 'tool_result',
-          tool_use_id: message.tool_call_id ?? '',
-          content: stringifyContent(message.content),
-        }],
-      });
-    } else if (message.role === 'assistant') {
-      const content = [];
-      if (message.content) content.push({ type: 'text', text: String(message.content) });
-      for (const toolCall of message.tool_calls ?? []) {
-        content.push({
-          type: 'tool_use',
-          id: toolCall.id,
-          name: toolCall.function?.name ?? '',
-          input: parseJson(toolCall.function?.arguments ?? '{}'),
-        });
-      }
-      anthropicMessages.push({ role: 'assistant', content: content.length > 0 ? content : '' });
-    } else {
-      anthropicMessages.push({ role: 'user', content: String(message.content ?? '') });
-    }
-  }
-  return {
-    system: systemParts.filter(Boolean).join('\n\n'),
-    anthropicMessages,
-  };
-}
-
-function toAnthropicTool(tool) {
-  const fn = tool.function ?? {};
-  return {
-    name: fn.name,
-    description: fn.description ?? '',
-    input_schema: fn.parameters ?? { type: 'object', properties: {} },
-  };
-}
-
-function parseAnthropicMessagesResponse(response) {
-  const content = Array.isArray(response.content) ? response.content : [];
-  const text = content.filter((item) => item?.type === 'text').map((item) => item.text ?? '').join('');
-  const toolCalls = content
-    .filter((item) => item?.type === 'tool_use')
-    .map((item) => ({
-      id: item.id,
-      type: 'function',
-      function: {
-        name: item.name,
-        arguments: JSON.stringify(item.input ?? {}),
-      },
-    }));
-  const message = { role: 'assistant', content: text || null };
-  if (toolCalls.length > 0) message.tool_calls = toolCalls;
-  return {
-    id: response.id,
-    object: 'chat.completion',
-    choices: [{
-      index: 0,
-      message,
-      finish_reason: toolCalls.length > 0 ? 'tool_calls' : response.stop_reason ?? null,
-    }],
-    usage: response.usage,
-  };
-}
-
 function sendProviderRequest({ url, body, headers }, settings = {}) {
   const serializedBody = JSON.stringify(body);
   return new Promise((resolve, reject) => {
@@ -8902,39 +8637,6 @@ function sendProviderRequest({ url, body, headers }, settings = {}) {
     req.write(serializedBody);
     req.end();
   });
-}
-
-function buildCodexExecArgs(request, { model = MODEL, thinking = THINKING_LEVEL, siteRoot = SITE_ROOT } = {}) {
-  const effort = reasoningEffort(thinking);
-  const common = [
-    '--json',
-    '--dangerously-bypass-approvals-and-sandbox',
-    '-m',
-    request.arguments?.model ?? model,
-    '-c',
-    'approval_policy="never"',
-  ];
-  if (effort) common.push('-c', `model_reasoning_effort="${effort}"`);
-  if (request.arguments?.native_mcp_tools === true) {
-    common.push(...codexExecMcpConfigArgs(request.arguments?.mcpServers ?? {}));
-  }
-  if (request.tool === 'codex-reply') {
-    return ['exec', 'resume', ...common, request.arguments.threadId, '-'];
-  }
-  return ['exec', ...common, '-C', request.arguments?.cwd ?? siteRoot, '-'];
-}
-
-function codexExecPrompt(request) {
-  const prompt = String(request.arguments?.prompt ?? '');
-  const developerInstructions = request.arguments?.['developer-instructions'];
-  if (!developerInstructions) return prompt;
-  return [
-    '<developer-instructions>',
-    String(developerInstructions),
-    '</developer-instructions>',
-    '',
-    prompt,
-  ].join('\n');
 }
 
 function sendCodexExecJsonRequest(request, settings = {}) {
@@ -9074,33 +8776,6 @@ function sendCodexExecJsonBufferedRequest(request, settings = {}) {
   });
 }
 
-function parseCodexExecJsonLine(line) {
-  try {
-    return JSON.parse(stripAnsi(String(line)));
-  } catch {
-    return null;
-  }
-}
-
-function codexExecMcpToolEventSummary(event) {
-  const item = event?.item;
-  if (!item || item.type !== 'mcp_tool_call') return null;
-  const server = item.server ?? 'unknown-server';
-  const tool = item.tool ?? 'unknown_tool';
-  const name = `${server}.${tool}`;
-  const args = item.arguments && typeof item.arguments === 'object' ? item.arguments : {};
-  return {
-    id: item.id ?? null,
-    server,
-    tool,
-    name,
-    arguments: args,
-    status: item.status ?? (event.type === 'item.started' ? 'in_progress' : 'completed'),
-    result: item.result ?? null,
-    error: item.error ?? null,
-  };
-}
-
 function handleCodexExecMcpToolEvent(event, settings = {}, state = {}) {
   const summary = codexExecMcpToolEventSummary(event);
   if (!summary) return false;
@@ -9162,17 +8837,6 @@ function handleCodexExecMcpToolEvent(event, settings = {}, state = {}) {
   return false;
 }
 
-function codexExecEventText(event) {
-  if (event?.type !== 'item.completed') return '';
-  const item = event.item;
-  if (item?.type === 'agent_message' && typeof item.text === 'string') return item.text;
-  return '';
-}
-
-function stripAnsi(text) {
-  return text.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
-}
-
 function codexCommand() {
   if (process.platform !== 'win32') return { command: 'codex', prefixArgs: [] };
   const found = findOnPath(['codex.ps1', 'codex.cmd', 'codex.exe']);
@@ -9190,106 +8854,6 @@ function findOnPath(names) {
     }
   }
   return null;
-}
-
-function defaultUserCodexHome() {
-  const userRoot = process.env.USERPROFILE || process.env.HOME;
-  return userRoot ? join(userRoot, '.codex') : null;
-}
-
-function defaultCodexAuthHome() {
-  const explicit = process.env[CODEX_AUTH_HOME_ENV];
-  if (explicit) return explicit;
-  const userHome = defaultUserCodexHome();
-  if (userHome) return userHome;
-  return process.env.CODEX_HOME || null;
-}
-
-function projectCodexAuthFiles(sourceHome, targetHome) {
-  if (!sourceHome) return;
-  const resolvedSource = resolve(sourceHome);
-  const resolvedTarget = resolve(targetHome);
-  if (resolvedSource === resolvedTarget || !existsSync(resolvedSource)) return;
-  for (const fileName of CODEX_AUTH_FILE_NAMES) {
-    const sourcePath = join(resolvedSource, fileName);
-    if (!existsSync(sourcePath)) continue;
-    try {
-      if (!statSync(sourcePath).isFile()) continue;
-      copyFileSync(sourcePath, join(resolvedTarget, fileName));
-    } catch {
-      // Optional auth projection should not block providers that use env credentials.
-    }
-  }
-}
-
-function writeCodexExecHome(mcpServers, sessionDir = SESSION_DIR, { sourceHome = defaultCodexAuthHome() } = {}) {
-  const codexHome = join(sessionDir, 'codex-home');
-  mkdirSync(codexHome, { recursive: true });
-  projectCodexAuthFiles(sourceHome, codexHome);
-  writeDurableTextFile(join(codexHome, 'config.toml'), `${codexExecConfigToml(mcpServers)}\n`, 'utf8');
-  return codexHome;
-}
-
-function codexRequestMcpServers(request, settings = {}) {
-  return request.arguments?.mcpServers ?? settings.mcpServers ?? {};
-}
-
-function buildCodexSubprocessEnv(mcpServers, settings = {}) {
-  const codexHome = writeCodexExecHome(mcpServers, settings.sessionDir ?? SESSION_DIR, {
-    sourceHome: settings.codexAuthHome ?? defaultCodexAuthHome(),
-  });
-  const env = buildChildProcessEnv({ CODEX_HOME: codexHome, CODEX_CONFIG_DIR: codexHome });
-  delete env.OPENAI_API_KEY;
-  delete env.OPENAI_BASE_URL;
-  delete env.OPENAI_MODEL;
-  return env;
-}
-
-function buildCodexMcpServerArgs() {
-  return ['mcp-server'];
-}
-
-function codexExecMcpConfigArgs(mcpServers) {
-  const args = [];
-  for (const [name, server] of Object.entries(mcpServers)) {
-    const config = server.config ?? {};
-    const envVars = codexMcpServerEnvVars(config);
-    args.push('-c', `mcp_servers."${tomlKey(name)}".command=${tomlString(config.command ?? '')}`);
-    args.push('-c', `mcp_servers."${tomlKey(name)}".args=${JSON.stringify((config.args ?? []).map((arg) => String(arg).replaceAll('\\', '/')))}`);
-    args.push('-c', `mcp_servers."${tomlKey(name)}".env_vars=${JSON.stringify(envVars)}`);
-    args.push('-c', `mcp_servers."${tomlKey(name)}".default_tools_approval_mode="approve"`);
-  }
-  return args;
-}
-
-function codexMcpServerEnvVars(config = {}) {
-  return [...new Set([...(config.env_vars ?? []).map(String), ...codexMcpEnvVarNames()])];
-}
-
-function codexExecConfigToml(mcpServers) {
-  const lines = [
-    '# Generated by packages/agent-cli/src/agent-cli.mjs for nested Codex subprocesses.',
-    '# Mirrors the target Site MCP fabric; does not import User Site MCP servers.',
-    '',
-  ];
-  for (const [name, server] of Object.entries(mcpServers)) {
-    const config = server.config ?? {};
-    lines.push(`[mcp_servers."${tomlKey(name)}"]`);
-    lines.push(`command = ${tomlString(config.command ?? '')}`);
-    lines.push(`args = ${JSON.stringify((config.args ?? []).map((arg) => String(arg).replaceAll('\\', '/')))}`);
-    lines.push(`env_vars = ${JSON.stringify(codexMcpServerEnvVars(config))}`);
-    lines.push('default_tools_approval_mode = "approve"');
-    lines.push('');
-  }
-  return lines.join('\n');
-}
-
-function tomlString(value) {
-  return JSON.stringify(String(value).replaceAll('\\', '/'));
-}
-
-function tomlKey(value) {
-  return String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"');
 }
 
 function sendCodexMcpRequest(request, settings = {}) {
@@ -9426,690 +8990,8 @@ function formatCompactJsonSchema(schema, { limit = 1200 } = {}) {
   return text.length > limit ? `${text.slice(0, Math.max(0, limit - 3))}...` : text;
 }
 // ---------------------------------------------------------------------------
-// Terminal presentation
-// ---------------------------------------------------------------------------
-
-function printHeader(text, { before = false, after = false, level = 'info' } = {}) {
-  const styled = level === 'warn'
-    ? terminalStyle.warn(`[agent-cli] ${text}`)
-    : terminalStyle.header(`[agent-cli] ${text}`);
-  console.log(`${before ? '\n' : ''}${styled}${after ? '\n' : ''}`);
-}
-
-function clearTerminalDisplay() {
-  process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
-}
-
-function printHeaderRow(key, value, { before = false, after = false } = {}) {
-  console.log(formatHeaderRow(key, value, { before, after }));
-}
-
-function printHeaderRows(rows, { before = false, after = false } = {}) {
-  printMessageBlock({
-    label: 'agent-cli',
-    text: formatHeaderRows(rows),
-    before,
-    after,
-    labelStyle: terminalStyle.tool,
-    bodyStyle: (value) => value,
-  });
-}
-
-function formatHeaderRows(rows) {
-  const width = rows.reduce((max, [key]) => Math.max(max, stripAnsi(String(key)).length), 0);
-  return rows.map(([key, value]) => formatHeaderRow(key, value, { width, includePrefix: false })).join('\n');
-}
-
-function formatHeaderRow(key, value, { before = false, after = false, width = 12, includePrefix = true } = {}) {
-  const prefix = includePrefix ? `${terminalStyle.source('[agent-cli]')} ` : '';
-  const keyText = terminalStyle.key(String(key).padEnd(width));
-  const valueText = String(value) === 'on'
-    ? terminalStyle.success(String(value))
-    : terminalStyle.header(String(value));
-  return `${before ? '\n' : ''}${prefix}${keyText} ${valueText}${after ? '\n' : ''}`;
-}
-
-function printToolRequestLine(text, { before = false } = {}) {
-  printInlineEvent(toolDirectionLabel('invoke'), text, {
-    before,
-    timestamp: true,
-    bodyStyle: terminalStyle.muted,
-  });
-}
-
-function printToolResultLine(text, { before = false, level = 'info' } = {}) {
-  const label = toolDirectionLabel('result');
-  const bodyStyle = level === 'error' ? terminalStyle.error : level === 'warn' ? terminalStyle.warn : terminalStyle.muted;
-  if (!String(text ?? '').includes('\n')) {
-    printInlineEvent(label, text, { before, timestamp: true, labelStyle: level === 'error' ? terminalStyle.error : level === 'warn' ? terminalStyle.warn : (value) => value, bodyStyle });
-    return;
-  }
-  printMessageBlock({ label, text, before, timestamp: true, labelStyle: level === 'error' ? terminalStyle.error : level === 'warn' ? terminalStyle.warn : (value) => value, bodyStyle });
-}
-
-function toolDirectionLabel(direction) {
-  const arrow = terminalStyle.muted('->');
-  if (direction === 'result') return `${terminalStyle.tool('agent-cli')} ${arrow} ${terminalStyle.label(IDENTITY)}`;
-  return `${terminalStyle.label(IDENTITY)} ${arrow} ${terminalStyle.tool('agent-cli')}`;
-}
-
-function styleInputRouteLabel(label) {
-  const manual = `operator -> ${IDENTITY}`;
-  const directive = `operator directive -> ${IDENTITY}`;
-  const arrow = terminalStyle.muted('->');
-  if (label === manual) return `${terminalStyle.operator('operator')} ${arrow} ${terminalStyle.label(IDENTITY)}`;
-  if (label === directive) return `${terminalStyle.operatorDirective('operator directive')} ${arrow} ${terminalStyle.label(IDENTITY)}`;
-  return terminalStyle.prompt(label);
-}
-
-function printInlineEvent(label, text, { before = false, timestamp = false, labelStyle = (value) => value, bodyStyle = (value) => value } = {}) {
-  const suffix = timestamp ? ` ${terminalStyle.timestamp(formatTimestamp())}` : '';
-  writeTerminalRecord(`${labelStyle(label)}${terminalStyle.muted(':')} ${bodyStyle(String(text ?? ''))}${suffix}\n`, { before });
-}
-
-function printAgentMessage(text) {
-  const normalized = String(text ?? '').trim();
-  if (!stripAnsi(normalized).trim()) return false;
-  const renderedText = renderMarkdownForTerminal(normalized);
-  if (!stripAnsi(renderedText).trim()) return false;
-  printMessageBlock({
-    label: IDENTITY,
-    text: renderedText,
-    before: true,
-    after: true,
-    timestamp: true,
-    labelStyle: terminalStyle.label,
-    bodyStyle: (value) => value,
-  });
-  return true;
-}
-
-function printCliMessage(text) {
-  const normalized = String(text ?? '').trim();
-  if (!normalized) return;
-  printMessageBlock({
-    label: 'agent-cli',
-    text: renderMarkdownForTerminal(normalized),
-    before: true,
-    after: true,
-    labelStyle: terminalStyle.tool,
-    bodyStyle: (value) => value,
-  });
-}
-
-function copyToClipboard(text, spawnSyncFn = spawnSync, platform = process.platform) {
-  try {
-    let result;
-    if (platform === 'win32') {
-      result = spawnSyncFn('clip', [], { input: text, stdio: ['pipe', 'ignore', 'ignore'] });
-    } else if (platform === 'darwin') {
-      result = spawnSyncFn('pbcopy', [], { input: text, stdio: ['pipe', 'ignore', 'ignore'] });
-    } else {
-      result = spawnSyncFn('xclip', ['-selection', 'clipboard'], { input: text, stdio: ['pipe', 'ignore', 'ignore'] });
-    }
-    return !result?.error && (result?.status == null || result.status === 0);
-  } catch {
-    return false;
-  }
-}
-
-function printHostCommandResult(result = {}) {
-  const commandText = String(result.command_text ?? '').trim();
-  const lines = [
-    commandText ? `$ ${commandText}` : null,
-    `status: ${result.terminal_state ?? 'unknown'}${Number.isInteger(result.exit_code) ? ` (${result.exit_code})` : ''}`,
-  ].filter(Boolean);
-  const outputText = [result.stdout, result.stderr].filter((value) => String(value ?? '').trim()).join('\n').trim();
-  if (outputText) lines.push(outputText);
-  if (result.output_ref) lines.push(`output: ${result.output_ref.payload_ref}`);
-  printMessageBlock({
-    label: 'carrier host',
-    text: lines.join('\n'),
-    before: true,
-    timestamp: true,
-    labelStyle: terminalStyle.tool,
-    bodyStyle: result.terminal_state === 'completed' ? (value) => value : terminalStyle.warn,
-  });
-}
-
-function printInputRecord(record) {
-  const label = inputRecordDisplayLabel(record);
-  const labelStyle = record.source === 'system_directive'
-    ? terminalStyle.systemDirective
-    : isObserverInputEvent(record)
-      ? terminalStyle.label
-    : styleInputRouteLabel;
-  printMessageBlock({
-    label,
-    text: String(record.content ?? '').trim(),
-    before: true,
-    timestamp: true,
-    labelStyle,
-    bodyStyle: (value) => value,
-  });
-}
-
-function inputRecordDisplayLabel(record) {
-  if (record?.source === 'system_directive') return 'system directive';
-  if (record?.source === 'operator_directive') return `operator directive -> ${IDENTITY}`;
-  if (record?.source === 'operator_steering') return `operator steering -> ${IDENTITY}`;
-  if (isObserverInputEvent(record)) {
-    const observerId = record?.source_id ?? 'narada.observer';
-    const visibility = observerVisibility(record);
-    if (visibility === 'agent_visible') return `${observerId} -> ${IDENTITY}`;
-    if (visibility === 'conversation_visible') return `${observerId} -> conversation`;
-    return `${observerId} -> operator`;
-  }
-  return `operator -> ${IDENTITY}`;
-}
-
-function printOperatorMessage(text) {
-  const normalized = String(text ?? '').trim();
-  if (!normalized) return;
-  printMessageBlock({
-    label: 'operator',
-    text: normalized,
-    before: true,
-    timestamp: true,
-    labelStyle: terminalStyle.prompt,
-    bodyStyle: (value) => value,
-  });
-}
-
-function rewriteSubmittedPrompt(promptLabel, input) {
-  if (!process.stdout.isTTY) return;
-  const rewritten = rewriteSubmittedPromptForTest(promptLabel, input, process.stdout.columns || 80);
-  if (rewritten) process.stdout.write(rewritten);
-}
-
-function rewriteSubmittedPromptForTest(promptLabel, input, columns = 80, now = new Date()) {
-  const text = String(input ?? '');
-  if (text.includes('\n') || text.includes('\r')) return null;
-  const rawPromptRows = Math.max(1, Math.ceil(stripAnsi(`${promptLabel}> ${text}`).length / Math.max(1, columns)));
-  return `${clearPreviousTerminalRows(rawPromptRows)}\n${formatSubmittedPrompt(promptLabel, text, columns, now)}`;
-}
-
-function clearPreviousTerminalRows(rows) {
-  if (rows <= 1) return '\x1b[1A\r\x1b[K';
-  let sequence = `\x1b[${rows}A`;
-  for (let index = 0; index < rows; index++) {
-    sequence += '\r\x1b[2K';
-    if (index < rows - 1) sequence += '\x1b[1B';
-  }
-  return `${sequence}\x1b[${rows - 1}A\r`;
-}
-
-function formatSubmittedPrompt(promptLabel, text, columns = 80, now = new Date()) {
-  const prefix = `${promptLabel}: `;
-  const firstLineWidth = Math.max(16, columns - stripAnsi(prefix).length);
-  const lines = wrapTerminalLine(String(text ?? ''), firstLineWidth);
-  const [first = '', ...rest] = lines;
-  const renderedLines = [
-    `${styleInputRouteLabel(promptLabel)}${terminalStyle.muted(':')} ${first}`,
-    ...rest.map((line) => `  ${line}`),
-  ];
-  appendSuffixToLastLine(renderedLines, ` ${terminalStyle.timestamp(formatTimestamp(now))}`);
-  return renderedLines.join('\n') + '\n';
-}
-
-function printMessageBlock({ label, text, before = false, after = false, timestamp = false, labelStyle = (value) => value, bodyStyle = (value) => value }) {
-  const width = terminalWidth();
-  const bodyWidth = Math.max(32, width - 2);
-  const lines = String(text ?? '').split(/\r?\n/).flatMap((line) => wrapTerminalLine(line, bodyWidth));
-  const renderedLines = formatTerminalMessageBlockLines({
-    label,
-    lines,
-    style: terminalStyle,
-    labelStyle,
-    bodyStyle,
-  });
-  if (timestamp) appendSuffixToLastLine(renderedLines, ` ${terminalStyle.timestamp(formatTimestamp())}`);
-  const rendered = renderedLines.join('\n');
-  writeTerminalRecord(`${rendered}${after ? '\n\n' : '\n'}`, { before });
-}
-
-function writeTerminalRecord(text, { before = false } = {}) {
-  process.stdout.write(`\r\x1b[K${before ? '\n' : ''}${text}`);
-}
-
-function appendSuffixToLastLine(lines, suffix) {
-  if (!Array.isArray(lines) || lines.length === 0 || !suffix) return lines;
-  lines[lines.length - 1] = `${lines[lines.length - 1]}${suffix}`;
-  return lines;
-}
-
-function formatTimestamp(now = new Date()) {
-  const date = now instanceof Date ? now : new Date(now);
-  const pad = (value) => String(value).padStart(2, '0');
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}Z${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
-}
-
-function renderMarkdownForTerminal(text) {
-  const lines = String(text ?? '').split(/\r?\n/);
-  let inFence = false;
-  let inTable = false;
-  let tableRows = [];
-  let tableHeader = null;
-  const outLines = [];
-  for (const line of lines) {
-    const fenceMatch = line.match(/^(\s*)```/);
-    if (fenceMatch) {
-      if (inTable) flushTable();
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) {
-      outLines.push(terminalStyle.code(`  ${line.replace(/^\s{0,4}/, '')}`));
-      continue;
-    }
-    const tableMatch = line.match(/^\|(.*)\|$/);
-    if (tableMatch) {
-      inTable = true;
-      const cells = tableMatch[1].split('|').map((cell) => cell.trim());
-      const isSeparator = cells.every((cell) => /^:?-+:?$/.test(cell));
-      if (isSeparator) continue;
-      if (tableHeader === null) {
-        tableHeader = cells;
-      } else {
-        tableRows.push(cells);
-      }
-      continue;
-    }
-    if (inTable) {
-      flushTable();
-      inTable = false;
-    }
-    if (/^#{1,6}\s+/.test(line)) {
-      outLines.push(terminalStyle.label(line.replace(/^#{1,6}\s+/, '')));
-      continue;
-    }
-    const normalizedLine = normalizeDisplayTerms(line);
-    const bulletLine = /^\s*[-*]\s+/.test(normalizedLine)
-      ? normalizedLine.replace(/^(\s*)[-*]\s+/, '$1• ')
-      : normalizedLine;
-    outLines.push(styleInlineCode(bulletLine));
-  }
-  if (inTable) flushTable();
-  return outLines.filter((line) => line !== null).join('\n');
-
-  function flushTable() {
-    if (!tableHeader) return;
-    const colCount = tableHeader.length;
-    const visible = (s) => stripAnsi(s).length;
-    const padded = (s, width) => {
-      const padWidth = Math.max(0, width - visible(s));
-      return `${s}${' '.repeat(padWidth)}`;
-    };
-    const widths = tableHeader.map((h, i) => Math.max(
-      visible(styleInlineCode(h)),
-      ...tableRows.map((row) => visible(styleInlineCode(row[i] ?? ''))),
-    ));
-    const renderRow = (row) => row.map((cell, i) => padded(styleInlineCode(cell ?? ''), widths[i])).join('  ');
-    outLines.push(terminalStyle.label(renderRow(tableHeader)));
-    for (const row of tableRows) {
-      const paddedRow = [];
-      for (let i = 0; i < colCount; i++) {
-        paddedRow.push(padded(styleInlineCode(row[i] ?? ''), widths[i]));
-      }
-      outLines.push(paddedRow.join('  '));
-    }
-    tableHeader = null;
-    tableRows = [];
-  }
-}
-
-function styleInlineCode(line) {
-  return String(line ?? '').replace(/`([^`]+)`/g, (_match, code) => terminalStyle.code(code));
-}
-
-function normalizeDisplayTerms(line) {
-  return transformOutsideInlineCode(String(line ?? ''), (chunk) => chunk
-    .replace(/\bauthority_locus\b/g, 'authority locus')
-    .replace(/\bauthority_posture\b/g, 'authority posture')
-    .replace(/\bfacade_only\b/g, '`facade_only`')
-    .replace(/\bnarada_proper\b/g, '`narada_proper`'));
-}
-
-function transformOutsideInlineCode(text, transform) {
-  return String(text ?? '').split(/(`[^`]*`)/g)
-    .map((part) => part.startsWith('`') && part.endsWith('`') ? part : transform(part))
-    .join('');
-}
-
-function terminalWidth() {
-  return Math.max(50, Math.min(120, process.stdout.columns || 88));
-}
-
-function wrapTerminalLine(line, width) {
-  if (line.trim() === '') return [''];
-  const visible = stripAnsi(line);
-  if (visible.length <= width) return [line];
-  const words = line.split(/(\s+)/);
-  const lines = [];
-  let current = '';
-  for (const word of words) {
-    if (!word) continue;
-    if (stripAnsi(current + word).length > width && current.trim()) {
-      lines.push(current.trimEnd());
-      current = word.trimStart();
-    } else {
-      current += word;
-    }
-  }
-  if (current.trim()) lines.push(current.trimEnd());
-  return lines.length ? lines : [line];
-}
-
-function formatToolResultContent(content) {
-  const text = typeof content === 'string' ? content : String(content == null ? '' : stringifySummary(content));
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const keys = Object.keys(parsed);
-      // If the JSON is compact enough, show it inline so operators and the AI can actually read it.
-      const compact = JSON.stringify(parsed);
-      if (compact.length <= 240) return compact;
-
-      const status = typeof parsed.status === 'string' ? `${parsed.status}` : null;
-      const schema = typeof parsed.schema === 'string' ? parsed.schema : null;
-      const count = typeof parsed.directive_count === 'number'
-        ? `directives=${parsed.directive_count}`
-        : typeof parsed.directiveCount === 'number'
-          ? `directives=${parsed.directiveCount}`
-          : null;
-      const outputRef = typeof parsed.output_ref === 'string' ? `output_ref=${parsed.output_ref}` : null;
-      const readerTool = typeof parsed.reader_tool === 'string' ? `reader_tool=${parsed.reader_tool}` : null;
-      const error = typeof parsed.error === 'string' ? `error=${parsed.error}` : null;
-      const shownKeys = keys.slice(0, 8);
-      const keySummary = shownKeys.length
-        ? `keys: ${shownKeys.join(', ')}${keys.length > shownKeys.length ? ', ...' : ''}`
-        : null;
-      return [
-        [status, schema, count, outputRef, readerTool, error].filter(Boolean).join(' · '),
-        keySummary,
-      ].filter(Boolean).join('\n');
-    }
-    if (Array.isArray(parsed)) {
-      const compact = JSON.stringify(parsed);
-      return compact.length <= 240 ? compact : `array(${parsed.length})`;
-    }
-  } catch {
-    // Fall through to text summary.
-  }
-  return text.length > 500 ? `${text.slice(0, 500)}...` : text;
-}
-
-function formatKeyValueRows(record) {
-  const entries = Object.entries(record);
-  const width = entries.reduce((max, [key]) => Math.max(max, key.length), 0);
-  return entries.map(([key, value]) => `${key.padEnd(width)}  ${value}`).join('\n');
-}
-
-function formatDuration(ms) {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  if (totalSeconds < 60) return `${totalSeconds}s`;
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
-  return `${minutes}m ${seconds}s`;
-}
-
-function formatProgressStatus({ spinner, phase, totalMs, phaseMs, operatorDirectiveDraft = '', operatorDirectiveDraftLength = 0, queuedOperatorDirectiveCount = 0 }) {
-  const phaseText = String(phase ?? 'working');
-  const phaseDuration = formatDuration(phaseMs ?? totalMs ?? 0);
-  const totalDuration = formatDuration(totalMs ?? 0);
-  const totalSuffix = phaseText === 'thinking' ? '' : ` · total ${totalDuration}`;
-  const queuedSuffix = queuedOperatorDirectiveCount > 0 ? ` · queued operator directives ${queuedOperatorDirectiveCount}` : '';
-  const draftText = sanitizeOperatorDirectiveDraftForDisplay(operatorDirectiveDraft);
-  const draftLength = operatorDirectiveDraftLength || Array.from(String(operatorDirectiveDraft ?? '')).length;
-  const draftSuffix = draftText
-    ? ` · typing: ${draftText}`
-    : (draftLength > 0 ? ` · typing operator directive (${draftLength})` : '');
-  return `${spinner} ${phaseText} ${phaseDuration}${totalSuffix}${queuedSuffix} · Enter queues note · Esc to interrupt${draftSuffix}`;
-}
-
-function sanitizeOperatorDirectiveDraftForDisplay(value) {
-  return String(value ?? '')
-    .replace(/[\r\n\t]+/g, ' ')
-    .replace(/[\u0000-\u001f\u007f]+/g, '')
-    .trimEnd();
-}
-
-function parseColorEnv(value, defaultValue) {
-  if (process.env.NO_COLOR) return false;
-  if (process.env.FORCE_COLOR && process.env.FORCE_COLOR !== '0') return true;
-  return parseBooleanEnv(value, defaultValue);
-}
-
-// ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
-function parseArgs(argv) {
-  const opts = {};
-  const markRemovedConversationArg = (flag) => {
-    opts.removedConversationArgs = [...(opts.removedConversationArgs ?? []), flag];
-  };
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--identity' && i + 1 < argv.length) {
-      opts.identity = argv[i + 1];
-      i++;
-    } else if (argv[i] === '--session' && i + 1 < argv.length) {
-      opts.session = argv[i + 1];
-      i++;
-    } else if (argv[i] === '--message' && i + 1 < argv.length) {
-      markRemovedConversationArg('--message');
-      i++;
-    } else if (argv[i] === '--message-file' && i + 1 < argv.length) {
-      markRemovedConversationArg('--message-file');
-      i++;
-    } else if (argv[i] === '--authority-ref' && i + 1 < argv.length) {
-      markRemovedConversationArg('--authority-ref');
-      i++;
-    } else if (argv[i] === '--operator-directive') {
-      markRemovedConversationArg('--operator-directive');
-    } else if (argv[i] === '--system-directive') {
-      markRemovedConversationArg('--system-directive');
-    } else if (argv[i] === '--enable-startup-system-directive') {
-      markRemovedConversationArg('--enable-startup-system-directive');
-    } else if (argv[i] === '--startup-system-directive' && i + 1 < argv.length) {
-      markRemovedConversationArg('--startup-system-directive');
-      i++;
-    } else if (argv[i] === '--startup-system-directive-delay-ms' && i + 1 < argv.length) {
-      markRemovedConversationArg('--startup-system-directive-delay-ms');
-      i++;
-    } else if (argv[i] === '--no-startup-system-directive') {
-      markRemovedConversationArg('--no-startup-system-directive');
-    } else if (argv[i] === '--interactive-after-message') {
-      markRemovedConversationArg('--interactive-after-message');
-    } else if (argv[i] === '--auto-approve') {
-      markRemovedConversationArg('--auto-approve');
-    } else if (argv[i] === '--server') {
-      opts.server = true;
-    } else if (argv[i] === '--mcp-preflight') {
-      opts.mcpPreflight = true;
-    } else if (argv[i] === '--mcp-preflight-json') {
-      opts.mcpPreflightJson = true;
-    } else if (argv[i] === '--mcp-preflight-read') {
-      opts.mcpPreflightRead = true;
-    } else if (argv[i] === '--mcp-preflight-read-json') {
-      opts.mcpPreflightReadJson = true;
-    } else if (argv[i] === '--mcp-preflight-inventory') {
-      opts.mcpPreflightInventory = true;
-    } else if (argv[i] === '--mcp-preflight-inventory-json') {
-      opts.mcpPreflightInventoryJson = true;
-    } else if (argv[i] === '--mcp-preflight-actions') {
-      opts.mcpPreflightActions = true;
-    } else if (argv[i] === '--mcp-preflight-actions-json') {
-      opts.mcpPreflightActionsJson = true;
-    } else if (argv[i] === '--mcp-preflight-recovery') {
-      opts.mcpPreflightRecovery = true;
-    } else if (argv[i] === '--mcp-preflight-recovery-json') {
-      opts.mcpPreflightRecoveryJson = true;
-    } else if (argv[i] === '--mcp-preflight-diagnostics') {
-      opts.mcpPreflightDiagnostics = true;
-    } else if (argv[i] === '--mcp-preflight-diagnostics-json') {
-      opts.mcpPreflightDiagnosticsJson = true;
-    } else if (argv[i] === '--mcp-preflight-filter' && i + 1 < argv.length) {
-      opts.mcpPreflightFilter = argv[i + 1];
-      i++;
-    } else if (argv[i] === '--mcp-preflight-match' && i + 1 < argv.length) {
-      opts.mcpPreflightMatch = argv[i + 1];
-      i++;
-    } else if (argv[i] === '--mcp-preflight-diagnostics-filter' && i + 1 < argv.length) {
-      opts.mcpPreflightDiagnosticsFilter = argv[i + 1];
-      i++;
-    } else if (argv[i] === '--session-inventory') {
-      opts.sessionInventory = true;
-    } else if (argv[i] === '--session-inventory-json') {
-      opts.sessionInventoryJson = true;
-    } else if (argv[i] === '--session-inventory-operations') {
-      opts.sessionInventoryOperations = true;
-    } else if (argv[i] === '--session-inventory-operations-json') {
-      opts.sessionInventoryOperationsJson = true;
-    } else if (argv[i] === '--session-inventory-host-commands') {
-      opts.sessionInventoryHostCommands = true;
-    } else if (argv[i] === '--session-inventory-host-commands-json') {
-      opts.sessionInventoryHostCommandsJson = true;
-    } else if (argv[i] === '--session-inventory-actions') {
-      opts.sessionInventoryActions = true;
-    } else if (argv[i] === '--session-inventory-actions-json') {
-      opts.sessionInventoryActionsJson = true;
-    } else if (argv[i] === '--session-inventory-recovery') {
-      opts.sessionInventoryRecovery = true;
-    } else if (argv[i] === '--session-inventory-recovery-json') {
-      opts.sessionInventoryRecoveryJson = true;
-    } else if (argv[i] === '--session-inventory-events') {
-      opts.sessionInventoryEvents = true;
-    } else if (argv[i] === '--session-inventory-events-json') {
-      opts.sessionInventoryEventsJson = true;
-    } else if (argv[i] === '--session-operations') {
-      opts.sessionOperations = true;
-    } else if (argv[i] === '--session-operations-json') {
-      opts.sessionOperationsJson = true;
-    } else if (argv[i] === '--session-inventory-filter' && i + 1 < argv.length) {
-      opts.sessionInventoryFilter = argv[i + 1];
-      i++;
-    } else if (argv[i] === '--session-inventory-match' && i + 1 < argv.length) {
-      opts.sessionInventoryMatch = argv[i + 1];
-      i++;
-    } else if (argv[i] === '--session-inventory-events-filter' && i + 1 < argv.length) {
-      opts.sessionInventoryEventsFilter = argv[i + 1];
-      i++;
-    } else if (argv[i] === '--session-inventory-events-count' && i + 1 < argv.length) {
-      opts.sessionInventoryEventsCount = Number(argv[i + 1]);
-      i++;
-    } else if (argv[i] === '--session-recovery') {
-      opts.sessionRecovery = true;
-    } else if (argv[i] === '--session-recovery-json') {
-      opts.sessionRecoveryJson = true;
-    } else if (argv[i] === '--session-read') {
-      opts.sessionRead = true;
-    } else if (argv[i] === '--session-read-json') {
-      opts.sessionReadJson = true;
-    } else if (argv[i] === '--host-command-output-read') {
-      opts.hostCommandOutputRead = true;
-    } else if (argv[i] === '--host-command-output-read-json') {
-      opts.hostCommandOutputReadJson = true;
-    } else if (argv[i] === '--host-command-output-ref' && i + 1 < argv.length) {
-      opts.hostCommandOutputRef = argv[i + 1];
-      i++;
-    } else if (argv[i] === '--session-events') {
-      opts.sessionEvents = true;
-    } else if (argv[i] === '--session-events-json') {
-      opts.sessionEventsJson = true;
-    } else if (argv[i] === '--session-events-filter' && i + 1 < argv.length) {
-      opts.sessionEventsFilter = argv[i + 1];
-      i++;
-    } else if (argv[i] === '--session-events-count' && i + 1 < argv.length) {
-      opts.sessionEventsCount = Number(argv[i + 1]);
-      i++;
-    } else if (argv[i] === '--session-sync') {
-      opts.sessionSync = true;
-    } else if (argv[i] === '--session-sync-json') {
-      opts.sessionSyncJson = true;
-    } else if (argv[i] === '--session-sync-target' && i + 1 < argv.length) {
-      opts.sessionSyncTarget = argv[i + 1];
-      i++;
-    } else if (argv[i] === '--session-sync-direction' && i + 1 < argv.length) {
-      opts.sessionSyncDirection = argv[i + 1];
-      i++;
-    } else if (argv[i] === '--session-sync-dry-run') {
-      opts.sessionSyncDryRun = true;
-    } else if (argv[i] === '--session-sync-delete') {
-      opts.sessionSyncDelete = true;
-    } else if (argv[i] === '--stream') {
-      opts.stream = true;
-    } else if (argv[i] === '--no-stream') {
-      opts.stream = false;
-    } else if (argv[i] === '--color') {
-      opts.color = true;
-    } else if (argv[i] === '--no-color') {
-      opts.color = false;
-    } else if (argv[i] === '--control-jsonl' && i + 1 < argv.length) {
-      markRemovedConversationArg('--control-jsonl');
-      i++;
-    } else if (argv[i] === '--model' && i + 1 < argv.length) {
-      opts.model = argv[i + 1];
-      i++;
-    } else if (argv[i] === '--thinking' && i + 1 < argv.length) {
-      opts.thinking = argv[i + 1];
-      i++;
-    } else if (argv[i] === '--help' || argv[i] === '-h') {
-      opts.help = true;
-    }
-  }
-  return opts;
-}
-
-function isAgentCliUtilityCommandMode(opts = {}) {
-  return opts.help === true
-    || opts.mcpPreflight === true
-    || opts.mcpPreflightJson === true
-    || opts.mcpPreflightRead === true
-    || opts.mcpPreflightReadJson === true
-    || opts.mcpPreflightInventory === true
-    || opts.mcpPreflightInventoryJson === true
-    || opts.mcpPreflightActions === true
-    || opts.mcpPreflightActionsJson === true
-    || opts.mcpPreflightRecovery === true
-    || opts.mcpPreflightRecoveryJson === true
-    || opts.mcpPreflightDiagnostics === true
-    || opts.mcpPreflightDiagnosticsJson === true
-    || opts.sessionInventory === true
-    || opts.sessionInventoryJson === true
-    || opts.sessionInventoryOperations === true
-    || opts.sessionInventoryOperationsJson === true
-    || opts.sessionInventoryHostCommands === true
-    || opts.sessionInventoryHostCommandsJson === true
-    || opts.sessionInventoryActions === true
-    || opts.sessionInventoryActionsJson === true
-    || opts.sessionInventoryRecovery === true
-    || opts.sessionInventoryRecoveryJson === true
-    || opts.sessionInventoryEvents === true
-    || opts.sessionInventoryEventsJson === true
-    || opts.sessionOperations === true
-    || opts.sessionOperationsJson === true
-    || opts.sessionRecovery === true
-    || opts.sessionRecoveryJson === true
-    || opts.sessionRead === true
-    || opts.sessionReadJson === true
-    || opts.hostCommandOutputRead === true
-    || opts.hostCommandOutputReadJson === true
-    || opts.sessionEvents === true
-    || opts.sessionEventsJson === true
-    || opts.sessionSync === true
-    || opts.sessionSyncJson === true;
-}
-
-function parseBooleanEnv(value, defaultValue) {
-  if (value === undefined || value === null || String(value).trim() === '') return defaultValue;
-  const normalized = String(value).trim().toLowerCase();
-  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
-  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
-  return defaultValue;
-}
-
 function parseJson(text) {
   try {
     return JSON.parse(text);
@@ -10136,6 +9018,25 @@ function readDirFiles(dir) {
 const isEntrypoint = process.argv[1]
   ? import.meta.url === pathToFileURL(process.argv[1]).href
   : false;
+
+export {
+  runSessionEventsRead,
+  runSessionOperationsRead,
+  runSessionSync,
+  runSessionRecovery,
+  runSessionRead,
+  runSessionInventory,
+  runSessionInventoryActions,
+  runSessionInventoryRecovery,
+  readPersistedSessionEvents,
+  filterPersistedSessionEvents,
+  filterSessionInventory,
+  summarizeSessionInventoryGroups,
+  readPersistedSession,
+  readSessionInventory,
+  sessionEventEntry,
+  sessionLogEntry,
+} from './session-persistence.mjs';
 
 export {
   PROVIDER_SUPPORT_STATES,
@@ -10237,28 +9138,12 @@ export {
   runConversationTurn,
   runMcpPreflightDiagnostics,
   runMcpPreflight,
-  runSessionEventsRead,
-  runSessionOperationsRead,
-  runSessionSync,
-  runSessionRecovery,
-  runSessionRead,
-  runSessionInventory,
-  runSessionInventoryActions,
-  runSessionInventoryRecovery,
   runServerMode,
-  readPersistedSessionEvents,
-  filterPersistedSessionEvents,
-  filterSessionInventory,
-  summarizeSessionInventoryGroups,
-  readPersistedSession,
-  readSessionInventory,
   serverStatus,
   resolveProviderAdapter,
   resolveProviderSupportState,
   directiveAcceptedEvidence,
   directiveReceiptEvidence,
-  sessionEventEntry,
-  sessionLogEntry,
   styleInputRouteLabel,
 };
 

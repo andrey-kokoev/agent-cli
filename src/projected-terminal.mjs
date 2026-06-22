@@ -275,7 +275,7 @@ function styleInlineCode(text, style) {
 function formatTimestamp(now = new Date()) {
   const date = now instanceof Date ? now : new Date(now);
   const pad = (value) => String(value).padStart(2, '0');
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}Z${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
 }
 
 function timestampSuffix(state, style) {
@@ -489,8 +489,18 @@ function routeLine({ label, body, labelStyle = (value) => value, bodyStyle = (va
   return `${labelStyle(label)}${style.muted(':')} ${bodyStyle(String(body ?? ''))}${timestampSuffix(state, style)}`;
 }
 
-function indentedRouteLine(options) {
-  return `  ${routeLine(options)}`;
+function routedBodyLines({ label, body, labelStyle = (value) => value, bodyStyle = (value) => value, state, style }) {
+  const prefix = `${labelStyle(label)}${style.muted(':')} `;
+  const bodyText = String(body ?? '');
+  const firstLineWidth = Math.max(16, terminalColumns(state) - stripAnsi(prefix).length);
+  const wrapped = wrapTerminalLine(bodyText, firstLineWidth);
+  const [first = '', ...rest] = wrapped;
+  const lines = [
+    `${prefix}${bodyStyle(first)}`,
+    ...rest.map((line) => `  ${bodyStyle(line)}`),
+  ];
+  appendSuffixToLastLine(lines, timestampSuffix(state, style));
+  return lines;
 }
 
 function isHostCommandEvent(event) {
@@ -718,28 +728,28 @@ export function renderOperatorEvent(event, state = {}) {
       if (state.toolOutputs === 'hidden') return withRenderedThinkingCleared(state, []);
       const tool = toolDisplayName(event);
       const label = `${event.agent_id ?? 'agent'} -> agent-cli`;
-      return withRenderedThinkingCleared(state, [indentedRouteLine({
+      return withRenderedThinkingCleared(state, routedBodyLines({
         label,
         body: `${tool}${summarizeToolCall(event)}`,
         labelStyle: (value) => `${agentLabel(event, style)} ${style.muted('->')} ${style.tool('agent-cli')}`,
         bodyStyle: style.muted,
         state,
         style,
-      })]);
+      }));
     }
     case 'tool_result': {
       if (state.toolOutputs === 'hidden') return withRenderedThinkingCleared(state, []);
       const status = String(event.status ?? '').toLowerCase();
       const normal = !status || ['success', 'complete', 'completed', 'ok'].includes(status);
       const levelStyle = normal ? style.muted : status === 'error' ? style.error : style.warn;
-      return withRenderedThinkingCleared(state, [indentedRouteLine({
+      return withRenderedThinkingCleared(state, routedBodyLines({
         label: `agent-cli -> ${event.agent_id ?? 'agent'}`,
         body: `${toolDisplayName(event)} ${summarizeToolResult(event)}`,
         labelStyle: (value) => `${style.tool('agent-cli')} ${style.muted('->')} ${agentLabel(event, style)}`,
         bodyStyle: levelStyle,
         state,
         style,
-      })]);
+      }));
     }
     case 'turn_complete':
       return withRenderedThinkingCleared(state, [routeLine({ label: 'agent-cli', body: 'turn complete', labelStyle: style.label, bodyStyle: style.ok, state, style })]);
