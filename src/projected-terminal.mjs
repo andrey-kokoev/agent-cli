@@ -489,6 +489,10 @@ function routeLine({ label, body, labelStyle = (value) => value, bodyStyle = (va
   return `${labelStyle(label)}${style.muted(':')} ${bodyStyle(String(body ?? ''))}${timestampSuffix(state, style)}`;
 }
 
+function indentedRouteLine(options) {
+  return `  ${routeLine(options)}`;
+}
+
 function isHostCommandEvent(event) {
   return String(event?.event ?? event?.event_kind ?? '').startsWith('carrier_host_command_')
     || event?.event === 'host_command_result';
@@ -714,7 +718,7 @@ export function renderOperatorEvent(event, state = {}) {
       if (state.toolOutputs === 'hidden') return withRenderedThinkingCleared(state, []);
       const tool = toolDisplayName(event);
       const label = `${event.agent_id ?? 'agent'} -> agent-cli`;
-      return withRenderedThinkingCleared(state, [routeLine({
+      return withRenderedThinkingCleared(state, [indentedRouteLine({
         label,
         body: `${tool}${summarizeToolCall(event)}`,
         labelStyle: (value) => `${agentLabel(event, style)} ${style.muted('->')} ${style.tool('agent-cli')}`,
@@ -728,7 +732,7 @@ export function renderOperatorEvent(event, state = {}) {
       const status = String(event.status ?? '').toLowerCase();
       const normal = !status || ['success', 'complete', 'completed', 'ok'].includes(status);
       const levelStyle = normal ? style.muted : status === 'error' ? style.error : style.warn;
-      return withRenderedThinkingCleared(state, [routeLine({
+      return withRenderedThinkingCleared(state, [indentedRouteLine({
         label: `agent-cli -> ${event.agent_id ?? 'agent'}`,
         body: `${toolDisplayName(event)} ${summarizeToolResult(event)}`,
         labelStyle: (value) => `${style.tool('agent-cli')} ${style.muted('->')} ${agentLabel(event, style)}`,

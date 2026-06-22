@@ -5373,14 +5373,14 @@ const renderedStartupForTest = renderOperatorEvent({
 assert.match(renderedStartupForTest, /Identity\s+narada\.test/);
 assert.match(renderedStartupForTest, /narada-test-agent-context\s+8 tools/);
 assert.match(renderedStartupForTest, /Tool outputs\s+shown/);
-assert.deepEqual(renderOperatorEvent({ event: 'tool_call', tool: 'agent_context_startup_sequence' }, renderStateForTest), ['agent -> agent-cli: agent_context_startup_sequence']);
-assert.deepEqual(renderOperatorEvent({ event: 'tool_result', tool: 'agent_context_startup_sequence', status: 'success' }, renderStateForTest), ['agent-cli -> agent: agent_context_startup_sequence ok']);
-assert.deepEqual(renderOperatorEvent({ event: 'tool_result', tool: 'agent_context_startup_sequence', status: 'completed' }, renderStateForTest), ['agent-cli -> agent: agent_context_startup_sequence ok']);
+assert.deepEqual(renderOperatorEvent({ event: 'tool_call', tool: 'agent_context_startup_sequence' }, renderStateForTest), ['  agent -> agent-cli: agent_context_startup_sequence']);
+assert.deepEqual(renderOperatorEvent({ event: 'tool_result', tool: 'agent_context_startup_sequence', status: 'success' }, renderStateForTest), ['  agent-cli -> agent: agent_context_startup_sequence ok']);
+assert.deepEqual(renderOperatorEvent({ event: 'tool_result', tool: 'agent_context_startup_sequence', status: 'completed' }, renderStateForTest), ['  agent-cli -> agent: agent_context_startup_sequence ok']);
 const sharedColorStyleForTest = createTerminalStyle({ enabled: true });
 assert.equal(renderOperatorEvent({ event: 'tool_call', tool: 'agent_context_startup_sequence' }, { streamedTurns: new Set(), timestamps: false, style: { ...sharedColorStyleForTest, agent: sharedColorStyleForTest.label, ok: sharedColorStyleForTest.success } })[0].includes('\x1b['), true);
-assert.match(renderOperatorEvent({ event: 'tool_call', agent_id: 'narada.test', tool: 'fs_read_file', argument_summary: 'path=D:/code/file.md' }, { streamedTurns: new Set(), now: '2026-06-21T03:04:00.000Z' })[0], /^narada\.test -> agent-cli: fs_read_file\(path=D:\/code\/file\.md\) 2026-06-21Z03:04$/);
-assert.match(renderOperatorEvent({ event: 'tool_result', agent_id: 'narada.test', tool: 'fs_read_file', status: 'error', error: 'not found' }, { streamedTurns: new Set(), now: '2026-06-21T03:05:00.000Z' })[0], /^agent-cli -> narada\.test: fs_read_file error · error=not found 2026-06-21Z03:05$/);
-assert.match(renderOperatorEvent({ event: 'tool_result', agent_id: 'narada.test', tool: 'fs_read_file', status: 'failed', error: { code: 'ENOENT', message: 'file not found' } }, { streamedTurns: new Set(), now: '2026-06-21T03:06:00.000Z' })[0], /^agent-cli -> narada\.test: fs_read_file failed · error=ENOENT: file not found 2026-06-21Z03:06$/);
+assert.match(renderOperatorEvent({ event: 'tool_call', agent_id: 'narada.test', tool: 'fs_read_file', argument_summary: 'path=D:/code/file.md' }, { streamedTurns: new Set(), now: '2026-06-21T03:04:00.000Z' })[0], /^  narada\.test -> agent-cli: fs_read_file\(path=D:\/code\/file\.md\) 2026-06-21Z03:04$/);
+assert.match(renderOperatorEvent({ event: 'tool_result', agent_id: 'narada.test', tool: 'fs_read_file', status: 'error', error: 'not found' }, { streamedTurns: new Set(), now: '2026-06-21T03:05:00.000Z' })[0], /^  agent-cli -> narada\.test: fs_read_file error · error=not found 2026-06-21Z03:05$/);
+assert.match(renderOperatorEvent({ event: 'tool_result', agent_id: 'narada.test', tool: 'fs_read_file', status: 'failed', error: { code: 'ENOENT', message: 'file not found' } }, { streamedTurns: new Set(), now: '2026-06-21T03:06:00.000Z' })[0], /^  agent-cli -> narada\.test: fs_read_file failed · error=ENOENT: file not found 2026-06-21Z03:06$/);
 assert.equal(renderOperatorEvent({ event: 'tool_result', agent_id: 'narada.test', tool: 'fs_read_file', status: 'failed', error: { code: 'ENOENT', message: 'file not found' } }, { streamedTurns: new Set(), now: '2026-06-21T03:06:00.000Z' })[0].includes('[object Object]'), false);
 assert.deepEqual(renderOperatorEvent({ event: 'session_recovery', operational_posture_display: 'healthy', recommended_action_display: 'review session summary' }, renderStateForTest), ['agent-cli: recovery healthy; action review session summary']);
 assert.deepEqual(renderOperatorEvent({ event: 'session_operations', operation: { operation_event_summary: '2 running' } }, renderStateForTest), ['agent-cli: operations 2 running']);
@@ -5388,12 +5388,12 @@ assert.deepEqual(renderOperatorEvent({ event: 'session_sync', success: true, dir
 assert.deepEqual(renderOperatorEvent({ event: 'observer_status', observer_muted: true }, renderStateForTest), ['agent-cli: observers muted']);
 assert.deepEqual(renderOperatorEvent({ event: 'carrier_command_result', command: '/model', terminal_state: 'completed', message: 'Model set to gpt-test' }, renderStateForTest), ['agent-cli: Model set to gpt-test']);
 const toolOutputRenderStateForTest = { streamedTurns: new Set(), timestamps: false };
-assert.deepEqual(renderOperatorEvent({ event: 'tool_call', tool: 'visible_tool' }, toolOutputRenderStateForTest), ['agent -> agent-cli: visible_tool']);
+assert.deepEqual(renderOperatorEvent({ event: 'tool_call', tool: 'visible_tool' }, toolOutputRenderStateForTest), ['  agent -> agent-cli: visible_tool']);
 assert.deepEqual(renderOperatorEvent({ event: 'carrier_command_result', command: '/tool-output', terminal_state: 'completed', message: 'Tool call outputs are hidden in the displayed transcript.', fields: { tool_outputs: 'hidden' } }, toolOutputRenderStateForTest), ['agent-cli: Tool call outputs are hidden in the displayed transcript.']);
 assert.deepEqual(renderOperatorEvent({ event: 'tool_call', tool: 'hidden_tool' }, toolOutputRenderStateForTest), []);
 assert.deepEqual(renderOperatorEvent({ event: 'tool_result', tool: 'hidden_tool', status: 'success' }, toolOutputRenderStateForTest), []);
 assert.deepEqual(renderOperatorEvent({ event: 'carrier_command_result', command: '/tool-output', terminal_state: 'completed', message: 'Tool call outputs are shown in the displayed transcript.', fields: { tool_outputs: 'shown' } }, toolOutputRenderStateForTest), ['agent-cli: Tool call outputs are shown in the displayed transcript.']);
-assert.deepEqual(renderOperatorEvent({ event: 'tool_call', tool: 'visible_again' }, toolOutputRenderStateForTest), ['agent -> agent-cli: visible_again']);
+assert.deepEqual(renderOperatorEvent({ event: 'tool_call', tool: 'visible_again' }, toolOutputRenderStateForTest), ['  agent -> agent-cli: visible_again']);
 assert.deepEqual(renderOperatorEvent({ event: 'carrier_command_result', command: '/tools', terminal_state: 'completed', message: 'Tools\n\nnone' }, renderStateForTest), ['agent-cli:', '  Tools', '  ', '  none']);
 assert.deepEqual(renderOperatorEvent({ event_kind: 'carrier_host_command_started', payload: { command_text: 'echo hidden' } }, renderStateForTest), []);
 assert.deepEqual(renderOperatorEvent({ event_kind: 'carrier_host_command_completed', payload: { command_text: 'echo host-ok', terminal_state: 'completed', exit_code: 0, stdout: 'host-ok\n' } }, renderStateForTest), ['carrier host:', '  $ echo host-ok', '  status: completed (0)', '  host-ok']);
@@ -5406,7 +5406,7 @@ assert.deepEqual(renderOperatorEvent({ event: 'turn_started', agent_id: 'narada.
 assert.deepEqual(renderOperatorEvent({ event: 'assistant_message', agent_id: 'narada.test', content: 'done thinking' }, thinkingAssistantRenderStateForTest), [{ raw: '\x1b[1A\r\x1b[K', newline: false }, 'narada.test:', '  done thinking']);
 const thinkingToolRenderStateForTest = { streamedTurns: new Set(), timestamps: false };
 assert.deepEqual(renderOperatorEvent({ event: 'turn_started', agent_id: 'narada.test' }, thinkingToolRenderStateForTest), ['narada.test: thinking...']);
-assert.deepEqual(renderOperatorEvent({ event: 'tool_call', agent_id: 'narada.test', tool: 'fs_read_file' }, thinkingToolRenderStateForTest), [{ raw: '\x1b[1A\r\x1b[K', newline: false }, 'narada.test -> agent-cli: fs_read_file']);
+assert.deepEqual(renderOperatorEvent({ event: 'tool_call', agent_id: 'narada.test', tool: 'fs_read_file' }, thinkingToolRenderStateForTest), [{ raw: '\x1b[1A\r\x1b[K', newline: false }, '  narada.test -> agent-cli: fs_read_file']);
 const thinkingHiddenToolRenderStateForTest = { streamedTurns: new Set(), timestamps: false, toolOutputs: 'hidden' };
 assert.deepEqual(renderOperatorEvent({ event: 'turn_started', agent_id: 'narada.test' }, thinkingHiddenToolRenderStateForTest), ['narada.test: thinking...']);
 assert.deepEqual(renderOperatorEvent({ event: 'tool_call', agent_id: 'narada.test', tool: 'hidden_tool' }, thinkingHiddenToolRenderStateForTest), [{ raw: '\x1b[1A\r\x1b[K', newline: false }]);
@@ -5429,7 +5429,7 @@ const streamFinalSuffixStateForTest = { streamedTurns: new Set(), terminalColumn
 assert.deepEqual(renderOperatorEvent({ event: 'assistant_message_stream', turn_id: 'turn_stream_suffix_test', agent_id: 'narada.test', content: 'Latest checkpoint says the prior task was completed, with one local code guard patch in' }, streamFinalSuffixStateForTest), [{ raw: 'narada.test:\n  Latest checkpoint says the prior task was completed, with one local code guard\n  patch in', newline: false }]);
 assert.deepEqual(renderOperatorEvent({ event: 'assistant_message', turn_id: 'turn_stream_suffix_test', agent_id: 'narada.test', content: 'Latest checkpoint says the prior task was completed, with one local code guard patch in `scripts/narada-sonar-legacy.mjs` and no blockers.' }, streamFinalSuffixStateForTest), ['\n  scripts/narada-sonar-legacy.mjs and no blockers.']);
 assert.deepEqual(renderOperatorEvent({ event: 'assistant_message_stream', turn_id: 'turn_stream_test', agent_id: 'narada.test', content: '\nline three' }, streamRenderStateForTest), [{ raw: '\n  line three', newline: false }]);
-assert.deepEqual(renderOperatorEvent({ event: 'tool_call', tool: 'agent_context_startup_sequence' }, streamRenderStateForTest), ['\nagent -> agent-cli: agent_context_startup_sequence']);
+assert.deepEqual(renderOperatorEvent({ event: 'tool_call', tool: 'agent_context_startup_sequence' }, streamRenderStateForTest), ['\n  agent -> agent-cli: agent_context_startup_sequence']);
 assert.deepEqual(renderOperatorEvent({ event: 'assistant_message_stream', turn_id: 'turn_stream_test', agent_id: 'narada.test', content: 'after tool' }, streamRenderStateForTest), [{ raw: 'narada.test:\n  after tool', newline: false }]);
 
 const projectedRuntimeServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-projected-runtime-wrapper-'));
