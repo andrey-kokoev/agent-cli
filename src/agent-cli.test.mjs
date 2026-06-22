@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
 import { formatPreflightWorkflowEvent, formatPreflightWorkflowSummary, formatRuntimeMcpFaultEvent, formatRuntimeMcpFaultSummary, formatSessionWorkflowEvent, formatSessionWorkflowSummary, formatStartupMcpEvent, formatStartupMcpSummary, formatWrapperStatusEvent } from '../bin/agent-runtime-server.mjs';
 import { createExplicitJsonControlFrame, createOperatorConversationFrame, createOperatorPrompt, createProjectedOutputWriter, createProjectedSlashCommandAction, renderOperatorEvent, rewriteSubmittedOperatorPromptForTest } from './projected-terminal.mjs';
+import { createTerminalRendering } from './terminal-rendering.mjs';
 import { formatTerminalMessageBlockLines } from './terminal-style.mjs';
 import { commandTokens } from '@narada2/carrier-command-contract';
 import {
@@ -2717,6 +2718,23 @@ assert.equal(normalizeDisplayTerms('authority_locus: narada_proper and authority
 assert.equal(normalizeDisplayTerms('authority_locus: `narada_proper`'), 'authority locus: `narada_proper`');
 assert.equal(renderMarkdownForTerminal('  ```powershell\n    narada\n  ```').includes('```'), false);
 assert.equal(renderMarkdownForTerminal('  ```powershell\n    narada\n  ```').includes('narada'), true);
+const originalStdoutColumnsForToolWrap = process.stdout.columns;
+const originalStdoutWriteForToolWrap = process.stdout.write;
+const printedToolRows = [];
+process.stdout.columns = 80;
+process.stdout.write = (value = '') => { printedToolRows.push(stripAnsiForTest(String(value))); return true; };
+try {
+  createTerminalRendering({ terminalStyle: createTerminalStyle({ enabled: false }) })
+    .printToolRequestLine('narada-staccato-graph-mail.graph_mail_query({"mailbox_id":"staccato.narada@global-maxima.com","limit":10,"select":"id,subject,from,toRecipients,receivedDateTime,sentDateTime,isRead,importance,parentFolderId,conversationId,bodyPreview"})');
+} finally {
+  process.stdout.columns = originalStdoutColumnsForToolWrap;
+  process.stdout.write = originalStdoutWriteForToolWrap;
+}
+const printedToolRowLines = printedToolRows.join('').replace(/\r\x1b\[K/g, '').replace(/\r/g, '').trimEnd().split('\n');
+assert.match(printedToolRowLines[0], /^narada\.architect -> agent-cli: narada-staccato-graph-mail\.graph_mail_query/);
+assert.ok(printedToolRowLines.length > 1);
+assert.equal(printedToolRowLines.slice(1).every((line) => /^  \S/.test(line)), true);
+assert.match(printedToolRowLines.at(-1), / 2026-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
 const originalStdoutWrite = process.stdout.write;
 const printedAgentMessages = [];
 process.stdout.write = (value = '') => { printedAgentMessages.push(String(value)); return true; };
@@ -5382,6 +5400,10 @@ assert.deepEqual(renderOperatorEvent({ event: 'tool_call', agent_id: 'narada.tes
 assert.deepEqual(renderOperatorEvent({ event: 'tool_result', agent_id: 'narada.test', tool: 'fs_read_file', status: 'error', error: 'not found' }, { streamedTurns: new Set(), now: '2026-06-21T03:05:00.000Z' }), ['agent-cli -> narada.test: fs_read_file error · error=not found 2026-06-21T03:05:00']);
 assert.deepEqual(renderOperatorEvent({ event: 'tool_result', agent_id: 'narada.test', tool: 'fs_read_file', status: 'failed', error: { code: 'ENOENT', message: 'file not found' } }, { streamedTurns: new Set(), now: '2026-06-21T03:06:00.000Z' }), ['agent-cli -> narada.test: fs_read_file failed · error=ENOENT: file not found 2026-06-21T03:06:00']);
 assert.deepEqual(renderOperatorEvent({ event: 'tool_call', agent_id: 'narada.test', tool: 'fs_read_file', argument_summary: 'alpha beta gamma delta epsilon zeta eta theta iota' }, { streamedTurns: new Set(), terminalColumns: 56, timestamps: false }), ['narada.test -> agent-cli: fs_read_file(alpha beta gamma', '  delta epsilon zeta eta theta', '  iota)']);
+const projectedCompactToolRows = renderOperatorEvent({ event: 'tool_call', agent_id: 'narada.test', tool: 'graph_mail_query', argument_summary: '{"mailbox_id":"staccato.narada@global-maxima.com","limit":10,"select":"id,subject,from,toRecipients,receivedDateTime,sentDateTime,isRead,importance,parentFolderId,conversationId,bodyPreview"}' }, { streamedTurns: new Set(), terminalColumns: 80, timestamps: false });
+assert.match(projectedCompactToolRows[0], /^narada\.test -> agent-cli: graph_mail_query\(/);
+assert.ok(projectedCompactToolRows.length > 1);
+assert.equal(projectedCompactToolRows.slice(1).every((line) => /^  \S/.test(line)), true);
 assert.equal(renderOperatorEvent({ event: 'tool_result', agent_id: 'narada.test', tool: 'fs_read_file', status: 'failed', error: { code: 'ENOENT', message: 'file not found' } }, { streamedTurns: new Set(), now: '2026-06-21T03:06:00.000Z' }).join('\n').includes('[object Object]'), false);
 assert.deepEqual(renderOperatorEvent({ event: 'session_recovery', operational_posture_display: 'healthy', recommended_action_display: 'review session summary' }, renderStateForTest), ['agent-cli: recovery healthy; action review session summary']);
 assert.deepEqual(renderOperatorEvent({ event: 'session_operations', operation: { operation_event_summary: '2 running' } }, renderStateForTest), ['agent-cli: operations 2 running']);
@@ -5738,6 +5760,98 @@ try {
   if (previousSiteRoot === undefined) delete process.env.NARADA_SITE_ROOT;
   else process.env.NARADA_SITE_ROOT = previousSiteRoot;
   rmSync(closedServerSite, { recursive: true, force: true });
+}
+
+const streamingServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-streaming-server-'));
+mkdirSync(join(streamingServerSite, '.ai', 'mcp'), { recursive: true });
+const fakeCodexExec = join(streamingServerSite, 'fake-codex-exec.mjs');
+writeFileSync(fakeCodexExec, [
+  "process.stdin.resume();",
+  "const wait = (ms) => new Promise((resolveWait) => setTimeout(resolveWait, ms));",
+  "const send = (event) => process.stdout.write(`${JSON.stringify(event)}\\n`);",
+  "send({ type: 'thread.started', thread_id: 'thread_stream_test' });",
+  "await wait(25);",
+  "send({ type: 'item.delta', item: { type: 'agent_message' }, delta: 'Hello' });",
+  "await wait(25);",
+  "send({ type: 'item.delta', item: { type: 'agent_message' }, delta: ' world' });",
+  "await wait(25);",
+  "send({ type: 'item.completed', item: { type: 'agent_message', text: 'Hello world!' } });",
+].join('\n'));
+const previousStreamingSiteRoot = process.env.NARADA_SITE_ROOT;
+const previousCodexExecCommand = process.env.NARADA_CODEX_EXEC_COMMAND;
+const previousCodexExecPrefixArgs = process.env.NARADA_CODEX_EXEC_PREFIX_ARGS;
+process.env.NARADA_SITE_ROOT = streamingServerSite;
+process.env.NARADA_CODEX_EXEC_COMMAND = process.execPath;
+process.env.NARADA_CODEX_EXEC_PREFIX_ARGS = JSON.stringify([fakeCodexExec]);
+try {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const projectedOutput = new PassThrough();
+  const projectedWrites = [];
+  projectedOutput.setEncoding('utf8');
+  projectedOutput.on('data', (chunk) => { projectedWrites.push(chunk); });
+  const writeProjectedOutput = createProjectedOutputWriter({ output: projectedOutput });
+  const operatorState = { streamedTurns: new Set(), timestamps: false, terminalColumns: 80 };
+  const streamingEvents = [];
+  let jsonlBuffer = '';
+  output.setEncoding('utf8');
+  output.on('data', (chunk) => {
+    jsonlBuffer += chunk;
+    const lines = jsonlBuffer.split(/\r?\n/);
+    jsonlBuffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line);
+      streamingEvents.push(event);
+      for (const rendered of renderOperatorEvent(event, operatorState)) {
+        writeProjectedOutput(typeof rendered === 'string' ? `${rendered}\n` : rendered.raw, { preserveCurrentLine: true });
+      }
+    }
+  });
+  const streamingChild = spawn(process.execPath, [
+    fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
+    '--identity', 'narada.test',
+    '--session', 'streaming-server-test',
+    '--server',
+  ], {
+    cwd: streamingServerSite,
+    env: {
+      ...process.env,
+      NARADA_SITE_ROOT: streamingServerSite,
+      NARADA_INTELLIGENCE_PROVIDER: 'codex-subscription',
+      NARADA_CODEX_SUBSCRIPTION_TRANSPORT: 'exec-json',
+      NARADA_CODEX_EXEC_COMMAND: process.execPath,
+      NARADA_CODEX_EXEC_PREFIX_ARGS: JSON.stringify([fakeCodexExec]),
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let streamingStderr = '';
+  streamingChild.stderr.setEncoding('utf8');
+  streamingChild.stderr.on('data', (chunk) => { streamingStderr += chunk; });
+  streamingChild.stdout.pipe(output);
+  streamingChild.stdin.write(`${JSON.stringify({ id: 'streaming-turn-1', method: 'conversation.send', params: { message: 'stream please' } })}\n`);
+  streamingChild.stdin.end();
+  const streamingExitCode = await new Promise((resolveExit) => streamingChild.on('exit', resolveExit));
+  assert.equal(streamingExitCode, 0, streamingStderr);
+  const streamEvents = streamingEvents.filter((event) => event.event === 'assistant_message_stream');
+  const finalAssistantIndex = streamingEvents.findIndex((event) => event.event === 'assistant_message');
+  assert.equal(streamEvents.length, 3, JSON.stringify(streamingEvents));
+  assert.deepEqual(streamEvents.map((event) => event.content), ['Hello', ' world', '!']);
+  assert.equal(streamingEvents.findIndex((event) => event.event === 'assistant_message_stream' && event.content === 'Hello') < finalAssistantIndex, true);
+  assert.equal(streamingEvents.findIndex((event) => event.event === 'assistant_message_stream' && event.content === ' world') < finalAssistantIndex, true);
+  assert.equal(streamingEvents[finalAssistantIndex].content, 'Hello world!');
+  const projectedTranscript = projectedWrites.join('');
+  assert.equal((projectedTranscript.match(/Hello/g) ?? []).length, 1);
+  assert.equal((projectedTranscript.match(/ world/g) ?? []).length, 1);
+  assert.equal((projectedTranscript.match(/!/g) ?? []).length, 1);
+} finally {
+  if (previousStreamingSiteRoot === undefined) delete process.env.NARADA_SITE_ROOT;
+  else process.env.NARADA_SITE_ROOT = previousStreamingSiteRoot;
+  if (previousCodexExecCommand === undefined) delete process.env.NARADA_CODEX_EXEC_COMMAND;
+  else process.env.NARADA_CODEX_EXEC_COMMAND = previousCodexExecCommand;
+  if (previousCodexExecPrefixArgs === undefined) delete process.env.NARADA_CODEX_EXEC_PREFIX_ARGS;
+  else process.env.NARADA_CODEX_EXEC_PREFIX_ARGS = previousCodexExecPrefixArgs;
+  rmSync(streamingServerSite, { recursive: true, force: true });
 }
 
 const interruptPersistenceSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-interrupt-persist-'));

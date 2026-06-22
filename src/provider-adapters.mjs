@@ -446,6 +446,12 @@ function codexExecMcpToolEventSummary(event) {
 }
 
 function codexExecEventText(event) {
+  if (event?.type === 'item.delta' || event?.type === 'item.updated') {
+    if (typeof event.delta === 'string') return event.delta;
+    if (typeof event.text_delta === 'string') return event.text_delta;
+    if (typeof event.item?.delta === 'string') return event.item.delta;
+    if (typeof event.item?.text_delta === 'string') return event.item.text_delta;
+  }
   if (event?.type !== 'item.completed') return '';
   const item = event.item;
   if (item?.type === 'agent_message' && typeof item.text === 'string') return item.text;

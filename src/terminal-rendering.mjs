@@ -71,7 +71,7 @@ function formatHeaderRow(key, value, { before = false, after = false, width = 12
 }
 
 function printToolRequestLine(text, { before = false } = {}) {
-  printInlineEvent(toolDirectionLabel('invoke'), text, {
+  printRoutedBodyEvent(toolDirectionLabel('invoke'), text, {
     before,
     timestamp: true,
     bodyStyle: terminalStyle.muted,
@@ -82,7 +82,7 @@ function printToolResultLine(text, { before = false, level = 'info' } = {}) {
   const label = toolDirectionLabel('result');
   const bodyStyle = level === 'error' ? terminalStyle.error : level === 'warn' ? terminalStyle.warn : terminalStyle.muted;
   if (!String(text ?? '').includes('\n')) {
-    printInlineEvent(label, text, { before, timestamp: true, labelStyle: level === 'error' ? terminalStyle.error : level === 'warn' ? terminalStyle.warn : (value) => value, bodyStyle });
+    printRoutedBodyEvent(label, text, { before, timestamp: true, labelStyle: level === 'error' ? terminalStyle.error : level === 'warn' ? terminalStyle.warn : (value) => value, bodyStyle });
     return;
   }
   printMessageBlock({ label, text, before, timestamp: true, labelStyle: level === 'error' ? terminalStyle.error : level === 'warn' ? terminalStyle.warn : (value) => value, bodyStyle });
@@ -106,6 +106,21 @@ function styleInputRouteLabel(label) {
 function printInlineEvent(label, text, { before = false, timestamp = false, labelStyle = (value) => value, bodyStyle = (value) => value } = {}) {
   const suffix = timestamp ? ` ${terminalStyle.timestamp(formatTimestamp())}` : '';
   writeTerminalRecord(`${labelStyle(label)}${terminalStyle.muted(':')} ${bodyStyle(String(text ?? ''))}${suffix}\n`, { before });
+}
+
+function printRoutedBodyEvent(label, text, { before = false, timestamp = false, labelStyle = (value) => value, bodyStyle = (value) => value } = {}) {
+  const prefix = `${labelStyle(label)}${terminalStyle.muted(':')} `;
+  const bodyText = String(text ?? '');
+  const width = terminalWidth();
+  const firstLineWidth = Math.max(16, width - stripAnsi(prefix).length);
+  const wrapped = bodyText.split(/\r?\n/).flatMap((line, index) => wrapTerminalLine(line, index === 0 ? firstLineWidth : Math.max(16, width - 2)));
+  const [first = '', ...rest] = wrapped;
+  const lines = [
+    `${prefix}${bodyStyle(first)}`,
+    ...rest.map((line) => `  ${bodyStyle(line)}`),
+  ];
+  if (timestamp) appendSuffixToLastLine(lines, ` ${terminalStyle.timestamp(formatTimestamp())}`);
+  writeTerminalRecord(`${lines.join('\n')}\n`, { before });
 }
 
 function printAgentMessage(text) {
@@ -382,14 +397,28 @@ function terminalWidth() {
 }
 
 function wrapTerminalLine(line, width) {
-  if (line.trim() === '') return [''];
-  const visible = stripAnsi(line);
-  if (visible.length <= width) return [line];
-  const words = line.split(/(\s+)/);
+  const text = String(line ?? '');
+  if (text.trim() === '') return [''];
+  const visible = stripAnsi(text);
+  if (visible.length <= width) return [text];
+  const words = text.split(/(\s+)/);
   const lines = [];
   let current = '';
   for (const word of words) {
     if (!word) continue;
+    if (stripAnsi(word).length > width) {
+      if (current.trim()) {
+        lines.push(current.trimEnd());
+        current = '';
+      }
+      let remaining = word.trimStart();
+      while (stripAnsi(remaining).length > width) {
+        lines.push(remaining.slice(0, width));
+        remaining = remaining.slice(width);
+      }
+      current = remaining;
+      continue;
+    }
     if (stripAnsi(current + word).length > width && current.trim()) {
       lines.push(current.trimEnd());
       current = word.trimStart();
@@ -398,7 +427,7 @@ function wrapTerminalLine(line, width) {
     }
   }
   if (current.trim()) lines.push(current.trimEnd());
-  return lines.length ? lines : [line];
+  return lines.length ? lines : [text];
 }
 
 function formatToolResultContent(content) {

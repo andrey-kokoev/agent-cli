@@ -250,6 +250,19 @@ function wrapTerminalLine(line, width) {
   let current = '';
   for (const word of words) {
     if (!word) continue;
+    if (stripAnsi(word).length > width) {
+      if (current.trim()) {
+        lines.push(current.trimEnd());
+        current = '';
+      }
+      let remaining = word.trimStart();
+      while (stripAnsi(remaining).length > width) {
+        lines.push(remaining.slice(0, width));
+        remaining = remaining.slice(width);
+      }
+      current = remaining;
+      continue;
+    }
     if (stripAnsi(current + word).length > width && current.trim()) {
       lines.push(current.trimEnd());
       current = word.trimStart();
