@@ -5401,6 +5401,15 @@ assert.deepEqual(renderOperatorEvent({ event: 'carrier_host_command_failed', com
 assert.deepEqual(renderOperatorEvent({ event: 'directive_received', directive_id: 'dir_heartbeat', terminal_state: 'accepted', source: 'system_directive' }, renderStateForTest), []);
 assert.deepEqual(renderOperatorEvent({ event: 'directive_complete', directive_id: 'dir_heartbeat', terminal_state: 'completed_without_provider', source: 'system_directive' }, renderStateForTest), []);
 assert.deepEqual(renderOperatorEvent({ event: 'turn_started', agent_id: 'narada.test' }, { streamedTurns: new Set(), now: '2026-06-22T13:23:00.000Z' }), ['narada.test: thinking...']);
+const thinkingAssistantRenderStateForTest = { streamedTurns: new Set(), timestamps: false };
+assert.deepEqual(renderOperatorEvent({ event: 'turn_started', agent_id: 'narada.test' }, thinkingAssistantRenderStateForTest), ['narada.test: thinking...']);
+assert.deepEqual(renderOperatorEvent({ event: 'assistant_message', agent_id: 'narada.test', content: 'done thinking' }, thinkingAssistantRenderStateForTest), [{ raw: '\x1b[1A\r\x1b[K', newline: false }, 'narada.test:', '  done thinking']);
+const thinkingToolRenderStateForTest = { streamedTurns: new Set(), timestamps: false };
+assert.deepEqual(renderOperatorEvent({ event: 'turn_started', agent_id: 'narada.test' }, thinkingToolRenderStateForTest), ['narada.test: thinking...']);
+assert.deepEqual(renderOperatorEvent({ event: 'tool_call', agent_id: 'narada.test', tool: 'fs_read_file' }, thinkingToolRenderStateForTest), [{ raw: '\x1b[1A\r\x1b[K', newline: false }, 'narada.test -> agent-cli: fs_read_file']);
+const thinkingHiddenToolRenderStateForTest = { streamedTurns: new Set(), timestamps: false, toolOutputs: 'hidden' };
+assert.deepEqual(renderOperatorEvent({ event: 'turn_started', agent_id: 'narada.test' }, thinkingHiddenToolRenderStateForTest), ['narada.test: thinking...']);
+assert.deepEqual(renderOperatorEvent({ event: 'tool_call', agent_id: 'narada.test', tool: 'hidden_tool' }, thinkingHiddenToolRenderStateForTest), [{ raw: '\x1b[1A\r\x1b[K', newline: false }]);
 assert.deepEqual(formatTerminalMessageBlockLines({ label: 'agent', lines: ['line one', 'line two'] }), ['agent:', '  line one', '  line two']);
 assert.deepEqual(renderOperatorEvent({ event: 'assistant_message', agent_id: 'narada.test', content: 'line one\nline two' }, renderStateForTest), ['narada.test:', '  line one', '  line two']);
 assert.deepEqual(renderOperatorEvent({ event: 'assistant_message', agent_id: 'narada.test', content: '# Heading\n- facade_only\n| A | B |\n|---|---|\n| one | `two` |' }, renderStateForTest), ['narada.test:', '  Heading', '  • facade_only', '  A    B  ', '  one  two']);

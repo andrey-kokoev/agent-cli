@@ -301,10 +301,31 @@ function consumeLocalThinkingForEvent(state, event) {
   return true;
 }
 
-function clearLocalThinking(state) {
-  if (!state.localThinkingRendered) return;
+function markThinkingRendered(state, agentId = projectedAgentId(state)) {
+  if (!state) return;
+  state.thinkingRendered = true;
+  state.thinkingAgentId = agentId;
+}
+
+function clearLocalThinkingState(state) {
+  if (!state) return;
   state.localThinkingRendered = false;
   state.localThinkingAgentId = null;
+}
+
+function clearRenderedThinking(state) {
+  if (!state?.thinkingRendered) {
+    clearLocalThinkingState(state);
+    return [];
+  }
+  state.thinkingRendered = false;
+  state.thinkingAgentId = null;
+  clearLocalThinkingState(state);
+  return [{ raw: clearPreviousTerminalRows(1), newline: false }];
+}
+
+function withRenderedThinkingCleared(state, rendered) {
+  return [...clearRenderedThinking(state), ...withStreamBoundary(state, rendered)];
 }
 
 function appendSuffixToLastLine(lines, suffix) {
@@ -644,11 +665,12 @@ export function renderOperatorEvent(event, state = {}) {
       if (consumeLocalThinkingForEvent(state, event)) {
         return withStreamBoundary(state, []);
       }
+      markThinkingRendered(state, event.agent_id ?? projectedAgentId(state));
       return withStreamBoundary(state, [`${assistantEmissionHeader(state, style, event.agent_id ?? 'agent')} thinking...`]);
     case 'assistant_message_stream': {
-      clearLocalThinking(state);
+      const thinkingClear = clearRenderedThinking(state);
       const content = String(event.content ?? '');
-      if (!content) return [];
+      if (!content) return thinkingClear;
       const turnKey = event.turn_id ?? '__default_stream_turn';
       if (event.turn_id) state.streamedTurns.add(event.turn_id);
       state.streamedContentByTurn.set(turnKey, `${state.streamedContentByTurn.get(turnKey) ?? ''}${content}`);
@@ -664,20 +686,20 @@ export function renderOperatorEvent(event, state = {}) {
       state.streamOpen = true;
       state.openStreamTurnKey = turnKey;
       state.streamAtLineStart = raw.endsWith('\n');
-      return [{ raw, newline: false }];
+      return [...thinkingClear, { raw, newline: false }];
     }
     case 'assistant_message': {
-      clearLocalThinking(state);
+      const thinkingClear = clearRenderedThinking(state);
       const turnKey = event.turn_id ?? '__default_stream_turn';
       const finalContent = String(event.content ?? '');
       const streamedContent = state.streamedContentByTurn.get(turnKey) ?? '';
       const content = (streamedContent && finalContent.startsWith(streamedContent)
         ? finalContent.slice(streamedContent.length).trimStart()
         : finalContent).trimEnd();
-      if (!content) return [];
+      if (!content) return thinkingClear;
       const renderedContent = renderMarkdownForProjectedTerminal(content, style);
       const lines = wrapIndentedLines(renderedContent, { indent: '', columns: terminalColumns(state) - 2 });
-      if (streamedContent) return withStreamBoundary(state, lines.map((line) => `  ${line}`));
+      if (streamedContent) return [...thinkingClear, ...withStreamBoundary(state, lines.map((line) => `  ${line}`))];
       const block = formatTerminalMessageBlockLines({
         label: event.agent_id ?? 'assistant',
         lines,
@@ -686,14 +708,13 @@ export function renderOperatorEvent(event, state = {}) {
         bodyStyle: (value) => value,
       });
       appendSuffixToLastLine(block, timestampSuffix(state, style));
-      return withStreamBoundary(state, block);
+      return [...thinkingClear, ...withStreamBoundary(state, block)];
     }
     case 'tool_call': {
-      clearLocalThinking(state);
-      if (state.toolOutputs === 'hidden') return withStreamBoundary(state, []);
+      if (state.toolOutputs === 'hidden') return withRenderedThinkingCleared(state, []);
       const tool = toolDisplayName(event);
       const label = `${event.agent_id ?? 'agent'} -> agent-cli`;
-      return withStreamBoundary(state, [routeLine({
+      return withRenderedThinkingCleared(state, [routeLine({
         label,
         body: `${tool}${summarizeToolCall(event)}`,
         labelStyle: (value) => `${agentLabel(event, style)} ${style.muted('->')} ${style.tool('agent-cli')}`,
@@ -703,12 +724,11 @@ export function renderOperatorEvent(event, state = {}) {
       })]);
     }
     case 'tool_result': {
-      clearLocalThinking(state);
-      if (state.toolOutputs === 'hidden') return withStreamBoundary(state, []);
+      if (state.toolOutputs === 'hidden') return withRenderedThinkingCleared(state, []);
       const status = String(event.status ?? '').toLowerCase();
       const normal = !status || ['success', 'complete', 'completed', 'ok'].includes(status);
       const levelStyle = normal ? style.muted : status === 'error' ? style.error : style.warn;
-      return withStreamBoundary(state, [routeLine({
+      return withRenderedThinkingCleared(state, [routeLine({
         label: `agent-cli -> ${event.agent_id ?? 'agent'}`,
         body: `${toolDisplayName(event)} ${summarizeToolResult(event)}`,
         labelStyle: (value) => `${style.tool('agent-cli')} ${style.muted('->')} ${agentLabel(event, style)}`,
@@ -718,11 +738,11 @@ export function renderOperatorEvent(event, state = {}) {
       })]);
     }
     case 'turn_complete':
-      return withStreamBoundary(state, [routeLine({ label: 'agent-cli', body: 'turn complete', labelStyle: style.label, bodyStyle: style.ok, state, style })]);
+      return withRenderedThinkingCleared(state, [routeLine({ label: 'agent-cli', body: 'turn complete', labelStyle: style.label, bodyStyle: style.ok, state, style })]);
     case 'turn_failed':
-      return withStreamBoundary(state, [routeLine({ label: 'agent-cli', body: `turn failed: ${event.message ?? event.error ?? event.code ?? 'unknown error'}`, labelStyle: style.label, bodyStyle: style.error, state, style })]);
+      return withRenderedThinkingCleared(state, [routeLine({ label: 'agent-cli', body: `turn failed: ${event.message ?? event.error ?? event.code ?? 'unknown error'}`, labelStyle: style.label, bodyStyle: style.error, state, style })]);
     case 'error':
-      return withStreamBoundary(state, [routeLine({ label: 'error', body: `${event.code ?? 'error'}${event.message ? `: ${event.message}` : ''}`, labelStyle: style.error, bodyStyle: style.error, state, style })]);
+      return withRenderedThinkingCleared(state, [routeLine({ label: 'error', body: `${event.code ?? 'error'}${event.message ? `: ${event.message}` : ''}`, labelStyle: style.error, bodyStyle: style.error, state, style })]);
     case 'session_closed':
       return withStreamBoundary(state, [routeLine({ label: 'agent-cli', body: 'session closed', labelStyle: style.label, state, style })]);
     default:
@@ -808,6 +828,7 @@ export function createProjectedTerminalBridge({
       output.write(`${assistantEmissionHeader(operatorState, style, agentId)} thinking...\n`);
       operatorState.localThinkingRendered = true;
       operatorState.localThinkingAgentId = agentId;
+      markThinkingRendered(operatorState, agentId);
     }
     if (frame) childStdin?.write(`${JSON.stringify(frame)}\n`);
   });
