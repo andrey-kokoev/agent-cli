@@ -211,7 +211,7 @@ function Resolve-NaradaPackageExport {
 }
 
 $AgentCliPath = Resolve-NaradaPackageBin -PackageName '@narada2/agent-cli' -BinName 'narada-agent-cli'
-$AgentRuntimeServerPath = Resolve-NaradaPackageBin -PackageName '@narada2/agent-cli' -BinName 'agent-runtime-server'
+$AgentRuntimeServerPath = Resolve-NaradaPackageBin -PackageName '@narada2/agent-runtime-server' -BinName 'narada-agent-runtime-server'
 $ProviderMetadataPath = Resolve-NaradaPackageExport -PackageName '@narada2/agent-cli' -ExportName './intelligence-providers'
 $ProviderMetadata = (Get-Content $ProviderMetadataPath -Raw | ConvertFrom-Json).providers
 $providerDefault = $ProviderMetadata.PSObject.Properties[$IntelligenceProvider].Value

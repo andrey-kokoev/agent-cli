@@ -5,7 +5,8 @@ import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
-import { formatPreflightWorkflowEvent, formatPreflightWorkflowSummary, formatRuntimeMcpFaultEvent, formatRuntimeMcpFaultSummary, formatSessionWorkflowEvent, formatSessionWorkflowSummary, formatStartupMcpEvent, formatStartupMcpSummary, formatWrapperStatusEvent } from '../bin/agent-runtime-server.mjs';
+import { formatPreflightWorkflowEvent, formatPreflightWorkflowSummary, formatRuntimeMcpFaultEvent, formatRuntimeMcpFaultSummary, formatSessionWorkflowEvent, formatSessionWorkflowSummary, formatStartupMcpEvent, formatStartupMcpSummary, formatWrapperStatusEvent } from './runtime-server-events.mjs';
+import { resolveNaradaAgentRuntimeServerBin, runCompatibilityShim, runtimeServerShimUnavailableMessage } from './runtime-server-shim.mjs';
 import { createExplicitJsonControlFrame, createOperatorConversationFrame, createOperatorPrompt, createProjectedOutputWriter, createProjectedSlashCommandAction, renderOperatorEvent, rewriteSubmittedOperatorPromptForTest } from './projected-terminal.mjs';
 import { createTerminalRendering } from './terminal-rendering.mjs';
 import { formatTerminalMessageBlockLines } from './terminal-style.mjs';
@@ -947,74 +948,19 @@ assert.equal(preflightDiagnosticsRuntimeJson.artifacts[0].session, 'preflight-ru
 assert.equal(preflightDiagnosticsRuntimeJson.diagnostics[0].diagnostic_code, 'mcp_runtime_fault');
 rmSync(preflightDiagnosticsRoot, { recursive: true, force: true });
 
-const runtimeServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-runtime-server-'));
-mkdirSync(join(runtimeServerSite, '.ai', 'mcp'), { recursive: true });
-const runtimeServerPath = join(runtimeServerSite, 'degraded-mcp-server.mjs');
-writeFileSync(runtimeServerPath, `
-import readline from 'node:readline';
-
-console.log('startup banner');
-const rl = readline.createInterface({ input: process.stdin });
-rl.on('line', (line) => {
-  const request = JSON.parse(line);
-  if (request.method === 'initialize') {
-    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05' } }));
-    return;
-  }
-  if (request.method === 'tools/list') {
-    console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { tools: [] } }));
-  }
+assert.equal(resolveNaradaAgentRuntimeServerBin({
+  requireFn: { resolve: () => join('narada', 'packages', 'agent-runtime-server', 'package.json') },
+}).endsWith(join('agent-runtime-server', 'bin', 'narada-agent-runtime-server.mjs')), true);
+assert.equal(runtimeServerShimUnavailableMessage(new Error('missing package')).includes('agent-runtime-server moved to Narada proper.'), true);
+let shimStderr = '';
+const missingShimExitCode = await runCompatibilityShim({
+  requireFn: { resolve: () => { throw new Error('missing @narada2/agent-runtime-server'); } },
+  stderr: { write: (text) => { shimStderr += text; } },
+  exit: false,
 });
-`, 'utf8');
-writeFileSync(join(runtimeServerSite, '.ai', 'mcp', 'degraded-mcp.json'), `${JSON.stringify({
-  mcpServers: {
-    degraded: {
-      transport: 'stdio',
-      command: 'node',
-      args: [runtimeServerPath],
-    },
-  },
-}, null, 2)}\n`, 'utf8');
-const runtimeServerChild = spawn(process.execPath, [
-  fileURLToPath(new URL('../bin/agent-runtime-server.mjs', import.meta.url)),
-  '--wrapper-events-jsonl',
-  '--raw-jsonl',
-  '--identity', 'narada.test',
-  '--session', 'runtime-wrapper-test',
-], {
-
-  env: {
-    ...process.env,
-    NARADA_SITE_ROOT: runtimeServerSite,
-    NARADA_INTELLIGENCE_PROVIDER: 'codex-subscription',
-  },
-  stdio: ['pipe', 'pipe', 'pipe'],
-});
-let runtimeServerStdout = '';
-let runtimeServerStderr = '';
-runtimeServerChild.stdout.setEncoding('utf8');
-runtimeServerChild.stderr.setEncoding('utf8');
-runtimeServerChild.stdout.on('data', (chunk) => { runtimeServerStdout += chunk; });
-runtimeServerChild.stderr.on('data', (chunk) => { runtimeServerStderr += chunk; });
-runtimeServerChild.stdin.write(`${JSON.stringify({ id: 'status-runtime-wrapper-1', method: 'session.status', params: {} })}\n`);
-runtimeServerChild.stdin.write(`${JSON.stringify({ id: 'close-runtime-wrapper-1', method: 'session.close', params: {} })}\n`);
-runtimeServerChild.stdin.end();
-const runtimeServerExitCode = await new Promise((resolveExit) => runtimeServerChild.on('exit', resolveExit));
-assert.equal(runtimeServerExitCode, 0);
-const runtimeServerEvents = runtimeServerStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
-assert.equal(runtimeServerEvents[0].event, 'session_started');
-assert.equal(runtimeServerEvents[0].mcp_operational_state, 'startup_degraded');
-assert.equal(runtimeServerStderr.includes('[agent-runtime-server] MCP state=startup_degraded | startup=1 (degraded:mcp_stdout_pollution)'), true);
-assert.equal(runtimeServerStderr.includes('[agent-runtime-server] Session workflow review startup diagnostics | command=narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-recovery'), true);
-const runtimeServerStderrEvents = runtimeServerStderr.split(/\r?\n/).filter((line) => line.trim().startsWith('{')).map((line) => JSON.parse(line));
-assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'session_status_snapshot' && event.source_event === 'session_started' && event.mcp_operational_state === 'startup_degraded' && event.last_event_kind === 'session_started' && event.recommended_action === 'review_startup_diagnostics' && event.recovery_kind === 'startup_diagnostic_review' && event.handoffs?.session_recovery), true);
-assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'session_status_snapshot' && event.source_event === 'session_status' && event.request_id === 'status-runtime-wrapper-1' && event.mcp_operational_state === 'startup_degraded' && event.recommended_action === 'review_startup_diagnostics'), true);
-assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'mcp_startup_status' && event.mcp_operational_state === 'startup_degraded' && event.mcp_startup_failure_summary === '1 (degraded:mcp_stdout_pollution)'), true);
-assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'session_workflow_recommendation' && event.source_event === 'session_started' && event.recommended_action === 'review_startup_diagnostics' && event.recommended_command === 'narada-agent-cli --identity narada.test --session runtime-wrapper-test --session-recovery'), true);
-assert.equal(runtimeServerStderrEvents.some((event) => event.schema === 'narada.agent_runtime_server.wrapper_event.v1' && event.event === 'session_status_snapshot' && event.source_event === 'session_closed' && event.request_id === 'close-runtime-wrapper-1' && event.terminal_state === 'closed' && event.last_event_kind === 'session_closed' && event.last_terminal_state === 'closed' && event.recommended_action === 'review_startup_diagnostics'), true);
-assert.equal(runtimeServerEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-runtime-wrapper-1' && event.mcp_startup_failure_summary === '1 (degraded:mcp_stdout_pollution)' && event.recommended_action === 'review_startup_diagnostics' && event.recovery_kind === 'startup_diagnostic_review' && event.handoffs?.session_recovery), true);
-assert.equal(runtimeServerEvents.some((event) => event.event === 'session_closed' && event.request_id === 'close-runtime-wrapper-1' && event.terminal_state === 'closed' && event.last_event_kind === 'session_closed' && event.last_terminal_state === 'closed' && event.recommended_action === 'review_startup_diagnostics'), true);
-rmSync(runtimeServerSite, { recursive: true, force: true });
+assert.equal(missingShimExitCode, 1);
+assert.equal(shimStderr.includes('narada-agent-runtime-server'), true);
+assert.equal(shimStderr.includes('missing @narada2/agent-runtime-server'), true);
 const operatorConversationFrame = createOperatorConversationFrame('  hello operator  ');
 assert.equal(operatorConversationFrame.method, 'conversation.send');
 assert.equal(operatorConversationFrame.params.message, '  hello operator  ');
@@ -1157,61 +1103,9 @@ assert.deepEqual(renderOperatorEvent({ event: 'assistant_message_stream', turn_i
 assert.deepEqual(renderOperatorEvent({ event: 'tool_call', tool: 'agent_context_startup_sequence' }, streamRenderStateForTest), ['\nagent -> agent-cli: agent_context_startup_sequence']);
 assert.deepEqual(renderOperatorEvent({ event: 'assistant_message_stream', turn_id: 'turn_stream_test', agent_id: 'narada.test', content: 'after tool' }, streamRenderStateForTest), [{ raw: 'narada.test:\n  after tool', newline: false }]);
 
-const projectedRuntimeServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-projected-runtime-wrapper-'));
-mkdirSync(join(projectedRuntimeServerSite, '.ai', 'mcp'), { recursive: true });
-const projectedRuntimeSyncTarget = join(projectedRuntimeServerSite, 'sync-target');
-mkdirSync(projectedRuntimeSyncTarget, { recursive: true });
-const projectedRuntimeServerChild = spawn(process.execPath, [
-  fileURLToPath(new URL('../bin/agent-runtime-server.mjs', import.meta.url)),
-  '--identity', 'narada.test',
-  '--session', 'runtime-wrapper-projected-test',
-], {
-  env: {
-    ...process.env,
-    NARADA_SITE_ROOT: projectedRuntimeServerSite,
-    NARADA_INTELLIGENCE_PROVIDER: 'codex-subscription',
-    NARADA_AGENT_CLI_STATS_TIMEOUT_MS: '1000',
-    NARADA_TOOLS_ROOT: projectedRuntimeServerSite,
-    PATH: '',
-  },
-  stdio: ['pipe', 'pipe', 'pipe'],
-});
-let projectedRuntimeServerStdout = '';
-let projectedRuntimeServerStderr = '';
-projectedRuntimeServerChild.stdout.setEncoding('utf8');
-projectedRuntimeServerChild.stderr.setEncoding('utf8');
-projectedRuntimeServerChild.stdout.on('data', (chunk) => { projectedRuntimeServerStdout += chunk; });
-projectedRuntimeServerChild.stderr.on('data', (chunk) => { projectedRuntimeServerStderr += chunk; });
-projectedRuntimeServerChild.stdin.write('/model gpt-projected-test\n');
-projectedRuntimeServerChild.stdin.write('/thinking high\n');
-projectedRuntimeServerChild.stdin.write('/tool-output off\n');
-projectedRuntimeServerChild.stdin.write('/goal projected goal\n');
-projectedRuntimeServerChild.stdin.write('/stats\n');
-projectedRuntimeServerChild.stdin.write('/status\n');
-projectedRuntimeServerChild.stdin.write(`/ops sync --target ${projectedRuntimeSyncTarget} --dry-run\n`);
-projectedRuntimeServerChild.stdin.write('/tools\n');
-projectedRuntimeServerChild.stdin.write('/queue\n');
-projectedRuntimeServerChild.stdin.write(`/json ${JSON.stringify({ id: 'close-runtime-wrapper-projected-1', method: 'session.close', params: {} })}\n`);
-projectedRuntimeServerChild.stdin.end();
-const projectedRuntimeServerExitCode = await new Promise((resolveExit) => projectedRuntimeServerChild.on('exit', resolveExit));
-assert.equal(projectedRuntimeServerExitCode, 0);
-assert.equal(projectedRuntimeServerStdout.includes('{"event":"session_started"'), false);
-assert.equal(projectedRuntimeServerStdout.includes('agent-cli:'), true);
-assert.match(projectedRuntimeServerStdout, /Identity\s+narada\.test/);
-assert.match(projectedRuntimeServerStdout, /MCP servers\s+0/);
-assert.match(projectedRuntimeServerStdout, /Tool outputs\s+shown/);
-assert.equal(projectedRuntimeServerStdout.includes('Model set to gpt-projected-test'), true);
-assert.equal(projectedRuntimeServerStdout.includes('Thinking set to high'), true);
-assert.equal(projectedRuntimeServerStdout.includes('Tool call outputs are hidden in the displayed transcript.'), true);
-assert.equal(projectedRuntimeServerStdout.includes('Carrier session goal set: projected goal'), true);
-assert.equal(projectedRuntimeServerStdout.includes('Codex transcript stats unavailable.'), true);
-assert.match(projectedRuntimeServerStdout, /status healthy; requests 0/);
-assert.match(projectedRuntimeServerStdout, /session sync (succeeded|failed); upload/);
-assert.equal(projectedRuntimeServerStdout.includes('No MCP tools discovered.'), true);
-assert.equal(projectedRuntimeServerStdout.includes('Queue is empty.'), true);
-assert.equal(projectedRuntimeServerStdout.includes('agent-cli: session closed'), true);
-assert.equal(projectedRuntimeServerStderr.includes('invalid_json'), false);
-rmSync(projectedRuntimeServerSite, { recursive: true, force: true });
+assert.equal(createProjectedSlashCommandAction('/model gpt-projected-test').frame.params.value, 'gpt-projected-test');
+assert.equal(createProjectedSlashCommandAction('/thinking high').frame.params.value, 'high');
+assert.equal(createProjectedSlashCommandAction('/tool-output off').frame.params.value, 'off');
 
 const directiveServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-directive-server-'));
 mkdirSync(join(directiveServerSite, '.ai', 'mcp'), { recursive: true });
