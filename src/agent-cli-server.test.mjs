@@ -13,11 +13,14 @@ import { formatTerminalMessageBlockLines } from './terminal-style.mjs';
 import { commandTokens } from '@narada2/carrier-command-contract';
 import {
   CARRIER_CONTROL_METHODS,
+  NARS_RUNTIME_EVENT_KINDS,
   classifyCarrierControlRequest,
   classifyCarrierInputHold,
   classifyCarrierInputQueueAdmission,
   createSessionEvent,
   createToolResultPayload,
+  isNarsRuntimeEventKind,
+  normalizeNarsRuntimeEventKind,
   validateSessionEvent,
 } from '@narada2/carrier-protocol';
 import {
@@ -178,6 +181,13 @@ assert.equal(serverEvents.some((event) => event.event === 'carrier_command_resul
 assert.equal(serverEvents.some((event) => event.event === 'carrier_command_result' && event.request_id === 'thinking-command-1' && event.fields?.thinking === 'high'), true);
 assert.equal(serverEvents.some((event) => event.event === 'carrier_command_result' && event.request_id === 'tool-output-command-1' && event.fields?.tool_outputs === 'hidden'), true);
 assert.equal(serverEvents.some((event) => event.event === 'carrier_command_result' && event.request_id === 'goal-command-1' && event.fields?.goal === 'server status goal'), true);
+assert.equal(normalizeNarsRuntimeEventKind('carrier_command_result'), 'command_result');
+assert.equal(NARS_RUNTIME_EVENT_KINDS.includes('command_result'), true);
+assert.equal(serverEvents.some((event) => event.event === 'carrier_command_result' && event.lifecycle_event === 'command_result'), true);
+assert.equal(serverEvents.some((event) => event.event === 'error' && event.lifecycle_event === 'runtime_error'), true);
+for (const event of serverEvents.filter((entry) => entry.lifecycle_event)) {
+  assert.equal(isNarsRuntimeEventKind(event.lifecycle_event), true, event.event);
+}
 assert.equal(serverEvents.some((event) => event.event === 'session_status' && event.request_id === 'status-1'), true);
 assert.deepEqual(serverEvents.find((event) => event.event === 'session_status' && event.request_id === 'status-1')?.mcp_tools, []);
 const serverStatusEvent = serverEvents.find((event) => event.event === 'session_status' && event.request_id === 'status-1');
@@ -1001,6 +1011,10 @@ assert.equal(createProjectedSlashCommandAction('/tool-output off').frame.params.
 assert.equal(createProjectedSlashCommandAction('/tools fs_read').frame.params.command, '/tools');
 assert.equal(createProjectedSlashCommandAction('/queue clear').frame.params.command, '/queue');
 assert.equal(createProjectedSlashCommandAction('/queue clear').frame.params.value, 'clear');
+for (const command of ['/goal', '/stats', '/model', '/thinking', '/tool-output', '/tools', '/queue']) {
+  assert.equal(commandTokens().includes(command), true, command);
+  assert.equal(createProjectedSlashCommandAction(`${command} test`).frame.method, 'agent-cli.command', command);
+}
 assert.equal(createProjectedSlashCommandAction('/does-not-exist').message, 'Unknown command: /does-not-exist. Type /help.');
 assert.equal(createProjectedSlashCommandAction('run startup sequence'), null);
 assert.equal(createOperatorPrompt(), 'operator > ');

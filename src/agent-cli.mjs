@@ -35,6 +35,8 @@ import {
   normalizeInputEvent as normalizeCarrierInputEvent,
   OBSERVER_VISIBILITIES,
   isObserverInputEvent as isProtocolObserverInputEvent,
+  isNarsRuntimeEventKind,
+  normalizeNarsRuntimeEventKind,
   observerMetadata as protocolObserverMetadata,
   observerPayload as protocolObserverPayload,
   observerVisibility as protocolObserverVisibility,
@@ -208,6 +210,7 @@ function serverCommandMessage({ requestId, command, message, terminalState = 'co
     request_id: requestId,
     transport: 'jsonl_stdio',
     event: 'carrier_command_result',
+    lifecycle_event: normalizeNarsRuntimeEventKind('carrier_command_result'),
     command,
     terminal_state: terminalState,
     message,
@@ -6430,8 +6433,10 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
 
   const emit = (event, payload = {}) => {
     if (event === 'error' && payload?.code) recordSessionRequestIssue(state, payload.code);
+    const lifecycleEvent = normalizeNarsRuntimeEventKind(event);
     return emitServerEvent(output, {
       event,
+      ...(isNarsRuntimeEventKind(lifecycleEvent) ? { lifecycle_event: lifecycleEvent } : {}),
       agent_id: IDENTITY,
       session_id: SESSION,
       timestamp: new Date().toISOString(),
