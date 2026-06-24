@@ -85,6 +85,8 @@ export function createProjectedSlashCommandAction(line) {
   if (command === '/help') return { kind: 'local_help' };
   if (command === '/clear') return { kind: 'clear' };
   if (command === '/status') return { kind: 'frame', frame: { id: requestIdForCommand('status'), method: 'session.status', params: {} } };
+  if (command === '/health') return { kind: 'frame', frame: { id: requestIdForCommand('health'), method: 'session.health', params: {} } };
+  if (command === '/events') return { kind: 'frame', frame: { id: requestIdForCommand('events'), method: 'session.events.subscribe', params: { include_replay: true, max_replay: 20 } } };
   if (command === '/recovery') return { kind: 'frame', frame: { id: requestIdForCommand('recovery'), method: 'session.recovery', params: {} } };
   if (command === '/ops') return { kind: 'frame', frame: opsSyncFrame(value) ?? { id: requestIdForCommand('ops'), method: 'session.operations', params: {} } };
   if (command === '/observers') return { kind: 'frame', frame: { id: requestIdForCommand('observers'), method: 'observers.status', params: {} } };
@@ -104,6 +106,8 @@ function projectedHelpText() {
     '',
     '/help                 Show commands',
     '/status               Show session state',
+    '/health               Show runtime health',
+    '/events               Show recent event subscription replay',
     '/recovery             Show recovery workflow',
     '/goal [text|pause|resume|clear] Show, set, pause, resume, or clear carrier goal',
     '/stats [args]         Show local Codex transcript statistics',
@@ -609,6 +613,22 @@ export function renderOperatorEvent(event, state = {}) {
       return withStreamBoundary(state, [routeLine({
         label: 'agent-cli',
         body: `status ${event.operational_posture_display ?? event.operational_posture ?? 'unknown'}; requests ${event.request_outcome_summary ?? '0'}`,
+        labelStyle: style.label,
+        state,
+        style,
+      })]);
+    case 'session_health':
+      return withStreamBoundary(state, [routeLine({
+        label: 'agent-cli',
+        body: `health ${event.status ?? 'unknown'}; mcp ${event.mcp?.operational_state ?? 'unknown'}; endpoint ${event.health_endpoint ?? 'none'}`,
+        labelStyle: style.label,
+        state,
+        style,
+      })]);
+    case 'session_events_subscription_started':
+      return withStreamBoundary(state, [routeLine({
+        label: 'agent-cli',
+        body: `events subscription ${event.subscription_id ?? 'unknown'}; replay ${event.replay_count ?? 0}; cursor ${event.cursor?.next_sequence ?? 'unknown'}`,
         labelStyle: style.label,
         state,
         style,

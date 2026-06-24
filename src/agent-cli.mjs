@@ -54,6 +54,8 @@ import {
   parseBooleanEnv,
   parseColorEnv,
 } from './cli-options.mjs';
+import { resolveNarsAttachEndpoint, runNarsAttachClient } from './nars-attach-client.mjs';
+import { runCompatibilityShim as runRuntimeServerCompatibilityShim } from './runtime-server-shim.mjs';
 import { createTerminalStyle } from './terminal-style.mjs';
 import { createTerminalRendering, stripAnsi } from './terminal-rendering.mjs';
 import {
@@ -138,6 +140,7 @@ const SITE_ID = process.env.NARADA_SITE_ID ?? process.env.NARADA_SITE_NAME ?? 'u
 const options = parseArgs(process.argv.slice(2));
 const IDENTITY = options.identity ?? 'narada.architect';
 const SESSION = options.session ?? IDENTITY.replace(/\./g, '-');
+const NARS_DELEGATED_AUTHORITY_HANDOFF = parseNarsDelegatedAuthorityHandoff(process.env.NARADA_NARS_AUTHORITY_HANDOFF);
 const REMOVED_CONVERSATION_ARGS = options.removedConversationArgs ?? [];
 const MCP_PREFLIGHT_MODE = options.mcpPreflight === true;
 const MCP_PREFLIGHT_JSON_MODE = options.mcpPreflightJson === true;
@@ -193,7 +196,9 @@ const SESSION_SYNC_TARGET = String(options.sessionSyncTarget ?? '').trim() || nu
 const SESSION_SYNC_DIRECTION = normalizeSessionSyncDirection(options.sessionSyncDirection);
 const SESSION_SYNC_DRY_RUN = options.sessionSyncDryRun === true;
 const SESSION_SYNC_DELETE = options.sessionSyncDelete === true;
-const SERVER_MODE = options.server === true;
+const SERVER_COMPATIBILITY_MODE = options.server === true && options.carrierServerSubstrate !== true;
+const SERVER_MODE = options.carrierServerSubstrate === true;
+const ATTACH_MODE = options.attach === true;
 const UTILITY_COMMAND_MODE = isAgentCliUtilityCommandMode(options);
 const sessionSettings = {
   model: options.model ?? MODEL,
@@ -215,6 +220,71 @@ function serverCommandMessage({ requestId, command, message, terminalState = 'co
     terminal_state: terminalState,
     message,
     ...(fields && typeof fields === 'object' ? { fields } : {}),
+  };
+}
+
+function matchesEventSubscriptionFilter(event, filters = {}) {
+  if (!filters || typeof filters !== 'object') return true;
+  const eventKind = event.event ?? event.event_kind ?? null;
+  const kinds = Array.isArray(filters.event_kinds) ? filters.event_kinds : Array.isArray(filters.kinds) ? filters.kinds : null;
+  if (kinds && !kinds.includes(eventKind)) return false;
+  const families = Array.isArray(filters.families) ? filters.families : null;
+  if (families?.length) {
+    const family = String(eventKind ?? '').startsWith('session_') ? 'session' : 'turn';
+    if (!families.includes(family)) return false;
+  }
+  if (filters.request_id && event.request_id !== filters.request_id) return false;
+  if (filters.turn_id && event.turn_id !== filters.turn_id) return false;
+  return true;
+}
+
+function readSessionEventsForSubscription({ sinceSequence = null, sinceTimestamp = null, filters = {}, maxReplay = 100 } = {}) {
+  if (!existsSync(EVENTS_PATH)) return [];
+  const replayLimit = Math.max(0, Math.min(Number.parseInt(String(maxReplay ?? 100), 10) || 0, 1000));
+  const sinceSeq = sinceSequence == null ? null : Number.parseInt(String(sinceSequence), 10);
+  const sinceTime = sinceTimestamp ? Date.parse(String(sinceTimestamp)) : null;
+  const events = [];
+  for (const line of readFileSync(EVENTS_PATH, 'utf8').split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line);
+      if (Number.isFinite(sinceSeq) && Number(event.event_sequence ?? event.sequence ?? 0) <= sinceSeq) continue;
+      if (Number.isFinite(sinceTime)) {
+        const eventTime = Date.parse(String(event.timestamp ?? event.generated_at ?? ''));
+        if (Number.isFinite(eventTime) && eventTime <= sinceTime) continue;
+      }
+      if (!matchesEventSubscriptionFilter(event, filters)) continue;
+      events.push(event);
+    } catch {}
+  }
+  return events.slice(-replayLimit);
+}
+
+function serverEventsSubscription({ requestId, params = {} }) {
+  const filters = params.filters && typeof params.filters === 'object' ? params.filters : {};
+  const includeReplay = params.include_replay !== false;
+  const replay = includeReplay ? readSessionEventsForSubscription({
+    sinceSequence: params.since_sequence,
+    sinceTimestamp: params.since_timestamp,
+    filters,
+    maxReplay: params.max_replay ?? 100,
+  }) : [];
+  const lastEvent = replay.at(-1) ?? null;
+  return {
+    schema: 'narada.nars.events.subscription.v1',
+    event: 'session_events_subscription_started',
+    request_id: requestId,
+    subscription_id: `sub_${requestId ?? Date.now()}`,
+    transport: 'jsonl_stdio',
+    replay_count: replay.length,
+    replay,
+    cursor: {
+      last_sequence: lastEvent?.event_sequence ?? lastEvent?.sequence ?? null,
+      next_sequence: SERVER_EVENT_SEQUENCE + 1,
+    },
+    filters,
+    live_stream: 'stdout_jsonl',
+    close_semantics: 'request_scoped_replay_over_stdio; durable live subscriptions require websocket transport',
   };
 }
 
@@ -1148,6 +1218,26 @@ function createSessionActivitySnapshot(state = {}) {
   };
 }
 
+function parseNarsDelegatedAuthorityHandoff(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  try {
+    const parsed = JSON.parse(String(value));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('handoff_not_object');
+    if (parsed.schema !== 'narada.nars.delegated_authority_handoff.v1') throw new Error('handoff_schema_mismatch');
+    if (parsed.crossing_regime !== 'nars_runtime_server_to_carrier_substrate') throw new Error('handoff_crossing_regime_mismatch');
+    return {
+      ...parsed,
+      parse_status: 'accepted',
+    };
+  } catch (error) {
+    return {
+      schema: 'narada.nars.delegated_authority_handoff.v1',
+      parse_status: 'invalid',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 function createMcpPreflightArtifactSnapshot(preflightArtifact) {
   if (!preflightArtifact) {
     return {
@@ -1302,6 +1392,7 @@ const SESSION_DIR = join(NARADA_DIR, 'crew', 'nars-sessions', SESSION);
 if (!UTILITY_COMMAND_MODE && !existsSync(SESSION_DIR)) mkdirSync(SESSION_DIR, { recursive: true });
 const SESSION_PATH = join(SESSION_DIR, 'session.jsonl');
 const EVENTS_PATH = join(SESSION_DIR, 'events.jsonl');
+let SERVER_EVENT_SEQUENCE = 0;
 
 configureProviderAdapterContext({
   provider: INTELLIGENCE_PROVIDER,
@@ -1490,13 +1581,29 @@ async function main() {
     });
     return;
   }
+  if (ATTACH_MODE) {
+    process.exitCode = await runNarsAttachClient({
+      endpoint: resolveNarsAttachEndpoint(options),
+      input: process.stdin,
+      output: process.stdout,
+      maxReplay: 50,
+    });
+    return;
+  }
   if (REMOVED_CONVERSATION_ARGS.length > 0) {
     console.error(`agent-cli removed conversation input flag(s): ${REMOVED_CONVERSATION_ARGS.join(', ')}. Use agent-runtime-server JSONL control input instead.`);
     process.exitCode = 2;
     return;
   }
+  if (SERVER_COMPATIBILITY_MODE) {
+    const compatibilityArgv = process.argv.slice(2);
+    process.exitCode = await runRuntimeServerCompatibilityShim({
+      argv: compatibilityArgv.includes('--raw-jsonl') ? compatibilityArgv : ['--raw-jsonl', ...compatibilityArgv],
+    });
+    return;
+  }
   if (!SERVER_MODE) {
-    console.error('agent-cli non-server conversation runtime has been removed; launch through agent-runtime-server or pass --server for JSONL server mode.');
+    console.error('agent-cli non-server conversation runtime has been removed; launch through agent-runtime-server, pass --attach for a NARS client projection, or use --server compatibility mode.');
     process.exitCode = 2;
     return;
   }
@@ -5547,7 +5654,16 @@ async function runConversationTurn(messages, tools, mcpServers, rl, options = {}
           recordTurnTerminal('turn_interrupted');
           break;
         }
-        const result = await executeMcpTool(toolCall, mcpServers, rl, { emit, turn, turnId: turn?.turnId ?? null, serverMode: !!emit });
+        const result = await executeMcpTool(toolCall, mcpServers, rl, {
+          emit,
+          turn,
+          turnId: turn?.turnId ?? null,
+          serverMode: !!emit,
+          agentId: options.agentId,
+          carrierSessionId: options.carrierSessionId,
+          siteRoot: options.siteRoot,
+          delegatedAuthorityHandoff: options.delegatedAuthorityHandoff,
+        });
         toolResults.push(result);
       }
       if (turn?.interruptRequested) {
@@ -5609,12 +5725,17 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
     requesting_agent_id: IDENTITY,
   })));
   const admissionClassification = serverMode
-    ? classifyCarrierActionRequest(name, args, { toolAvailable: !!server, toolMetadata })
+    ? classifyCarrierActionRequest(name, args, {
+      toolAvailable: !!server,
+      toolMetadata,
+      delegatedAuthorityHandoff: options.delegatedAuthorityHandoff ?? NARS_DELEGATED_AUTHORITY_HANDOFF,
+    })
     : null;
   const category = serverMode
-    ? (admissionClassification.decision === 'read_only_admitted' ? 'auto' : 'prompt')
+    ? (isServerModeToolExecutionAdmitted(admissionClassification) ? 'auto' : 'prompt')
     : classifyMcpTool(name, args);
-  const admissionRequired = serverMode && admissionClassification.decision !== 'read_only_admitted';
+  const admissionRequired = serverMode && !isServerModeToolExecutionAdmitted(admissionClassification);
+  let delegatedAdmission = null;
   const recordToolResult = (status, contentOrSummary, extra = {}) => {
     appendSession(SESSION_PATH, carrierSessionEventEntry('tool_result_received', createToolResultPayload({
       tool_name: name || '<missing>',
@@ -5637,7 +5758,7 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
         payload_secret_findings: inspectPayloadForSecrets(args),
         raw_arguments_recorded: false,
         raw_secret_values_recorded: false,
-        carrier_mutation_admitted: false,
+        carrier_mutation_admitted: admissionClassification.carrier_mutation_admitted === true,
       });
     } else {
       emit('tool_call', {
@@ -5680,6 +5801,7 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
         siteRoot: options.siteRoot ?? SITE_ROOT,
         toolAvailable: false,
         toolMetadata,
+        delegatedAuthorityHandoff: options.delegatedAuthorityHandoff ?? NARS_DELEGATED_AUTHORITY_HANDOFF,
       });
       const decision = admission.decision;
       emit?.('tool_result', {
@@ -5736,6 +5858,7 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
         args,
         siteRoot: options.siteRoot ?? SITE_ROOT,
         toolMetadata,
+        delegatedAuthorityHandoff: options.delegatedAuthorityHandoff ?? NARS_DELEGATED_AUTHORITY_HANDOFF,
       });
     const decision = admission.decision;
     emit?.('tool_result', {
@@ -5768,6 +5891,20 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
         message: 'Agent Runtime Server did not execute this MCP tool because it is not classified read-only.',
       }),
     };
+  }
+
+  if (serverMode && admissionClassification.decision === 'delegated_mutation_admitted') {
+    delegatedAdmission = createAndWriteCarrierActionAdmission({
+      agentId: options.agentId ?? IDENTITY,
+      carrierSessionId: options.carrierSessionId ?? SESSION,
+      turnId,
+      toolCallId: toolCall.id,
+      toolName: name,
+      args,
+      siteRoot: options.siteRoot ?? SITE_ROOT,
+      toolMetadata,
+      delegatedAuthorityHandoff: options.delegatedAuthorityHandoff ?? NARS_DELEGATED_AUTHORITY_HANDOFF,
+    });
   }
 
   try {
@@ -5813,10 +5950,24 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
       turn_id: turnId,
       tool: name,
       status: 'ok',
-      decision: serverMode ? 'read_only_admitted' : undefined,
+      decision: serverMode ? admissionClassification.decision : undefined,
       output_ref: extractOutputRef(content),
+      request_id: delegatedAdmission?.decision?.request_id,
+      authority_owner: delegatedAdmission?.decision?.authority_owner,
+      evidence_path: delegatedAdmission?.path,
+      carrier_mutation_admitted: admissionClassification?.carrier_mutation_admitted === true,
     });
-    recordToolResult('ok', content, { result_ref: payloadRefFromOutputRef(extractOutputRef(content)) });
+    recordToolResult('ok', content, {
+      result_ref: payloadRefFromOutputRef(extractOutputRef(content)),
+      ...(admissionClassification?.carrier_mutation_admitted === true
+        ? {
+          admission_action: 'admit',
+          admission_reason: 'write_tool_effect_admitted',
+          authority_ref: delegatedAdmission?.decision?.request?.requested_action?.delegated_authority?.authority_ref,
+          evidence_path: delegatedAdmission?.path,
+        }
+        : {}),
+    });
 
     return {
       role: 'tool',
@@ -5838,6 +5989,11 @@ async function executeMcpTool(toolCall, mcpServers, rl, options = {}) {
       content: JSON.stringify({ error: err.message, ...(recovery ? { recovery } : {}) }),
     };
   }
+}
+
+function isServerModeToolExecutionAdmitted(admissionClassification) {
+  return admissionClassification?.decision === 'read_only_admitted'
+    || admissionClassification?.decision === 'delegated_mutation_admitted';
 }
 
 function extractOutputRef(content) {
@@ -6465,6 +6621,11 @@ async function runServerMode({ input = process.stdin, output = process.stdout, c
     tool_outputs: transcriptDisplaySettings.toolOutputs ? 'shown' : 'hidden',
     approvals: 'disabled',
     help: '/help',
+    health_endpoint: process.env.NARADA_HEALTH_URL ?? null,
+    event_endpoint: process.env.NARADA_EVENT_STREAM_URL ?? null,
+    websocket_endpoint: process.env.NARADA_EVENT_STREAM_URL ?? null,
+    delegated_authority_handoff: NARS_DELEGATED_AUTHORITY_HANDOFF,
+    delegated_authority_ref: NARS_DELEGATED_AUTHORITY_HANDOFF?.authority_ref ?? null,
     session_path: SESSION_PATH,
     events_path: EVENTS_PATH,
   });
@@ -6538,6 +6699,8 @@ function isConcurrentServerRequestLine(line) {
   try {
     const request = JSON.parse(line);
     if (request?.method === 'conversation.interrupt') return true;
+    if (request?.method === 'session.health') return true;
+    if (request?.method === 'session.events.subscribe') return true;
     if (request?.method === 'session.operations') return false;
     if (request?.method === 'session.recovery') return false;
     if (request?.method === 'preflight.recovery') return false;
@@ -6575,6 +6738,70 @@ function serverOperations({ requestId, state, mcpServers, mcpPreflightArtifact =
     host_command_output: createSessionHostCommandOutputPayload(sessionRecord),
     session_path: SESSION_PATH,
     events_path: EVENTS_PATH,
+  };
+}
+
+function serverHealth({ requestId, state, allTools = [], mcpServers = {}, mcpPreflightArtifact = readMcpPreflightArtifact() }) {
+  const status = serverStatus({ requestId, state, allTools, mcpServers, mcpPreflightArtifact });
+  const healthStatus = state?.closed
+    ? 'closing'
+    : status.operational_posture === 'healthy'
+      ? 'healthy'
+      : 'degraded';
+  return {
+    schema: 'narada.nars.health.v1',
+    event: 'session_health',
+    request_id: requestId,
+    status: healthStatus,
+    generated_at: new Date().toISOString(),
+    agent_id: IDENTITY,
+    session_id: SESSION,
+    site_root: SITE_ROOT,
+    runtime: 'narada-agent-runtime-server',
+    runtime_substrate: 'agent-cli',
+    runtime_mode: 'server',
+    started_at: state?.startedAt ?? null,
+    provider: status.provider,
+    model: status.model,
+    transport: status.transport,
+    health_endpoint: process.env.NARADA_HEALTH_URL ?? null,
+    delegated_authority_handoff: status.delegated_authority_handoff ?? null,
+    delegated_authority_ref: status.delegated_authority_ref ?? null,
+    heartbeat: {
+      path: status.session_path ? join(dirname(status.session_path), 'heartbeat.json') : null,
+      last_written_at: status.last_event_at ?? null,
+      age_ms: null,
+      freshness: state?.closed ? 'stale' : 'fresh',
+    },
+    mcp: {
+      operational_state: status.mcp_operational_state,
+      server_count: status.mcp_server_count,
+      startup_failure_count: status.mcp_startup_failure_count,
+      startup_failure_summary: status.mcp_startup_failure_summary,
+      runtime_fault_count: status.mcp_runtime_fault_count,
+      runtime_fault_summary: status.mcp_runtime_fault_summary,
+    },
+    activity: {
+      last_event_kind: status.last_event_kind,
+      last_event_at: status.last_event_at,
+      active_turn_state: status.active_turn_state,
+      active_turn_id: status.active_turn_id,
+      last_terminal_state: status.last_terminal_state,
+      session_event_count: status.session_event_count,
+    },
+    posture: {
+      request_posture: status.request_posture,
+      request_posture_display: status.request_posture_display,
+      operational_posture: status.operational_posture,
+      operational_posture_display: status.operational_posture_display,
+    },
+    recommended_action: status.recommended_action,
+    recommended_action_display: status.recommended_action_display,
+    recommended_command: status.recommended_command,
+    recovery_kind: status.recovery_kind,
+    recovery_kind_display: status.recovery_kind_display,
+    recovery_primary_command: status.recovery_primary_command,
+    recovery_followup_command: status.recovery_followup_command,
   };
 }
 
@@ -6991,6 +7218,16 @@ async function handleServerRequest(request, { state, messages, allTools, mcpServ
         });
         throw error;
       }
+      return;
+    }
+    if (controlRequest.method_kind === 'session_health') {
+      noteSessionActivity(state, 'session_health_requested');
+      emit('session_health', serverHealth({ requestId, state, allTools, mcpServers, mcpPreflightArtifact }));
+      return;
+    }
+    if (controlRequest.method_kind === 'session_events_subscribe') {
+      noteSessionActivity(state, 'session_events_subscribe_requested');
+      emit('session_events_subscription_started', serverEventsSubscription({ requestId, params: request.params ?? {} }));
       return;
     }
     if (controlRequest.method_kind === 'observers_status') {
@@ -7445,6 +7682,11 @@ function serverStatus({ requestId, state, allTools, mcpServers, mcpPreflightArti
     mcp_tools: mcpToolCatalogEntries(mcpServers),
     observer_muted: (state?.displaySettings ?? transcriptDisplaySettings).observerMuted === true,
     observer_visibilities: OBSERVER_VISIBILITIES,
+    health_endpoint: process.env.NARADA_HEALTH_URL ?? null,
+    event_endpoint: process.env.NARADA_EVENT_STREAM_URL ?? null,
+    websocket_endpoint: process.env.NARADA_EVENT_STREAM_URL ?? null,
+    delegated_authority_handoff: NARS_DELEGATED_AUTHORITY_HANDOFF,
+    delegated_authority_ref: NARS_DELEGATED_AUTHORITY_HANDOFF?.authority_ref ?? null,
     session_path: SESSION_PATH,
     events_path: EVENTS_PATH,
   };
@@ -7459,8 +7701,14 @@ function observerServerStatus({ requestId, state }) {
 }
 
 function emitServerEvent(output, event) {
-  const line = `${JSON.stringify(event)}\n`;
-  appendJsonlRecord(EVENTS_PATH, event);
+  SERVER_EVENT_SEQUENCE += 1;
+  const sequencedEvent = {
+    event_sequence: SERVER_EVENT_SEQUENCE,
+    sequence: SERVER_EVENT_SEQUENCE,
+    ...event,
+  };
+  const line = `${JSON.stringify(sequencedEvent)}\n`;
+  appendJsonlRecord(EVENTS_PATH, sequencedEvent);
   output.write(line);
 }
 
@@ -8079,6 +8327,7 @@ export {
   parseAnthropicMessagesResponse,
   parseCodexExecJsonLine,
   parseCodexMcpResponse,
+  parseNarsDelegatedAuthorityHandoff,
   parseNaradaToolCall,
   isPotentialNaradaToolCallText,
   createTerminalStyle,
@@ -8120,6 +8369,7 @@ export {
   runMcpPreflightDiagnostics,
   runMcpPreflight,
   runServerMode,
+  serverHealth,
   serverStatus,
   resolveProviderAdapter,
   resolveProviderSupportState,
@@ -8131,7 +8381,7 @@ export {
 if (isEntrypoint) {
   if (options.help) {
     console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] --server [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-diagnostics] [--mcp-preflight-diagnostics-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--mcp-preflight-diagnostics-filter <all|startup|runtime>] [--session-inventory] [--session-inventory-json] [--session-inventory-operations] [--session-inventory-operations-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-inventory-events-count <n>] [--session-operations] [--session-operations-json] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-events-count <n>] [--session-sync] [--session-sync-json] [--session-sync-dry-run] [--session-sync-delete] [--session-sync-target <file://url|path|site:alias|cloud:alias>] [--session-sync-direction <upload|download|bidirectional>] [--stream|--no-stream] [--color|--no-color]`);
-    console.log('Conversation runtime is server-only. Use agent-runtime-server or --server JSONL stdio; legacy terminal and one-shot message modes have been removed.');
+    console.log('Conversation runtime is NARS-owned. Use agent-runtime-server for JSONL stdio, --server as a compatibility alias, or --attach for terminal projection. Legacy terminal and one-shot message modes have been removed.');
     console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, KIMI_API_KEY, KIMI_API_BASE_URL, KIMI_MODEL, KIMI_CODE_API_KEY, KIMI_CODE_API_BASE_URL, KIMI_CODE_MODEL, ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, ANTHROPIC_MODEL, DEEPSEEK_API_KEY, DEEPSEEK_API_BASE_URL, CODEX_MODEL, NARADA_CODEX_AUTH_HOME, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_SITE_ROOT, NARADA_CLOUD_ROOT`);
     process.exit(0);
   }

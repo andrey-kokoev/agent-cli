@@ -7,8 +7,21 @@
     "narada-agent-cli": "./bin/narada-agent-cli.mjs",
     "agent-runtime-server": "./bin/agent-runtime-server.mjs"
   },
+  "narada": {
+    "package_role": "nars_client_projection",
+    "runtime_server_owner": "@narada2/agent-runtime-server",
+    "compatibility_bins": {
+      "agent-runtime-server": "temporary shim to @narada2/agent-runtime-server; remove after registered launchers resolve narada-agent-runtime-server directly"
+    },
+    "private_carrier_substrate": "--carrier-server-substrate is private to @narada2/agent-runtime-server and is not an operator launcher contract",
+    "temporary_runtime_exports": [
+      "./runtime-server-shim",
+      "./runtime-server-events"
+    ]
+  },
   "exports": {
     ".": "./src/agent-cli.mjs",
+    "./nars-attach-client": "./src/nars-attach-client.mjs",
     "./provider-resolution": "./src/provider-resolution.mjs",
     "./projected-terminal": "./src/projected-terminal.mjs",
     "./runtime-server-events": "./src/runtime-server-events.mjs",
@@ -21,7 +34,7 @@
   },
   "scripts": {
     "test": "node --test src/*.test.mjs",
-    "typecheck": "tsc --noEmit --allowJs --checkJs false bin/narada-agent-cli.mjs bin/agent-runtime-server.mjs src/agent-cli.mjs src/provider-resolution.mjs src/projected-terminal.mjs src/runtime-server-events.mjs src/runtime-server-shim.mjs src/terminal-style.mjs src/terminal-rendering.mjs",
+    "typecheck": "tsc --noEmit --allowJs --checkJs false bin/narada-agent-cli.mjs bin/agent-runtime-server.mjs src/agent-cli.mjs src/nars-attach-client.mjs src/provider-resolution.mjs src/projected-terminal.mjs src/runtime-server-events.mjs src/runtime-server-shim.mjs src/terminal-style.mjs src/terminal-rendering.mjs",
     "verify:native-codex-mcp": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-native-codex-mcp.ps1"
   },
   "dependencies": {

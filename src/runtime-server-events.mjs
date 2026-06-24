@@ -1,3 +1,9 @@
+// DEPRECATED: Canonical runtime-server event formatting helpers live in
+// @narada2/agent-runtime-server. This standalone package keeps a temporary
+// compatibility snapshot so existing test/import surfaces do not require a
+// Narada monorepo workspace dependency at module-load time. Do not add new
+// consumers here; migrate callers to the canonical package.
+
 function isSessionLifecycleEvent(event) {
   return event?.event === 'session_started' || event?.event === 'session_status' || event?.event === 'session_closed';
 }

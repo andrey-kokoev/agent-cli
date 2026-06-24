@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 
@@ -13,8 +15,20 @@ export function runtimeServerShimUnavailableMessage(error) {
   ].join('\n');
 }
 
-export function resolveNaradaAgentRuntimeServerBin({ requireFn = require } = {}) {
-  const packageJsonPath = requireFn.resolve('@narada2/agent-runtime-server/package.json');
+export function resolveNaradaAgentRuntimeServerBin({ requireFn = require, fallbackRoots = requireFn === require } = {}) {
+  let packageJsonPath;
+  try {
+    packageJsonPath = requireFn.resolve('@narada2/agent-runtime-server/package.json');
+  } catch (error) {
+    if (!fallbackRoots) throw error;
+    const moduleDir = dirname(fileURLToPath(import.meta.url));
+    const candidates = [
+      process.env.NARADA_PROPER_ROOT ? join(process.env.NARADA_PROPER_ROOT, 'packages', 'agent-runtime-server', 'package.json') : null,
+      join(moduleDir, '..', '..', 'narada', 'packages', 'agent-runtime-server', 'package.json'),
+    ].filter(Boolean);
+    packageJsonPath = candidates.find((candidate) => existsSync(candidate));
+    if (!packageJsonPath) throw error;
+  }
   return join(dirname(packageJsonPath), 'bin', 'narada-agent-runtime-server.mjs');
 }
 

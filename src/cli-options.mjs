@@ -53,6 +53,14 @@ function parseArgs(argv) {
       markRemovedConversationArg('--auto-approve');
     } else if (argv[i] === '--server') {
       opts.server = true;
+    } else if (argv[i] === '--carrier-server-substrate') {
+      opts.carrierServerSubstrate = true;
+    } else if ((argv[i] === '--attach' || argv[i] === '--attach-endpoint') && i + 1 < argv.length) {
+      opts.attach = true;
+      opts.attachEndpoint = argv[i + 1];
+      i++;
+    } else if (argv[i] === '--attach') {
+      opts.attach = true;
     } else if (argv[i] === '--mcp-preflight') {
       opts.mcpPreflight = true;
     } else if (argv[i] === '--mcp-preflight-json') {
@@ -191,6 +199,7 @@ function parseArgs(argv) {
 
 function isAgentCliUtilityCommandMode(opts = {}) {
   return opts.help === true
+    || opts.attach === true
     || opts.mcpPreflight === true
     || opts.mcpPreflightJson === true
     || opts.mcpPreflightRead === true

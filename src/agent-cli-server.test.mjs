@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
 import { formatPreflightWorkflowEvent, formatPreflightWorkflowSummary, formatRuntimeMcpFaultEvent, formatRuntimeMcpFaultSummary, formatSessionWorkflowEvent, formatSessionWorkflowSummary, formatStartupMcpEvent, formatStartupMcpSummary, formatWrapperStatusEvent } from './runtime-server-events.mjs';
 import { resolveNaradaAgentRuntimeServerBin, runCompatibilityShim, runtimeServerShimUnavailableMessage } from './runtime-server-shim.mjs';
+import { createNarsAttachControlSink, createNarsEventSubscribeFrame, normalizeNarsAttachIncomingEvent, resolveNarsAttachEndpoint } from './nars-attach-client.mjs';
 import { createExplicitJsonControlFrame, createOperatorConversationFrame, createOperatorPrompt, createProjectedOutputWriter, createProjectedSlashCommandAction, renderOperatorEvent, rewriteSubmittedOperatorPromptForTest } from './projected-terminal.mjs';
 import { createTerminalRendering } from './terminal-rendering.mjs';
 import { formatTerminalMessageBlockLines } from './terminal-style.mjs';
@@ -123,11 +124,28 @@ import {
   wrapTerminalLine,
 } from './agent-cli.mjs';
 
+const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+
 const serverSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-server-'));
 mkdirSync(join(serverSite, '.ai', 'mcp'), { recursive: true });
+const serverAuthorityHandoff = {
+  schema: 'narada.nars.delegated_authority_handoff.v1',
+  crossing_regime: 'nars_runtime_server_to_carrier_substrate',
+  source: { package: '@narada2/agent-runtime-server', entrypoint: 'narada-agent-runtime-server' },
+  target: { package: '@narada2/agent-cli', mode: 'carrier-server-substrate' },
+  generated_at: '2026-06-23T00:00:00.000Z',
+  agent_id: 'narada.test',
+  session_id: 'server-test',
+  authority_ref: 'task:1328',
+  evidence: {
+    site_root: serverSite,
+    agent_start_event_id: 'evt_test',
+    codex_admission_id: null,
+  },
+};
 const child = spawn(process.execPath, [
   fileURLToPath(new URL('./agent-cli.mjs', import.meta.url)),
-  '--server',
+  '--carrier-server-substrate',
   '--identity', 'narada.test',
   '--session', 'server-test',
 ], {
@@ -135,6 +153,7 @@ const child = spawn(process.execPath, [
     ...process.env,
     NARADA_SITE_ROOT: serverSite,
     NARADA_INTELLIGENCE_PROVIDER: 'codex-subscription',
+    NARADA_NARS_AUTHORITY_HANDOFF: JSON.stringify(serverAuthorityHandoff),
   },
   stdio: ['pipe', 'pipe', 'pipe'],
 });
@@ -152,6 +171,8 @@ child.stdin.write(`${JSON.stringify({ id: 'thinking-command-1', method: 'agent-c
 child.stdin.write(`${JSON.stringify({ id: 'tool-output-command-1', method: 'agent-cli.command', params: { command: '/tool-output', value: 'off' } })}\n`);
 child.stdin.write(`${JSON.stringify({ id: 'goal-command-1', method: 'agent-cli.command', params: { command: '/goal', value: 'server status goal' } })}\n`);
 child.stdin.write(`${JSON.stringify({ id: 'status-1', method: 'session.status', params: {} })}\n`);
+child.stdin.write(`${JSON.stringify({ id: 'health-1', method: 'session.health', params: {} })}\n`);
+child.stdin.write(`${JSON.stringify({ id: 'events-1', method: 'session.events.subscribe', params: { include_replay: true, max_replay: 20 } })}\n`);
 child.stdin.write(`${JSON.stringify({ id: 'operations-1', method: 'session.operations', params: {} })}\n`);
 child.stdin.write(`${JSON.stringify({ id: 'recovery-1', method: 'session.recovery', params: {} })}\n`);
 child.stdin.write(`${JSON.stringify({ id: 'preflight-1', method: 'preflight.recovery', params: {} })}\n`);
@@ -170,6 +191,8 @@ assert.deepEqual(serverEvents[0].mcp_runtime_faults, []);
 assert.equal(serverEvents[0].agent_id, 'narada.test');
 assert.equal(serverEvents[0].runtime, 'agent-cli');
 assert.equal(serverEvents[0].mode, 'server');
+assert.deepEqual(serverEvents[0].delegated_authority_handoff, { ...serverAuthorityHandoff, parse_status: 'accepted' });
+assert.equal(serverEvents[0].delegated_authority_ref, 'task:1328');
 assert.equal(serverEvents[0].session_event_count, 1);
 assert.equal(serverEvents[0].last_event_kind, 'session_started');
 assert.equal(serverEvents[0].last_terminal_state, null);
@@ -194,12 +217,37 @@ const serverStatusEvent = serverEvents.find((event) => event.event === 'session_
 assert.equal(serverStatusEvent?.model, 'gpt-server-status-test');
 assert.equal(serverStatusEvent?.thinking, 'high');
 assert.equal(serverStatusEvent?.goal, 'server status goal');
+assert.deepEqual(serverStatusEvent?.delegated_authority_handoff, { ...serverAuthorityHandoff, parse_status: 'accepted' });
+assert.equal(serverStatusEvent?.delegated_authority_ref, 'task:1328');
 assert.equal(serverStatusEvent?.session_event_count >= 2, true);
 assert.equal(serverStatusEvent?.last_event_kind, 'session_status_requested');
 assert.equal(serverStatusEvent?.request_outcome_total, 1);
 assert.equal(serverStatusEvent?.request_posture, 'invalid_control_traffic');
 assert.equal(serverStatusEvent?.request_issue_counts?.invalid_json, 1);
 assert.equal(serverStatusEvent?.operational_posture, 'request_invalid_control_traffic');
+const serverHealthEvent = serverEvents.find((event) => event.event === 'session_health' && event.request_id === 'health-1');
+assert.equal(serverHealthEvent?.schema, 'narada.nars.health.v1');
+assert.equal(serverHealthEvent?.status, 'degraded');
+assert.equal(serverHealthEvent?.agent_id, 'narada.test');
+assert.equal(serverHealthEvent?.session_id, 'server-test');
+assert.equal(serverHealthEvent?.site_root, serverSite);
+assert.equal(serverHealthEvent?.runtime, 'narada-agent-runtime-server');
+assert.equal(serverHealthEvent?.runtime_substrate, 'agent-cli');
+assert.deepEqual(serverHealthEvent?.delegated_authority_handoff, { ...serverAuthorityHandoff, parse_status: 'accepted' });
+assert.equal(serverHealthEvent?.delegated_authority_ref, 'task:1328');
+assert.equal(serverHealthEvent?.mcp?.operational_state, 'healthy');
+assert.equal(serverHealthEvent?.heartbeat?.freshness, 'fresh');
+assert.equal(serverHealthEvent?.posture?.operational_posture, 'request_invalid_control_traffic');
+const serverEventSubscription = serverEvents.find((event) => event.event === 'session_events_subscription_started' && event.request_id === 'events-1');
+assert.equal(serverEventSubscription?.schema, 'narada.nars.events.subscription.v1');
+assert.equal(serverEventSubscription?.transport, 'jsonl_stdio');
+assert.equal(serverEventSubscription?.replay_count > 0, true);
+assert.equal(serverEventSubscription?.cursor?.next_sequence > serverEventSubscription?.cursor?.last_sequence, true);
+assert.equal(serverEventSubscription?.replay?.some((event) => event.event === 'session_health'), true);
+for (const event of serverEvents) {
+  assert.equal(Number.isInteger(event.event_sequence), true, event.event);
+  assert.equal(event.event_sequence, event.sequence, event.event);
+}
 const serverOperationsEvent = serverEvents.find((event) => event.event === 'session_operations' && event.request_id === 'operations-1');
 assert.equal(serverEvents.some((event) => event.event === 'session_operations' && event.request_id === 'operations-1'), true);
 assert.equal(serverOperationsEvent?.event, 'session_operations');
@@ -962,6 +1010,16 @@ assert.equal(resolveNaradaAgentRuntimeServerBin({
   requireFn: { resolve: () => join('narada', 'packages', 'agent-runtime-server', 'package.json') },
 }).endsWith(join('agent-runtime-server', 'bin', 'narada-agent-runtime-server.mjs')), true);
 assert.equal(runtimeServerShimUnavailableMessage(new Error('missing package')).includes('agent-runtime-server moved to Narada proper.'), true);
+assert.equal(packageJson.narada.package_role, 'nars_client_projection');
+assert.equal(packageJson.narada.runtime_server_owner, '@narada2/agent-runtime-server');
+assert.equal(packageJson.bin['narada-agent-cli'], './bin/narada-agent-cli.mjs');
+assert.equal(packageJson.bin['agent-runtime-server'], './bin/agent-runtime-server.mjs');
+assert.equal(packageJson.narada.compatibility_bins['agent-runtime-server'].includes('temporary shim'), true);
+assert.equal(packageJson.narada.private_carrier_substrate.includes('--carrier-server-substrate'), true);
+assert.equal(packageJson.exports['./nars-attach-client'], './src/nars-attach-client.mjs');
+assert.equal(packageJson.narada.temporary_runtime_exports.includes('./runtime-server-shim'), true);
+assert.deepEqual(parseArgs(['--server', '--carrier-server-substrate']), { server: true, carrierServerSubstrate: true });
+assert.equal(isAgentCliUtilityCommandMode(parseArgs(['--carrier-server-substrate'])), false);
 let shimStderr = '';
 const missingShimExitCode = await runCompatibilityShim({
   requireFn: { resolve: () => { throw new Error('missing @narada2/agent-runtime-server'); } },
@@ -986,6 +1044,8 @@ assert.equal(createExplicitJsonControlFrame('/json []').error, '/json payload mu
 assert.equal(createExplicitJsonControlFrame('/json {').error.startsWith('/json invalid JSON:'), true);
 assert.equal(createProjectedSlashCommandAction('/help').kind, 'local_help');
 assert.equal(createProjectedSlashCommandAction('/status').frame.method, 'session.status');
+assert.equal(createProjectedSlashCommandAction('/health').frame.method, 'session.health');
+assert.equal(createProjectedSlashCommandAction('/events').frame.method, 'session.events.subscribe');
 assert.equal(createProjectedSlashCommandAction('/recovery').frame.method, 'session.recovery');
 assert.equal(createProjectedSlashCommandAction('/ops').frame.method, 'session.operations');
 const projectedOpsSyncFrame = createProjectedSlashCommandAction('/ops sync --target D:/tmp/session-sync --direction bidirectional --dry-run --delete').frame;
@@ -996,6 +1056,22 @@ assert.deepEqual(projectedOpsSyncFrame.params, {
   dry_run: true,
   delete: true,
 });
+assert.equal(resolveNarsAttachEndpoint({ attachEndpoint: 'ws://127.0.0.1:1/events' }, {}), 'ws://127.0.0.1:1/events');
+assert.equal(resolveNarsAttachEndpoint({}, { NARADA_EVENT_STREAM_URL: 'ws://127.0.0.1:2/events' }), 'ws://127.0.0.1:2/events');
+assert.deepEqual(createNarsEventSubscribeFrame({ id: 'events-test', maxReplay: 7 }), {
+  id: 'events-test',
+  method: 'session.events.subscribe',
+  params: { include_replay: true, max_replay: 7 },
+});
+assert.deepEqual(normalizeNarsAttachIncomingEvent({
+  schema: 'narada.nars.events.envelope.v1',
+  event: 'session_event',
+  payload: { event: 'assistant_message', content: 'hello' },
+}), { event: 'assistant_message', content: 'hello' });
+const attachSentFrames = [];
+const attachSink = createNarsAttachControlSink({ sendFrame: (frame) => attachSentFrames.push(frame) });
+assert.equal(attachSink.write(`${JSON.stringify({ id: 'status-attach', method: 'session.status', params: {} })}\n`), true);
+assert.deepEqual(attachSentFrames.at(-1), { id: 'status-attach', method: 'session.status', params: {} });
 assert.equal(createProjectedSlashCommandAction('/observers').frame.method, 'observers.status');
 assert.equal(createProjectedSlashCommandAction('/observer mute').frame.method, 'observer.mute');
 assert.equal(createProjectedSlashCommandAction('/exit').frame.method, 'session.close');
