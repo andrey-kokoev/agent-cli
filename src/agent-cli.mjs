@@ -102,6 +102,7 @@ import {
   parseCodexMcpResponse,
   parseNaradaToolCall,
 } from './provider-adapters.mjs';
+import { runCarrierServerMode } from '../../narada/packages/carrier-runtime/src/server-mode.mjs';
 import {
   classifyCarrierHostCommandInput as classifyCarrierHostCommandInputRuntime,
   executeCarrierHostCommand as executeCarrierHostCommandRuntime,
@@ -6537,177 +6538,58 @@ function isAbortError(error) {
 // Agent Runtime Server JSONL Mode
 // ---------------------------------------------------------------------------
 async function runServerMode({ input = process.stdin, output = process.stdout, callChatApiFn = callChatApi } = {}) {
-  const mcpServers = await discoverAndStartMcpServers(SITE_ROOT);
-  const allTools = aggregateTools(mcpServers);
-  const mcpStatus = createMcpStatusSnapshot(mcpServers);
-  const mcpPreflightArtifact = readMcpPreflightArtifact();
-  const mcpPreflightSnapshot = createMcpPreflightArtifactSnapshot(mcpPreflightArtifact);
-  const rolePrompt = loadRolePrompt(IDENTITY, SITE_ROOT);
-  const state = {
-    activeTurn: null,
-    closed: false,
-    displaySettings: { ...transcriptDisplaySettings },
-    sessionSettings: { ...sessionSettings },
-    pendingRequests: new Set(),
-    startedAt: new Date().toISOString(),
-    sessionEventCount: 0,
-    lastEventKind: null,
-    lastEventAt: null,
-    lastTerminalState: null,
-    requestIssueCounts: {},
-    requestOutcomeCounts: {},
-  };
-  let messages = loadSession(SESSION_PATH);
-  if (messages.length === 0 && rolePrompt) {
-    messages.push({ role: 'system', content: rolePrompt });
-  }
-  state.inputQueue = createInputQueue({
-    drain: (event) => {
-      const requestId = event.request_id ?? event.event_id;
-      if (state.closed) {
-        noteSessionActivity(state, 'input_rejected_closed');
-        emit('error', {
-          request_id: requestId,
-          code: 'session_closed',
-          message: 'Session is closed.',
-        });
-        return { terminal_state: 'rejected' };
-      }
-      return runServerInputEvent({
-        requestId,
-        state,
-        messages,
-        allTools,
-        mcpServers,
-        emit,
-        callChatApiFn,
-        input: event,
-        directiveId: event.directive_id ?? null,
-      });
+  return runCarrierServerMode({
+    input,
+    output,
+    callChatApiFn,
+    config: {
+      identity: IDENTITY,
+      session: SESSION,
+      siteRoot: SITE_ROOT,
+      sessionPath: SESSION_PATH,
+      eventsPath: EVENTS_PATH,
+      intelligenceProvider: INTELLIGENCE_PROVIDER,
+      narsDelegatedAuthorityHandoff: NARS_DELEGATED_AUTHORITY_HANDOFF,
+      transcriptDisplaySettings,
+      sessionSettings,
+      operationHeartbeatDirectiveEnabled: OPERATION_HEARTBEAT_DIRECTIVE_ENABLED,
+      operationHeartbeatDirectiveIntervalMs: OPERATION_HEARTBEAT_DIRECTIVE_INTERVAL_MS,
+      operationHeartbeatDirectiveInitialDelayMs: OPERATION_HEARTBEAT_DIRECTIVE_INITIAL_DELAY_MS,
+      healthUrl: process.env.NARADA_HEALTH_URL ?? null,
+      eventStreamUrl: process.env.NARADA_EVENT_STREAM_URL ?? null,
+    },
+    dependencies: {
+      discoverAndStartMcpServers,
+      aggregateTools,
+      createMcpStatusSnapshot,
+      readMcpPreflightArtifact,
+      createMcpPreflightArtifactSnapshot,
+      loadRolePrompt,
+      loadSession,
+      createInputQueue,
+      runServerInputEvent,
+      emitServerEvent,
+      recordMcpPreflightArtifactLinkage,
+      recordMcpStartupFailures,
+      createOperationHeartbeatDirectiveEmitter,
+      handleServerRequestLine,
+      closeMcpServers,
+      recordSessionRequestIssue,
+      noteSessionActivity,
+      createSessionActivitySnapshot,
+      createOperationalPostureSnapshot,
+      mcpServerSummaryEntries,
+      normalizeCarrierGoalState,
+      carrierGoalStatusLabel,
+      recordCarrierDiagnostic,
+      onOperationHeartbeatDirectiveStarted: (emitter) => {
+        activeOperationHeartbeatDirectiveEmitter = emitter;
+      },
+      onOperationHeartbeatDirectiveStopped: () => {
+        activeOperationHeartbeatDirectiveEmitter = null;
+      },
     },
   });
-
-  const emit = (event, payload = {}) => {
-    if (event === 'error' && payload?.code) recordSessionRequestIssue(state, payload.code);
-    const lifecycleEvent = normalizeNarsRuntimeEventKind(event);
-    return emitServerEvent(output, {
-      event,
-      ...(isNarsRuntimeEventKind(lifecycleEvent) ? { lifecycle_event: lifecycleEvent } : {}),
-      agent_id: IDENTITY,
-      session_id: SESSION,
-      timestamp: new Date().toISOString(),
-      ...payload,
-    });
-  };
-
-  noteSessionActivity(state, 'session_started', state.startedAt);
-
-  emit('session_started', {
-    transport: 'jsonl_stdio',
-    site_root: SITE_ROOT,
-    provider: INTELLIGENCE_PROVIDER,
-    model: state.sessionSettings.model,
-    thinking: state.sessionSettings.thinking,
-    stream: state.sessionSettings.stream,
-    goal: normalizeCarrierGoalState(state.sessionSettings.goal).value || null,
-    goal_display: carrierGoalStatusLabel(state.sessionSettings.goal),
-    mcp_server_count: Object.keys(mcpServers).length,
-    ...mcpStatus,
-    ...mcpPreflightSnapshot,
-    ...createSessionActivitySnapshot(state),
-    ...createOperationalPostureSnapshot({ state, mcpOperationalState: mcpStatus.mcp_operational_state }),
-    tool_count: allTools.length,
-    mcp_servers: mcpServerSummaryEntries(mcpServers),
-    tool_outputs: transcriptDisplaySettings.toolOutputs ? 'shown' : 'hidden',
-    approvals: 'disabled',
-    help: '/help',
-    health_endpoint: process.env.NARADA_HEALTH_URL ?? null,
-    event_endpoint: process.env.NARADA_EVENT_STREAM_URL ?? null,
-    websocket_endpoint: process.env.NARADA_EVENT_STREAM_URL ?? null,
-    delegated_authority_handoff: NARS_DELEGATED_AUTHORITY_HANDOFF,
-    delegated_authority_ref: NARS_DELEGATED_AUTHORITY_HANDOFF?.authority_ref ?? null,
-    session_path: SESSION_PATH,
-    events_path: EVENTS_PATH,
-  });
-  recordMcpPreflightArtifactLinkage({ emit, preflightArtifact: mcpPreflightArtifact });
-  recordMcpStartupFailures(mcpServers, { emit });
-
-  if (OPERATION_HEARTBEAT_DIRECTIVE_ENABLED) {
-    activeOperationHeartbeatDirectiveEmitter = createOperationHeartbeatDirectiveEmitter({
-      inputQueue: state.inputQueue,
-      intervalMs: OPERATION_HEARTBEAT_DIRECTIVE_INTERVAL_MS,
-      initialDelayMs: OPERATION_HEARTBEAT_DIRECTIVE_INITIAL_DELAY_MS,
-    }).start();
-  }
-
-  input.setEncoding('utf8');
-  let buffer = '';
-  let orderedServerRequests = Promise.resolve();
-  let orderedServerRequestActive = false;
-  const dispatchRequestLine = (line) => {
-    const runRequest = () => handleServerRequestLine(line, { state, messages, allTools, mcpServers, mcpPreflightArtifact, emit, callChatApiFn });
-    let pending;
-    if (isConcurrentServerRequestLine(line)) {
-      pending = runRequest();
-    } else {
-      const runOrderedRequest = async () => {
-        orderedServerRequestActive = true;
-        try {
-          return await runRequest();
-        } finally {
-          orderedServerRequestActive = false;
-        }
-      };
-      pending = orderedServerRequestActive
-        ? (orderedServerRequests = orderedServerRequests.then(runOrderedRequest, runOrderedRequest))
-        : (orderedServerRequests = runOrderedRequest());
-    }
-    const tracked = pending
-      .catch((error) => {
-        emit('error', {
-          request_id: null,
-          code: 'request_dispatch_failed',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      });
-    state.pendingRequests.add(tracked);
-    tracked.finally(() => {
-      state.pendingRequests.delete(tracked);
-    });
-    return tracked;
-  };
-  for await (const chunk of input) {
-    buffer += chunk;
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? '';
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      dispatchRequestLine(line);
-    }
-    if (state.closed) break;
-  }
-  if (!state.closed && buffer.trim()) {
-    dispatchRequestLine(buffer);
-  }
-  await Promise.allSettled([...state.pendingRequests]);
-  activeOperationHeartbeatDirectiveEmitter?.stop?.();
-  activeOperationHeartbeatDirectiveEmitter = null;
-  closeMcpServers(mcpServers);
-}
-
-function isConcurrentServerRequestLine(line) {
-  try {
-    const request = JSON.parse(line);
-    if (request?.method === 'conversation.interrupt') return true;
-    if (request?.method === 'session.health') return true;
-    if (request?.method === 'session.events.subscribe') return true;
-    if (request?.method === 'session.operations') return false;
-    if (request?.method === 'session.recovery') return false;
-    if (request?.method === 'preflight.recovery') return false;
-    return classifyCarrierControlRequest(request).concurrent_allowed;
-  } catch {
-    return false;
-  }
 }
 
 function serverOperations({ requestId, state, mcpServers, mcpPreflightArtifact = readMcpPreflightArtifact() }) {
