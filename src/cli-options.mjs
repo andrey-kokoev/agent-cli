@@ -51,10 +51,6 @@ function parseArgs(argv) {
       markRemovedConversationArg('--interactive-after-message');
     } else if (argv[i] === '--auto-approve') {
       markRemovedConversationArg('--auto-approve');
-    } else if (argv[i] === '--server') {
-      opts.server = true;
-    } else if (argv[i] === '--carrier-server-substrate') {
-      opts.carrierServerSubstrate = true;
     } else if ((argv[i] === '--attach' || argv[i] === '--attach-endpoint') && i + 1 < argv.length) {
       opts.attach = true;
       opts.attachEndpoint = argv[i + 1];

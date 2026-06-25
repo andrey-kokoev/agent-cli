@@ -611,6 +611,7 @@ assert.deepEqual(createSessionActivitySnapshot({
 assert.deepEqual(wrapTerminalLine('alpha beta gamma', 10), ['alpha beta', 'gamma']);
 assert.equal(renderMarkdownForTerminal('- `code`').includes('• '), true);
 assert.equal(stripAnsiForTest(renderMarkdownForTerminal('- `code`')).includes('code'), true);
+assert.equal(stripAnsiForTest(renderMarkdownForTerminal('Use **bold** and `**code**`.')), 'Use bold and **code**.');
 assert.equal(stripAnsiForTest(renderMarkdownForTerminal('Site: `narada-proper`')).includes('narada-proper'), true);
 assert.equal(normalizeDisplayTerms('authority_locus: narada_proper and authority_posture: facade_only'), 'authority locus: `narada_proper` and authority posture: `facade_only`');
 assert.equal(normalizeDisplayTerms('authority_locus: `narada_proper`'), 'authority locus: `narada_proper`');
@@ -649,7 +650,7 @@ try {
 } finally {
   process.stdout.write = originalStdoutWrite;
 }
-assert.equal(stripAnsiForTest(renderMarkdownForTerminal('| Field | Values | Meaning |\n|-------|--------|---------|\n| executor | engine, agent, or operator | **Who** runs the step |\n| blocking | true or false | Whether the run **waits** for sop_run_advance after completion |')), 'Field     Values                      Meaning                                                       \nexecutor  engine, agent, or operator  **Who** runs the step                                         \nblocking  true or false               Whether the run **waits** for sop_run_advance after completion');
+assert.equal(stripAnsiForTest(renderMarkdownForTerminal('| Field | Values | Meaning |\n|-------|--------|---------|\n| executor | engine, agent, or operator | **Who** runs the step |\n| blocking | true or false | Whether the run **waits** for sop_run_advance after completion |')), 'Field     Values                      Meaning                                                   \nexecutor  engine, agent, or operator  Who runs the step                                         \nblocking  true or false               Whether the run waits for sop_run_advance after completion');
 assert.equal(stripAnsiForTest(toolDirectionLabel('result')), 'agent-cli -> narada.architect');
 const hostCommandOutputDir = mkdtempSync(join(tmpdir(), 'narada-agent-cli-host-command-'));
 const hostCommandEvents = [];

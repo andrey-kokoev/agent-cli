@@ -1,23 +1,18 @@
 import { spawnSync as defaultSpawnSync } from 'node:child_process';
+import {
+  normalizeDisplayTerms,
+  renderMarkdownForTerminal as renderSharedMarkdownForTerminal,
+  styleInlineMarkdown,
+  transformOutsideInlineCode,
+} from '@narada2/carrier-terminal-projection/terminal-markdown';
+import {
+  clearPreviousTerminalRows,
+  formatTimestamp,
+  stripAnsi,
+  terminalColumns as sharedTerminalColumns,
+  wrapTerminalLine,
+} from '@narada2/carrier-terminal-projection/terminal-text';
 import { formatTerminalMessageBlockLines } from './terminal-style.mjs';
-
-function parseBooleanEnv(value, defaultValue) {
-  if (value === undefined || value === null || String(value).trim() === '') return defaultValue;
-  const normalized = String(value).trim().toLowerCase();
-  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
-  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
-  return defaultValue;
-}
-
-function stripAnsi(text) {
-  return text.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
-}
-
-function parseColorEnv(value, defaultValue) {
-  if (process.env.NO_COLOR) return false;
-  if (process.env.FORCE_COLOR && process.env.FORCE_COLOR !== '0') return true;
-  return parseBooleanEnv(value, defaultValue);
-}
 
 function createTerminalRendering({
   identity = 'narada.architect',
@@ -245,16 +240,6 @@ function rewriteSubmittedPromptForTest(promptLabel, input, columns = 80, now = n
   return `${clearPreviousTerminalRows(rawPromptRows)}\n${formatSubmittedPrompt(promptLabel, text, columns, now)}`;
 }
 
-function clearPreviousTerminalRows(rows) {
-  if (rows <= 1) return '\x1b[1A\r\x1b[K';
-  let sequence = `\x1b[${rows}A`;
-  for (let index = 0; index < rows; index++) {
-    sequence += '\r\x1b[2K';
-    if (index < rows - 1) sequence += '\x1b[1B';
-  }
-  return `${sequence}\x1b[${rows - 1}A\r`;
-}
-
 function formatSubmittedPrompt(promptLabel, text, columns = 80, now = new Date()) {
   const prefix = `${promptLabel}: `;
   const firstLineWidth = Math.max(16, columns - stripAnsi(prefix).length);
@@ -294,140 +279,16 @@ function appendSuffixToLastLine(lines, suffix) {
   return lines;
 }
 
-function formatTimestamp(now = new Date()) {
-  const date = now instanceof Date ? now : new Date(now);
-  const pad = (value) => String(value).padStart(2, '0');
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
-}
-
 function renderMarkdownForTerminal(text) {
-  const lines = String(text ?? '').split(/\r?\n/);
-  let inFence = false;
-  let inTable = false;
-  let tableRows = [];
-  let tableHeader = null;
-  const outLines = [];
-  for (const line of lines) {
-    const fenceMatch = line.match(/^(\s*)```/);
-    if (fenceMatch) {
-      if (inTable) flushTable();
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) {
-      outLines.push(terminalStyle.code(`  ${line.replace(/^\s{0,4}/, '')}`));
-      continue;
-    }
-    const tableMatch = line.match(/^\|(.*)\|$/);
-    if (tableMatch) {
-      inTable = true;
-      const cells = tableMatch[1].split('|').map((cell) => cell.trim());
-      const isSeparator = cells.every((cell) => /^:?-+:?$/.test(cell));
-      if (isSeparator) continue;
-      if (tableHeader === null) {
-        tableHeader = cells;
-      } else {
-        tableRows.push(cells);
-      }
-      continue;
-    }
-    if (inTable) {
-      flushTable();
-      inTable = false;
-    }
-    if (/^#{1,6}\s+/.test(line)) {
-      outLines.push(terminalStyle.label(line.replace(/^#{1,6}\s+/, '')));
-      continue;
-    }
-    const normalizedLine = normalizeDisplayTerms(line);
-    const bulletLine = /^\s*[-*]\s+/.test(normalizedLine)
-      ? normalizedLine.replace(/^(\s*)[-*]\s+/, '$1• ')
-      : normalizedLine;
-    outLines.push(styleInlineCode(bulletLine));
-  }
-  if (inTable) flushTable();
-  return outLines.filter((line) => line !== null).join('\n');
-
-  function flushTable() {
-    if (!tableHeader) return;
-    const colCount = tableHeader.length;
-    const visible = (s) => stripAnsi(s).length;
-    const padded = (s, width) => {
-      const padWidth = Math.max(0, width - visible(s));
-      return `${s}${' '.repeat(padWidth)}`;
-    };
-    const widths = tableHeader.map((h, i) => Math.max(
-      visible(styleInlineCode(h)),
-      ...tableRows.map((row) => visible(styleInlineCode(row[i] ?? ''))),
-    ));
-    const renderRow = (row) => row.map((cell, i) => padded(styleInlineCode(cell ?? ''), widths[i])).join('  ');
-    outLines.push(terminalStyle.label(renderRow(tableHeader)));
-    for (const row of tableRows) {
-      const paddedRow = [];
-      for (let i = 0; i < colCount; i++) {
-        paddedRow.push(padded(styleInlineCode(row[i] ?? ''), widths[i]));
-      }
-      outLines.push(paddedRow.join('  '));
-    }
-    tableHeader = null;
-    tableRows = [];
-  }
+  return renderSharedMarkdownForTerminal(text, terminalStyle);
 }
 
 function styleInlineCode(line) {
-  return String(line ?? '').replace(/`([^`]+)`/g, (_match, code) => terminalStyle.code(code));
-}
-
-function normalizeDisplayTerms(line) {
-  return transformOutsideInlineCode(String(line ?? ''), (chunk) => chunk
-    .replace(/\bauthority_locus\b/g, 'authority locus')
-    .replace(/\bauthority_posture\b/g, 'authority posture')
-    .replace(/\bfacade_only\b/g, '`facade_only`')
-    .replace(/\bnarada_proper\b/g, '`narada_proper`'));
-}
-
-function transformOutsideInlineCode(text, transform) {
-  return String(text ?? '').split(/(`[^`]*`)/g)
-    .map((part) => part.startsWith('`') && part.endsWith('`') ? part : transform(part))
-    .join('');
+  return styleInlineMarkdown(line, terminalStyle);
 }
 
 function terminalWidth() {
-  return Math.max(50, Math.min(120, process.stdout.columns || 88));
-}
-
-function wrapTerminalLine(line, width) {
-  const text = String(line ?? '');
-  if (text.trim() === '') return [''];
-  const visible = stripAnsi(text);
-  if (visible.length <= width) return [text];
-  const words = text.split(/(\s+)/);
-  const lines = [];
-  let current = '';
-  for (const word of words) {
-    if (!word) continue;
-    if (stripAnsi(word).length > width) {
-      if (current.trim()) {
-        lines.push(current.trimEnd());
-        current = '';
-      }
-      let remaining = word.trimStart();
-      while (stripAnsi(remaining).length > width) {
-        lines.push(remaining.slice(0, width));
-        remaining = remaining.slice(width);
-      }
-      current = remaining;
-      continue;
-    }
-    if (stripAnsi(current + word).length > width && current.trim()) {
-      lines.push(current.trimEnd());
-      current = word.trimStart();
-    } else {
-      current += word;
-    }
-  }
-  if (current.trim()) lines.push(current.trimEnd());
-  return lines.length ? lines : [text];
+  return sharedTerminalColumns({ columns: process.stdout.columns });
 }
 
 function formatToolResultContent(content) {
@@ -550,6 +411,5 @@ function sanitizeOperatorDirectiveDraftForDisplay(value) {
 
 export {
   createTerminalRendering,
-  parseColorEnv,
   stripAnsi,
 };

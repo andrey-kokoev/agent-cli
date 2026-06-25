@@ -55,7 +55,6 @@ import {
   parseColorEnv,
 } from './cli-options.mjs';
 import { resolveNarsAttachEndpoint, runNarsAttachClient } from './nars-attach-client.mjs';
-import { runCompatibilityShim as runRuntimeServerCompatibilityShim } from './runtime-server-shim.mjs';
 import { createTerminalStyle } from './terminal-style.mjs';
 import { createTerminalRendering, stripAnsi } from './terminal-rendering.mjs';
 import {
@@ -197,8 +196,7 @@ const SESSION_SYNC_TARGET = String(options.sessionSyncTarget ?? '').trim() || nu
 const SESSION_SYNC_DIRECTION = normalizeSessionSyncDirection(options.sessionSyncDirection);
 const SESSION_SYNC_DRY_RUN = options.sessionSyncDryRun === true;
 const SESSION_SYNC_DELETE = options.sessionSyncDelete === true;
-const SERVER_COMPATIBILITY_MODE = options.server === true && options.carrierServerSubstrate !== true;
-const SERVER_MODE = options.carrierServerSubstrate === true;
+const SERVER_MODE = false;
 const ATTACH_MODE = options.attach === true;
 const UTILITY_COMMAND_MODE = isAgentCliUtilityCommandMode(options);
 const sessionSettings = {
@@ -1596,15 +1594,8 @@ async function main() {
     process.exitCode = 2;
     return;
   }
-  if (SERVER_COMPATIBILITY_MODE) {
-    const compatibilityArgv = process.argv.slice(2);
-    process.exitCode = await runRuntimeServerCompatibilityShim({
-      argv: compatibilityArgv.includes('--raw-jsonl') ? compatibilityArgv : ['--raw-jsonl', ...compatibilityArgv],
-    });
-    return;
-  }
   if (!SERVER_MODE) {
-    console.error('agent-cli non-server conversation runtime has been removed; launch through agent-runtime-server, pass --attach for a NARS client projection, or use --server compatibility mode.');
+    console.error('agent-cli non-server conversation runtime has been removed; launch through narada-agent-runtime-server or pass --attach for a NARS client projection.');
     process.exitCode = 2;
     return;
   }
@@ -8277,8 +8268,8 @@ export {
 
 if (isEntrypoint) {
   if (options.help) {
-    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] --server [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-diagnostics] [--mcp-preflight-diagnostics-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--mcp-preflight-diagnostics-filter <all|startup|runtime>] [--session-inventory] [--session-inventory-json] [--session-inventory-operations] [--session-inventory-operations-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-inventory-events-count <n>] [--session-operations] [--session-operations-json] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-events-count <n>] [--session-sync] [--session-sync-json] [--session-sync-dry-run] [--session-sync-delete] [--session-sync-target <file://url|path|site:alias|cloud:alias>] [--session-sync-direction <upload|download|bidirectional>] [--stream|--no-stream] [--color|--no-color]`);
-    console.log('Conversation runtime is NARS-owned. Use agent-runtime-server for JSONL stdio, --server as a compatibility alias, or --attach for terminal projection. Legacy terminal and one-shot message modes have been removed.');
+    console.log(`Usage: narada-agent-cli --identity <name> [--session <name>] [--attach [endpoint]] [--mcp-preflight] [--mcp-preflight-json] [--mcp-preflight-read] [--mcp-preflight-read-json] [--mcp-preflight-inventory] [--mcp-preflight-inventory-json] [--mcp-preflight-actions] [--mcp-preflight-actions-json] [--mcp-preflight-recovery] [--mcp-preflight-recovery-json] [--mcp-preflight-diagnostics] [--mcp-preflight-diagnostics-json] [--mcp-preflight-filter <mcp_state|recommended_action|recovery_kind>] [--mcp-preflight-match <value>] [--mcp-preflight-diagnostics-filter <all|startup|runtime>] [--session-inventory] [--session-inventory-json] [--session-inventory-operations] [--session-inventory-operations-json] [--session-inventory-actions] [--session-inventory-actions-json] [--session-inventory-recovery] [--session-inventory-recovery-json] [--session-inventory-events] [--session-inventory-events-json] [--session-inventory-filter <operational_posture|request_posture|mcp_state|heartbeat_status|recommended_action|recovery_kind>] [--session-inventory-match <value>] [--session-inventory-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-inventory-events-count <n>] [--session-operations] [--session-operations-json] [--session-recovery] [--session-recovery-json] [--session-read] [--session-read-json] [--session-events] [--session-events-json] [--session-events-filter <all|lifecycle|issues|diagnostics|operations>] [--session-events-count <n>] [--session-sync] [--session-sync-json] [--session-sync-dry-run] [--session-sync-delete] [--session-sync-target <file://url|path|site:alias|cloud:alias>] [--session-sync-direction <upload|download|bidirectional>] [--stream|--no-stream] [--color|--no-color]`);
+    console.log('Conversation runtime is NARS-owned. Use narada-agent-runtime-server for JSONL stdio, or --attach for terminal projection. Legacy terminal and one-shot message modes have been removed.');
     console.log(`Environment: NARADA_INTELLIGENCE_PROVIDER, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, KIMI_API_KEY, KIMI_API_BASE_URL, KIMI_MODEL, KIMI_CODE_API_KEY, KIMI_CODE_API_BASE_URL, KIMI_CODE_MODEL, ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, ANTHROPIC_MODEL, DEEPSEEK_API_KEY, DEEPSEEK_API_BASE_URL, CODEX_MODEL, NARADA_CODEX_AUTH_HOME, NARADA_AGENT_CLI_STREAM, NARADA_AGENT_CLI_COLOR, NARADA_SITE_ROOT, NARADA_CLOUD_ROOT`);
     process.exit(0);
   }

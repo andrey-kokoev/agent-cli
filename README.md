@@ -1,6 +1,6 @@
 # @narada2/agent-cli
 
-Standalone repository for the Narada agent CLI and agent runtime server package.
+Standalone repository for the Narada agent CLI client/projection package. The runtime server is owned by `@narada2/agent-runtime-server` in Narada proper.
 
 Package name remains `@narada2/agent-cli`.
 

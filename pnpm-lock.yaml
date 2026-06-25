@@ -20,6 +20,9 @@ importers:
       '@narada2/carrier-provider-contract':
         specifier: workspace:*
         version: link:../narada/packages/carrier-provider-contract
+      '@narada2/carrier-terminal-projection':
+        specifier: workspace:*
+        version: link:../narada/packages/carrier-terminal-projection
       '@narada2/mcp-fabric':
         specifier: workspace:*
         version: link:../narada/packages/mcp-fabric
@@ -31,6 +34,8 @@ importers:
   ../narada/packages/carrier-protocol: {}
 
   ../narada/packages/carrier-provider-contract: {}
+
+  ../narada/packages/carrier-terminal-projection: {}
 
   ../narada/packages/mcp-fabric:
     dependencies:

@@ -660,7 +660,7 @@ if ($AutoApprove) {
     $argList += '--auto-approve'
 }
 
-Write-Host "Starting agent-cli for $IdentityName..." -ForegroundColor Cyan
+Write-Host "Starting NARS for $IdentityName..." -ForegroundColor Cyan
 Write-Host "  Session: $SessionName" -ForegroundColor DarkGray
 Write-Host "  WorkDir: $WorkDir" -ForegroundColor DarkGray
 $displayModel = if ($PrimaryModelEnvName) { [Environment]::GetEnvironmentVariable($PrimaryModelEnvName, 'Process') } else { $null }
@@ -713,7 +713,7 @@ Set-Location $WorkDir
 
 $exitCode = $LASTEXITCODE
 if ($exitCode -ne 0) {
-    Write-Warning "agent-cli exited with code $exitCode"
+    Write-Warning "NARS exited with code $exitCode"
 
     $sessionRecoveryArgs = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName, '--session-recovery-json')
     $sessionRecoveryRaw = & node @sessionRecoveryArgs
