@@ -660,7 +660,7 @@ if ($AutoApprove) {
     $argList += '--auto-approve'
 }
 
-Write-Host "Starting NARS for $IdentityName..." -ForegroundColor Cyan
+Write-Host "Starting agent-runtime-server for $IdentityName..." -ForegroundColor Cyan
 Write-Host "  Session: $SessionName" -ForegroundColor DarkGray
 Write-Host "  WorkDir: $WorkDir" -ForegroundColor DarkGray
 $displayModel = if ($PrimaryModelEnvName) { [Environment]::GetEnvironmentVariable($PrimaryModelEnvName, 'Process') } else { $null }
