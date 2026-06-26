@@ -6,4 +6,6 @@
 /.narada/runtime/
 /.ai/mcp/
 /.ai/mcp-output/
+/.ai/tmp/
 /.ai/tmp-agent-cli-programmatic-test/
+/scripts/e2e/
