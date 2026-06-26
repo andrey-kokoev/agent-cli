@@ -4,5 +4,8 @@ packages:
   - '../narada/packages/carrier-protocol'
   - '../narada/packages/mcp-fabric'
   - '../narada/packages/carrier-provider-contract'
+  - '../narada/packages/carrier-provider-support'
   - '../narada/packages/carrier-command-contract'
   - '../narada/packages/carrier-terminal-projection'
+  - '../narada/packages/carrier-runtime'
+  - '../narada/packages/nars-client-projection-contract'

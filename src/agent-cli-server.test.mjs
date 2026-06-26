@@ -11,6 +11,7 @@ import { createExplicitJsonControlFrame, createOperatorConversationFrame, create
 import { createTerminalRendering } from './terminal-rendering.mjs';
 import { formatTerminalMessageBlockLines } from './terminal-style.mjs';
 import { commandTokens } from '@narada2/carrier-command-contract';
+import { recordMcpPreflightArtifactLinkage } from '@narada2/carrier-runtime/runtime-dependencies';
 import {
   CARRIER_CONTROL_METHODS,
   NARS_RUNTIME_EVENT_KINDS,
@@ -24,24 +25,10 @@ import {
   validateSessionEvent,
 } from '@narada2/carrier-protocol';
 import {
-  PROVIDER_SUPPORT_STATES,
-  REQUEST_ADAPTERS,
-  assertApiKeyConfigured,
-  buildAnthropicMessagesRequest,
-  buildCodexMcpRequest,
   buildChildProcessEnv,
-  buildCodexMcpServerArgs,
-  buildCodexSubprocessEnv,
-  buildCodexExecArgs,
-  codexExecMcpConfigArgs,
-  codexExecConfigToml,
-  codexRequestMcpServers,
-  codexExecMcpToolEventSummary,
-  buildOpenAiChatRequest,
   aggregateTools,
   providerToolNameForOriginal,
   originalToolNameForProvider,
-  codexExecEventText,
   copyToClipboard,
   consumeOperatorDirectiveInputText,
   createCarrierDirectiveEmitter,
@@ -54,8 +41,6 @@ import {
   createTerminalStyle,
   environmentBlockLength,
   directiveReceiptEvidence,
-  discoverAndStartMcpServers,
-  executeMcpTool,
   classifyCarrierHostCommandInput,
   executeCarrierHostCommand,
   formatDuration,
@@ -73,7 +58,6 @@ import {
   handleControlLine,
   handleObserverCommand,
   handleSlashCommand,
-  messagesWithCarrierGoal,
   mcpToolEffectAdmissionEvidence,
   handleToolOutputDisplayCommand,
   runCodexTranscriptStats,
@@ -87,30 +71,19 @@ import {
   parseArgs,
   parseBooleanEnv,
   parseColorEnv,
-  parseCodexMcpResponse,
   removeInvalidToolHistory,
-  parseAnthropicMessagesResponse,
-  parseCodexExecJsonLine,
-  parseNaradaToolCall,
   isObserverInputEvent,
-  isPotentialNaradaToolCallText,
   printAgentMessage,
   readCarrierHostCommandOutputRef,
   readMcpPreflightArtifact,
   readPersistedSessionEvents,
   readSessionInventory,
-  recordMcpPreflightArtifactLinkage,
   renderMarkdownForTerminal,
   rewriteSubmittedPromptForTest,
-  runConversationTurn,
   runSessionEventsRead,
   runSessionInventory,
   runSessionSync,
-  runServerMode,
-  serverStatus,
   sanitizeOperatorDirectiveDraftForDisplay,
-  resolveProviderAdapter,
-  resolveProviderSupportState,
   sessionEventEntry,
   sessionLogEntry,
   shouldDeferQueuedInput,
@@ -740,7 +713,7 @@ assert.equal(createProjectedSlashCommandAction('/observers').frame.method, 'obse
 assert.equal(createProjectedSlashCommandAction('/observer mute').frame.method, 'observer.mute');
 assert.equal(createProjectedSlashCommandAction('/exit').frame.method, 'session.close');
 assert.equal(createProjectedSlashCommandAction('exit').frame.method, 'session.close');
-assert.equal(createProjectedSlashCommandAction('/goal ship it').frame.method, 'agent-cli.command');
+assert.equal(createProjectedSlashCommandAction('/goal ship it').frame.method, 'carrier.command.execute');
 assert.equal(createProjectedSlashCommandAction('/goal ship it').frame.params.command, '/goal');
 assert.equal(createProjectedSlashCommandAction('/goal ship it').frame.params.value, 'ship it');
 assert.equal(createProjectedSlashCommandAction('/stats --today').frame.params.command, '/stats');
@@ -753,7 +726,7 @@ assert.equal(createProjectedSlashCommandAction('/queue clear').frame.params.comm
 assert.equal(createProjectedSlashCommandAction('/queue clear').frame.params.value, 'clear');
 for (const command of ['/goal', '/stats', '/model', '/thinking', '/tool-output', '/tools', '/queue']) {
   assert.equal(commandTokens().includes(command), true, command);
-  assert.equal(createProjectedSlashCommandAction(`${command} test`).frame.method, 'agent-cli.command', command);
+  assert.equal(createProjectedSlashCommandAction(`${command} test`).frame.method, 'carrier.command.execute', command);
 }
 assert.equal(createProjectedSlashCommandAction('/does-not-exist').message, 'Unknown command: /does-not-exist. Type /help.');
 assert.equal(createProjectedSlashCommandAction('run startup sequence'), null);
@@ -768,12 +741,14 @@ projectedWriterOutput.isTTY = true;
 let projectedWriterText = '';
 projectedWriterOutput.setEncoding('utf8');
 projectedWriterOutput.on('data', (chunk) => { projectedWriterText += chunk; });
-const projectedWriter = createProjectedOutputWriter({ rl: { prompt() {} }, interactive: true, output: projectedWriterOutput });
+let projectedWriterClearCount = 0;
+const projectedWriter = createProjectedOutputWriter({ composer: { clear() { projectedWriterClearCount += 1; }, render() {} }, interactive: true, output: projectedWriterOutput });
 projectedWriter('first line');
 const projectedWriterAfterClear = projectedWriterText;
 projectedWriter('preserved line', { preserveCurrentLine: true, prompt: false });
-assert.equal(projectedWriterAfterClear.includes('\x1b['), true);
-assert.equal(projectedWriterText.slice(projectedWriterAfterClear.length).includes('\x1b['), false);
+assert.equal(projectedWriterClearCount, 1);
+assert.equal(projectedWriterAfterClear, 'first line');
+assert.equal(projectedWriterText.slice(projectedWriterAfterClear.length), 'preserved line');
 const renderStateForTest = { streamedTurns: new Set(), timestamps: false };
 const renderedStartupForTest = renderOperatorEvent({
   event: 'session_started',
@@ -861,267 +836,12 @@ assert.equal(createProjectedSlashCommandAction('/model gpt-projected-test').fram
 assert.equal(createProjectedSlashCommandAction('/thinking high').frame.params.value, 'high');
 assert.equal(createProjectedSlashCommandAction('/tool-output off').frame.params.value, 'off');
 
-const directiveServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-directive-server-'));
-mkdirSync(join(directiveServerSite, '.ai', 'mcp'), { recursive: true });
-const previousSiteRoot = process.env.NARADA_SITE_ROOT;
-process.env.NARADA_SITE_ROOT = directiveServerSite;
-try {
-  const input = new PassThrough();
-  const output = new PassThrough();
-  let directiveStdout = '';
-  output.setEncoding('utf8');
-  output.on('data', (chunk) => { directiveStdout += chunk; });
-  const serverDone = runServerMode({
-    input,
-    output,
-    callChatApiFn: async () => ({
-      choices: [{ message: { role: 'assistant', content: 'ack directive' } }],
-    }),
-  });
-  input.write(`${JSON.stringify({
-    id: 'directive-1',
-    method: 'system_directive.deliver',
-    params: {
-      directive_id: 'dir_test',
-      message: 'run startup sequence',
-      authority_ref: 'dir_test',
-    },
-  })}\n`);
-  input.end();
-  await serverDone;
-  const directiveEvents = directiveStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
-  assert.equal(directiveEvents.some((event) => event.event === 'directive_received' && event.directive_id === 'dir_test'), true);
-  assert.equal(directiveEvents.some((event) => event.event === 'directive_receipt_recorded' && event.directive_id === 'dir_test' && event.receipt_id?.startsWith('dirrcpt_')), true);
-  assert.equal(directiveEvents.some((event) => event.event === 'directive_carrier_accepted_recorded' && event.directive_id === 'dir_test' && event.acceptance_id?.startsWith('diraccept_')), true);
-  assert.equal(directiveEvents.some((event) => event.event === 'turn_complete' && event.directive_id === 'dir_test'), true);
-
-  const heartbeatInput = new PassThrough();
-  const heartbeatOutput = new PassThrough();
-  let heartbeatStdout = '';
-  let heartbeatChatCalls = 0;
-  heartbeatOutput.setEncoding('utf8');
-  heartbeatOutput.on('data', (chunk) => { heartbeatStdout += chunk; });
-  const heartbeatServerDone = runServerMode({
-    input: heartbeatInput,
-    output: heartbeatOutput,
-    callChatApiFn: async () => {
-      heartbeatChatCalls += 1;
-      return { choices: [{ message: { role: 'assistant', content: 'unexpected heartbeat turn' } }] };
-    },
-  });
-  heartbeatInput.write(`${JSON.stringify({
-    id: 'heartbeat-1',
-    method: 'system_directive.deliver',
-    params: {
-      directive_id: 'dir_heartbeat',
-      authority_ref: 'auth_operation_heartbeat',
-      directive: {
-        directive_id: 'dir_heartbeat',
-        kind: 'operation_heartbeat',
-        visibility: 'record_only',
-        cadence: 'PT1M',
-        operation_id: 'operation_test',
-        reason: 'operation_continuity_heartbeat',
-      },
-    },
-  })}\n`);
-  heartbeatInput.end();
-  await heartbeatServerDone;
-  const heartbeatEvents = heartbeatStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
-  assert.equal(heartbeatChatCalls, 0);
-  assert.equal(heartbeatEvents.some((event) => event.event === 'directive_received' && event.directive_id === 'dir_heartbeat'), true);
-  assert.equal(heartbeatEvents.some((event) => event.event === 'directive_receipt_recorded' && event.directive_id === 'dir_heartbeat'), true);
-  assert.equal(heartbeatEvents.some((event) => event.event === 'directive_carrier_accepted_recorded' && event.directive_id === 'dir_heartbeat'), true);
-  assert.equal(heartbeatEvents.some((event) => event.event === 'directive_complete' && event.directive_id === 'dir_heartbeat' && event.terminal_state === 'completed_without_provider'), true);
-  assert.equal(heartbeatEvents.some((event) => event.event === 'turn_started' && event.directive_id === 'dir_heartbeat'), false);
-} finally {
-  if (previousSiteRoot === undefined) delete process.env.NARADA_SITE_ROOT;
-  else process.env.NARADA_SITE_ROOT = previousSiteRoot;
-  rmSync(directiveServerSite, { recursive: true, force: true });
-}
-
-const observerServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-observer-server-'));
-mkdirSync(join(observerServerSite, '.ai', 'mcp'), { recursive: true });
-process.env.NARADA_SITE_ROOT = observerServerSite;
-try {
-  const observerInputRequest = ({ id, visibility, content }) => ({
-    id,
-    method: 'carrier.input.deliver',
-    params: {
-      input: {
-        schema: 'narada.carrier.control.input_event.v1',
-        control_event_id: `control_${id}`,
-        input_event_id: `input_${id}`,
-        written_at: new Date().toISOString(),
-        input: {
-          schema: 'narada.carrier.input_event.v1',
-          event_id: `input_${id}`,
-          source_kind: 'agent',
-          source_id: 'narada.observer',
-          transport: 'control_jsonl',
-          delivery_mode: 'admit_after_active_turn',
-          hold_condition: null,
-          content,
-          created_at: new Date().toISOString(),
-          authority_ref: null,
-          directive_id: null,
-          metadata: {
-            observer: {
-              role: 'observer',
-              rule_id: 'server-observer-smoke',
-              visibility,
-            },
-          },
-        },
-      },
-    },
-  });
-  const input = new PassThrough();
-  const output = new PassThrough();
-  let observerStdout = '';
-  let providerCalls = 0;
-  output.setEncoding('utf8');
-  output.on('data', (chunk) => { observerStdout += chunk; });
-  const serverDone = runServerMode({
-    input,
-    output,
-    callChatApiFn: async () => {
-      providerCalls += 1;
-      return { choices: [{ message: { role: 'assistant', content: 'should not run' } }] };
-    },
-  });
-  input.write(`${JSON.stringify({ id: 'observer-status-1', method: 'observers.status', params: {} })}\n`);
-  input.write(`${JSON.stringify(observerInputRequest({
-    id: 'observer_visible_1',
-    visibility: 'operator_visible',
-    content: 'operator visible observer note',
-  }))}\n`);
-  input.write(`${JSON.stringify({ id: 'observer-mute-1', method: 'observer.mute', params: {} })}\n`);
-  input.write(`${JSON.stringify(observerInputRequest({
-    id: 'observer_agent_muted_1',
-    visibility: 'agent_visible',
-    content: 'agent visible observer note',
-  }))}\n`);
-  input.write(`${JSON.stringify(observerInputRequest({
-    id: 'observer_conversation_muted_1',
-    visibility: 'conversation_visible',
-    content: 'conversation visible observer note',
-  }))}\n`);
-  input.end();
-  await serverDone;
-  const observerEvents = observerStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
-  assert.equal(observerEvents.some((event) => event.event === 'observer_status' && event.request_id === 'observer-status-1' && event.observer_muted === false), true);
-  assert.equal(observerEvents.some((event) => event.event === 'observer_status' && event.request_id === 'observer-mute-1' && event.observer_muted === true), true);
-  assert.equal(observerEvents.some((event) => event.event === 'observer_interjection_visible' && event.request_id === 'observer_visible_1' && event.content === 'operator visible observer note'), true);
-  assert.equal(observerEvents.some((event) => event.event === 'observer_input_complete' && event.request_id === 'observer_visible_1' && event.visibility === 'operator_visible'), true);
-  assert.equal(observerEvents.some((event) => event.event === 'observer_input_complete' && event.request_id === 'observer_agent_muted_1' && event.visibility === 'agent_visible'), true);
-  assert.equal(observerEvents.some((event) => event.event === 'observer_input_complete' && event.request_id === 'observer_conversation_muted_1' && event.visibility === 'conversation_visible'), true);
-  assert.equal(observerEvents.some((event) => event.event === 'observer_interjection_visible' && event.request_id === 'observer_conversation_muted_1'), false);
-  assert.equal(observerEvents.some((event) => event.event === 'turn_started' && String(event.request_id).startsWith('observer_')), false);
-  assert.equal(providerCalls, 0);
-} finally {
-  if (previousSiteRoot === undefined) delete process.env.NARADA_SITE_ROOT;
-  else process.env.NARADA_SITE_ROOT = previousSiteRoot;
-  rmSync(observerServerSite, { recursive: true, force: true });
-}
-
-const interruptServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-interrupt-server-'));
-mkdirSync(join(interruptServerSite, '.ai', 'mcp'), { recursive: true });
-process.env.NARADA_SITE_ROOT = interruptServerSite;
-try {
-  const input = new PassThrough();
-  const output = new PassThrough();
-  let interruptStdout = '';
-  output.setEncoding('utf8');
-  output.on('data', (chunk) => { interruptStdout += chunk; });
-  const serverDone = runServerMode({
-    input,
-    output,
-    callChatApiFn: async () => {
-      await delayForTest(75);
-      return { choices: [{ message: { role: 'assistant', content: 'late ack' } }] };
-    },
-  });
-  input.write(`${JSON.stringify({ id: 'send-1', method: 'conversation.send', params: { message: 'long turn' } })}\n`);
-  await delayForTest(15);
-  input.write(`${JSON.stringify({ id: 'interrupt-1', method: 'conversation.interrupt', params: {} })}\n`);
-  input.end();
-  await serverDone;
-  const interruptEvents = interruptStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
-  assert.equal(interruptEvents.some((event) => event.event === 'turn_interrupted' && event.request_id === 'interrupt-1'), true);
-  assert.equal(interruptEvents.some((event) => event.event === 'turn_complete' && event.request_id === 'send-1' && event.terminal_state === 'interrupted'), true);
-} finally {
-  if (previousSiteRoot === undefined) delete process.env.NARADA_SITE_ROOT;
-  else process.env.NARADA_SITE_ROOT = previousSiteRoot;
-  rmSync(interruptServerSite, { recursive: true, force: true });
-}
-
-const sameChunkInterruptServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-same-chunk-interrupt-server-'));
-mkdirSync(join(sameChunkInterruptServerSite, '.ai', 'mcp'), { recursive: true });
-process.env.NARADA_SITE_ROOT = sameChunkInterruptServerSite;
-try {
-  const input = new PassThrough();
-  const output = new PassThrough();
-  let interruptStdout = '';
-  output.setEncoding('utf8');
-  output.on('data', (chunk) => { interruptStdout += chunk; });
-  const serverDone = runServerMode({
-    input,
-    output,
-    callChatApiFn: async () => {
-      await delayForTest(75);
-      return { choices: [{ message: { role: 'assistant', content: 'late ack' } }] };
-    },
-  });
-  input.write([
-    JSON.stringify({ id: 'send-same-chunk-1', method: 'conversation.send', params: { message: 'long turn' } }),
-    JSON.stringify({ id: 'interrupt-same-chunk-1', method: 'conversation.interrupt', params: {} }),
-    '',
-  ].join('\n'));
-  input.end();
-  await serverDone;
-  const interruptEvents = interruptStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
-  assert.equal(interruptEvents.some((event) => event.event === 'turn_interrupted' && event.request_id === 'interrupt-same-chunk-1'), true);
-  assert.equal(interruptEvents.some((event) => event.event === 'turn_complete' && event.request_id === 'send-same-chunk-1' && event.terminal_state === 'interrupted'), true);
-} finally {
-  if (previousSiteRoot === undefined) delete process.env.NARADA_SITE_ROOT;
-  else process.env.NARADA_SITE_ROOT = previousSiteRoot;
-  rmSync(sameChunkInterruptServerSite, { recursive: true, force: true });
-}
-
-const closedServerSite = mkdtempSync(join(tmpdir(), 'narada-agent-cli-closed-server-'));
-mkdirSync(join(closedServerSite, '.ai', 'mcp'), { recursive: true });
-process.env.NARADA_SITE_ROOT = closedServerSite;
-try {
-  const input = new PassThrough();
-  const output = new PassThrough();
-  let closedStdout = '';
-  output.setEncoding('utf8');
-  output.on('data', (chunk) => { closedStdout += chunk; });
-  const serverDone = runServerMode({ input, output, callChatApiFn: async () => ({ choices: [{ message: { role: 'assistant', content: 'should not run' } }] }) });
-  input.write(`${JSON.stringify({ id: 'close-before-send', method: 'session.close', params: {} })}\n`);
-  input.write(`${JSON.stringify({ id: 'send-after-close', method: 'conversation.send', params: { message: 'after close' } })}\n`);
-  input.end();
-  await serverDone;
-  const closedEvents = closedStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
-  assert.equal(closedEvents.some((event) => event.event === 'session_closed' && event.request_id === 'close-before-send'), true);
-  assert.equal(closedEvents.some((event) => event.event === 'error' && event.request_id === 'send-after-close' && event.code === 'session_closed'), true);
-} finally {
-  if (previousSiteRoot === undefined) delete process.env.NARADA_SITE_ROOT;
-  else process.env.NARADA_SITE_ROOT = previousSiteRoot;
-  rmSync(closedServerSite, { recursive: true, force: true });
-}
-
-console.log('agent-cli adapter tests PASSED.');
-
 function stopChildProcess(proc) {
   if (!proc || proc.exitCode !== null) return Promise.resolve();
   return new Promise((resolveStop) => {
     proc.once('exit', () => resolveStop());
-
   });
 }
-
 function stripAnsiForTest(text) {
   return String(text).replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
 }
@@ -1130,4 +850,3 @@ function delayForTest(ms) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 }
 
-console.log('agent-cli server tests PASSED.');

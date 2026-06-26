@@ -20,24 +20,10 @@ import {
   validateSessionEvent,
 } from '@narada2/carrier-protocol';
 import {
-  PROVIDER_SUPPORT_STATES,
-  REQUEST_ADAPTERS,
-  assertApiKeyConfigured,
-  buildAnthropicMessagesRequest,
-  buildCodexMcpRequest,
   buildChildProcessEnv,
-  buildCodexMcpServerArgs,
-  buildCodexSubprocessEnv,
-  buildCodexExecArgs,
-  codexExecMcpConfigArgs,
-  codexExecConfigToml,
-  codexRequestMcpServers,
-  codexExecMcpToolEventSummary,
-  buildOpenAiChatRequest,
   aggregateTools,
   providerToolNameForOriginal,
   originalToolNameForProvider,
-  codexExecEventText,
   copyToClipboard,
   consumeOperatorDirectiveInputText,
   createCarrierDirectiveEmitter,
@@ -50,8 +36,6 @@ import {
   createTerminalStyle,
   environmentBlockLength,
   directiveReceiptEvidence,
-  discoverAndStartMcpServers,
-  executeMcpTool,
   classifyCarrierHostCommandInput,
   executeCarrierHostCommand,
   formatDuration,
@@ -69,7 +53,6 @@ import {
   handleControlLine,
   handleObserverCommand,
   handleSlashCommand,
-  messagesWithCarrierGoal,
   mcpToolEffectAdmissionEvidence,
   handleToolOutputDisplayCommand,
   runCodexTranscriptStats,
@@ -83,30 +66,19 @@ import {
   parseArgs,
   parseBooleanEnv,
   parseColorEnv,
-  parseCodexMcpResponse,
   removeInvalidToolHistory,
-  parseAnthropicMessagesResponse,
-  parseCodexExecJsonLine,
-  parseNaradaToolCall,
   isObserverInputEvent,
-  isPotentialNaradaToolCallText,
   printAgentMessage,
   readCarrierHostCommandOutputRef,
   readMcpPreflightArtifact,
   readPersistedSessionEvents,
   readSessionInventory,
-  recordMcpPreflightArtifactLinkage,
   renderMarkdownForTerminal,
   rewriteSubmittedPromptForTest,
-  runConversationTurn,
   runSessionEventsRead,
   runSessionInventory,
   runSessionSync,
-  runServerMode,
-  serverStatus,
   sanitizeOperatorDirectiveDraftForDisplay,
-  resolveProviderAdapter,
-  resolveProviderSupportState,
   sessionEventEntry,
   sessionLogEntry,
   shouldDeferQueuedInput,
@@ -318,8 +290,8 @@ assert.ok(environmentBlockLength(childEnv) < 32767);
 assert.equal(inputRecordDisplayLabel({ source: 'operator_directive' }), 'operator directive -> narada.architect');
 assert.equal(inputRecordDisplayLabel({ source: 'operator_steering' }), 'operator steering -> narada.architect');
 assert.equal(inputRecordDisplayLabel({ source: 'system_directive' }), 'system directive');
-assert.equal(CARRIER_CONTROL_METHODS.includes('agent-cli.command'), true);
-assert.equal(classifyCarrierControlRequest({ id: 'command-1', method: 'agent-cli.command', params: { command: '/model', value: 'gpt-test' } }).method_kind, 'agent_cli_command');
+assert.equal(CARRIER_CONTROL_METHODS.includes('carrier.command.execute'), true);
+assert.equal(classifyCarrierControlRequest({ id: 'command-1', method: 'carrier.command.execute', params: { command: '/model', value: 'gpt-test' } }).method_kind, 'carrier_command_execute');
 assert.deepEqual(normalizeInputRecord('typed message'), { content: 'typed message', source: 'manual_operator' });
 const normalizedEvent = normalizeInputEvent(
   { content: 'run startup sequence', source: 'system_directive', authority_ref: 'dir_1', directive_id: 'dir_1' },
@@ -422,7 +394,16 @@ const controlEvents = [];
 const controlQueue = createInputQueue({
   drain: async (event) => { controlEvents.push(event); return { terminal_state: 'completed' }; },
 });
-const watcher = startControlJsonlWatcher({ controlPath: controlJsonlPath, inputQueue: controlQueue });
+const originalControlWatcherStdoutWrite = process.stdout.write;
+const controlWatcherOutput = [];
+process.stdout.write = (value = '') => { controlWatcherOutput.push(String(value)); return true; };
+let watcher;
+try {
+  watcher = startControlJsonlWatcher({ controlPath: controlJsonlPath, inputQueue: controlQueue });
+} finally {
+  process.stdout.write = originalControlWatcherStdoutWrite;
+}
+assert.equal(controlWatcherOutput.some((message) => message.includes('Control path:')), true);
 const controlFrame = JSON.stringify({
   method: 'system_directive.deliver',
   params: { directive_id: 'dir_partial', message: 'run startup sequence' },
@@ -589,4 +570,3 @@ function delayForTest(ms) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 }
 
-console.log('agent-cli carrier input tests PASSED.');

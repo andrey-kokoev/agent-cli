@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runConversationTurn } from './agent-cli.mjs';
+import { runConversationTurn } from '@narada2/carrier-runtime/runtime-dependencies';
 
 test('delegated NARS turn executes read-only tools but refuses task mutation under read authority', async () => {
   const siteRoot = mkdtempSync(join(tmpdir(), 'narada-nars-read-authority-probe-'));

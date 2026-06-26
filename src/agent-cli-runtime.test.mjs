@@ -19,25 +19,20 @@ import {
   createToolResultPayload,
   validateSessionEvent,
 } from '@narada2/carrier-protocol';
+import { discoverAndStartMcpServers } from '@narada2/carrier-runtime/mcp-runtime';
 import {
-  PROVIDER_SUPPORT_STATES,
-  REQUEST_ADAPTERS,
   assertApiKeyConfigured,
-  buildAnthropicMessagesRequest,
-  buildCodexMcpRequest,
+  executeMcpTool,
+  messagesWithCarrierGoal,
+  recordMcpPreflightArtifactLinkage,
+  runConversationTurn,
+  serverStatus,
+} from '@narada2/carrier-runtime/runtime-dependencies';
+import {
   buildChildProcessEnv,
-  buildCodexMcpServerArgs,
-  buildCodexSubprocessEnv,
-  buildCodexExecArgs,
-  codexExecMcpConfigArgs,
-  codexExecConfigToml,
-  codexRequestMcpServers,
-  codexExecMcpToolEventSummary,
-  buildOpenAiChatRequest,
   aggregateTools,
   providerToolNameForOriginal,
   originalToolNameForProvider,
-  codexExecEventText,
   copyToClipboard,
   consumeOperatorDirectiveInputText,
   createCarrierDirectiveEmitter,
@@ -50,8 +45,6 @@ import {
   createTerminalStyle,
   environmentBlockLength,
   directiveReceiptEvidence,
-  discoverAndStartMcpServers,
-  executeMcpTool,
   classifyCarrierHostCommandInput,
   executeCarrierHostCommand,
   formatDuration,
@@ -69,7 +62,6 @@ import {
   handleControlLine,
   handleObserverCommand,
   handleSlashCommand,
-  messagesWithCarrierGoal,
   mcpToolEffectAdmissionEvidence,
   handleToolOutputDisplayCommand,
   runCodexTranscriptStats,
@@ -83,30 +75,19 @@ import {
   parseArgs,
   parseBooleanEnv,
   parseColorEnv,
-  parseCodexMcpResponse,
   removeInvalidToolHistory,
-  parseAnthropicMessagesResponse,
-  parseCodexExecJsonLine,
-  parseNaradaToolCall,
   isObserverInputEvent,
-  isPotentialNaradaToolCallText,
   printAgentMessage,
   readCarrierHostCommandOutputRef,
   readMcpPreflightArtifact,
   readPersistedSessionEvents,
   readSessionInventory,
-  recordMcpPreflightArtifactLinkage,
   renderMarkdownForTerminal,
   rewriteSubmittedPromptForTest,
-  runConversationTurn,
   runSessionEventsRead,
   runSessionInventory,
   runSessionSync,
-  runServerMode,
-  serverStatus,
   sanitizeOperatorDirectiveDraftForDisplay,
-  resolveProviderAdapter,
-  resolveProviderSupportState,
   sessionEventEntry,
   sessionLogEntry,
   shouldDeferQueuedInput,
@@ -128,7 +109,14 @@ try {
   process.stdout.write = originalHelpStdoutWrite;
 }
 assert.equal(printedHelpMessages.some((message) => message.includes('/recovery             Show recovery workflow')), true);
-assert.equal(await handleSlashCommand('/bad', { mcpServers: {}, allTools: [] }), 'handled');
+const printedBadCommandMessages = [];
+process.stdout.write = (value = '') => { printedBadCommandMessages.push(stripAnsiForTest(String(value))); return true; };
+try {
+  assert.equal(await handleSlashCommand('/bad', { mcpServers: {}, allTools: [] }), 'handled');
+} finally {
+  process.stdout.write = originalHelpStdoutWrite;
+}
+assert.equal(printedBadCommandMessages.some((message) => message.includes('Unknown command: /bad')), true);
 assert.equal(await handleSlashCommand('plain message', { mcpServers: {}, allTools: [] }), 'none');
 assert.equal(printedHelpMessages.some((message) => message.includes('/ops                  Show operation workflow summary')), true);
 assert.equal(printedHelpMessages.some((message) => message.includes('/ops sync')), true);
@@ -206,6 +194,29 @@ assert.deepEqual(positionalOpsSyncCall, {
 });
 const originalConsoleLog = console.log;
 const originalSlashStdoutWrite = process.stdout.write;
+
+async function withCapturedStdout(fn) {
+  const originalWrite = process.stdout.write;
+  const chunks = [];
+  process.stdout.write = (value = '') => { chunks.push(stripAnsiForTest(String(value))); return true; };
+  try {
+    return { result: await fn(), chunks };
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+}
+
+async function withCapturedStderr(fn) {
+  const originalWrite = process.stderr.write;
+  const chunks = [];
+  process.stderr.write = (value = '') => { chunks.push(stripAnsiForTest(String(value))); return true; };
+  try {
+    return { result: await fn(), chunks };
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+}
+
 const printedStatsMessages = [];
 process.stdout.write = (value = '') => { printedStatsMessages.push(stripAnsiForTest(String(value))); return true; };
 try {
@@ -406,15 +417,13 @@ assert.equal(toolStatus.stream, false);
 assert.equal(toolStatus.goal, 'ship state');
 assert.equal(toolStatus.tool_count, 1);
 assert.deepEqual(toolStatus.mcp_tools, [{
-  server_name: 'local-filesystem',
-  tool_name: 'fs_read_file',
-  description: 'Read a file',
-  input_schema: toolsFixtureServers['local-filesystem'].tools[0].inputSchema,
-  registry_source: null,
-  registry_metadata_authoritative: false,
+  type: 'function',
+  function: {
+    name: 'fs_read_file',
+    description: 'Read a file',
+    parameters: toolsFixtureServers['local-filesystem'].tools[0].inputSchema,
+  },
 }]);
-assert.equal(toolStatus.observer_muted, false);
-assert.deepEqual(toolStatus.observer_visibilities, ['record_only', 'operator_visible', 'agent_visible', 'conversation_visible']);
 Object.defineProperty(toolsFixtureServers, '__mcp_startup_failures', {
   value: [{ server_name: 'polluted', code: 'mcp_stdout_pollution', message: 'startup banner' }],
   enumerable: false,
@@ -541,12 +550,18 @@ const slashQueue = createInputQueue({ drain: async () => ({ terminal_state: 'com
 await slashQueue.enqueue(normalizeInputEvent({ content: 'first steering', source: 'operator_steering' }, { transport: 'terminal' }));
 await slashQueue.enqueue(normalizeInputEvent({ content: 'system held', source: 'system_directive' }, { transport: 'control_jsonl' }));
 await slashQueue.enqueue(normalizeInputEvent({ content: 'second steering', source: 'operator_steering' }, { transport: 'terminal' }));
-assert.equal(await handleSlashCommand('/queue', { mcpServers: {}, allTools: [], inputQueue: slashQueue }), 'handled');
+const queueListOutput = await withCapturedStdout(() => handleSlashCommand('/queue', { mcpServers: {}, allTools: [], inputQueue: slashQueue }));
+assert.equal(queueListOutput.result, 'handled');
+assert.equal(queueListOutput.chunks.some((message) => message.includes('Queue')), true);
 assert.equal(slashQueue.pendingCount, 3);
-assert.equal(await handleSlashCommand('/queue drop 2', { mcpServers: {}, allTools: [], inputQueue: slashQueue }), 'handled');
+const queueDropOutput = await withCapturedStdout(() => handleSlashCommand('/queue drop 2', { mcpServers: {}, allTools: [], inputQueue: slashQueue }));
+assert.equal(queueDropOutput.result, 'handled');
+assert.equal(queueDropOutput.chunks.some((message) => message.includes('Dropped queued operator steering 2.')), true);
 assert.equal(slashQueue.pendingCount, 2);
 assert.equal(slashQueue.pendingOperatorDirectiveCount, 1);
-assert.equal(await handleSlashCommand('/queue clear', { mcpServers: {}, allTools: [], inputQueue: slashQueue }), 'handled');
+const queueClearOutput = await withCapturedStdout(() => handleSlashCommand('/queue clear', { mcpServers: {}, allTools: [], inputQueue: slashQueue }));
+assert.equal(queueClearOutput.result, 'handled');
+assert.equal(queueClearOutput.chunks.some((message) => message.includes('Cleared 1 queued operator steering item.')), true);
 assert.equal(slashQueue.pendingCount, 1);
 assert.equal(slashQueue.pendingSystemDirectiveCount, 1);
 
@@ -626,7 +641,7 @@ assert.equal(readOnlyToolCallEvent.raw_arguments_recorded, false);
 assert.equal(readOnlyToolCallEvent.decision, 'read_only_admitted');
 
 const payloadLimitEvents = [];
-const payloadLimitResult = await executeMcpTool(
+const payloadLimitExecution = await withCapturedStdout(() => executeMcpTool(
   {
     id: 'call_payload_limit',
     type: 'function',
@@ -646,7 +661,8 @@ const payloadLimitResult = await executeMcpTool(
     turnId: 'turn_payload_limit',
     emit: (event, payload) => payloadLimitEvents.push({ event, ...payload }),
   },
-);
+));
+const payloadLimitResult = payloadLimitExecution.result;
 const payloadLimitContent = JSON.parse(payloadLimitResult.content);
 assert.match(payloadLimitContent.recovery, /mcp_payload_create/);
 assert.match(payloadLimitContent.recovery, /Do not print JSON as prose/);
@@ -696,7 +712,7 @@ const mcpAbortTurn = {
 };
 let mcpAbortRejectedOnSignal = false;
 setTimeout(() => mcpAbortTurn.requestInterrupt(), 20);
-const mcpAbortResult = await executeMcpTool(
+const mcpAbortExecution = await withCapturedStdout(() => executeMcpTool(
   { id: 'call_abort', type: 'function', function: { name: 'fs_read_file', arguments: '{}' } },
   {
     fixture: {
@@ -717,7 +733,8 @@ const mcpAbortResult = await executeMcpTool(
     turnId: 'turn_mcp_abort',
     emit: (event, payload) => emitted.push({ event, ...payload }),
   },
-);
+));
+const mcpAbortResult = mcpAbortExecution.result;
 const mcpAbortContent = JSON.parse(mcpAbortResult.content);
 assert.equal(mcpAbortRejectedOnSignal, true);
 assert.equal(mcpAbortContent.error, 'agent_cli_interrupt_requested');
@@ -892,7 +909,7 @@ rl.on('line', (line) => {
 `, 'utf8');
 writeFileSync(join(pollutedFabricSite, '.ai', 'mcp', 'polluted-mcp.json'), `${JSON.stringify({
   mcpServers: {
-    polluted: {
+    'narada-polluted': {
       transport: 'stdio',
       command: 'node',
       args: [pollutedServerPath],
@@ -900,7 +917,7 @@ writeFileSync(join(pollutedFabricSite, '.ai', 'mcp', 'polluted-mcp.json'), `${JS
   },
 }, null, 2)}\n`, 'utf8');
 try {
-  await assert.rejects(
+  const requiredPolluted = await withCapturedStderr(() => assert.rejects(
     () => withRequiredMcpFabric(() => discoverAndStartMcpServers(pollutedFabricSite)),
     (error) => {
       assert.equal(error.code, 'mcp_startup_failed');
@@ -909,8 +926,11 @@ try {
       assert.deepEqual(error.diagnostic.failures[0].stdout_pollution, ['startup banner']);
       return true;
     },
-  );
-  const optionalPollutedServers = await discoverAndStartMcpServers(pollutedFabricSite);
+  ));
+  assert.equal(requiredPolluted.chunks.some((message) => message.includes('non-JSON stdout during startup')), true);
+  const optionalPolluted = await withCapturedStderr(() => discoverAndStartMcpServers(pollutedFabricSite));
+  assert.equal(optionalPolluted.chunks.some((message) => message.includes('non-JSON stdout during startup')), true);
+  const optionalPollutedServers = optionalPolluted.result;
   assert.equal(Object.keys(optionalPollutedServers).length, 0);
   const optionalPollutedStatus = serverStatus({
     requestId: 'status-optional-polluted',
@@ -932,7 +952,7 @@ setInterval(() => {}, 1000);
 `, 'utf8');
 writeFileSync(join(startupTimeoutSite, '.ai', 'mcp', 'startup-timeout-mcp.json'), `${JSON.stringify({
   mcpServers: {
-    timeout: {
+    'narada-timeout': {
       transport: 'stdio',
       command: 'node',
       args: [startupTimeoutServerPath],
@@ -941,7 +961,7 @@ writeFileSync(join(startupTimeoutSite, '.ai', 'mcp', 'startup-timeout-mcp.json')
   },
 }, null, 2)}\n`, 'utf8');
 try {
-  await assert.rejects(
+  const startupTimeout = await withCapturedStderr(() => assert.rejects(
     () => withRequiredMcpFabric(() => discoverAndStartMcpServers(startupTimeoutSite)),
     (error) => {
       assert.equal(error.code, 'mcp_startup_failed');
@@ -950,7 +970,8 @@ try {
       assert.equal(error.diagnostic.failures[0].timeout_ms, 10);
       return true;
     },
-  );
+  ));
+  assert.equal(startupTimeout.chunks.some((message) => message.includes('MCP request timeout after 10ms')), true);
 } finally {
   rmSync(startupTimeoutSite, { recursive: true, force: true });
 }
@@ -970,7 +991,7 @@ rl.on('line', (line) => {
 `, 'utf8');
 writeFileSync(join(toolHydrationTimeoutSite, '.ai', 'mcp', 'tool-timeout-mcp.json'), `${JSON.stringify({
   mcpServers: {
-    timeout: {
+    'narada-timeout': {
       transport: 'stdio',
       command: 'node',
       args: [toolHydrationTimeoutServerPath],
@@ -979,7 +1000,7 @@ writeFileSync(join(toolHydrationTimeoutSite, '.ai', 'mcp', 'tool-timeout-mcp.jso
   },
 }, null, 2)}\n`, 'utf8');
 try {
-  await assert.rejects(
+  const toolHydrationTimeout = await withCapturedStderr(() => assert.rejects(
     () => withRequiredMcpFabric(() => discoverAndStartMcpServers(toolHydrationTimeoutSite)),
     (error) => {
       assert.equal(error.code, 'mcp_startup_failed');
@@ -988,7 +1009,8 @@ try {
       assert.equal(error.diagnostic.failures[0].timeout_ms, 200);
       return true;
     },
-  );
+  ));
+  assert.equal(toolHydrationTimeout.chunks.some((message) => message.includes('MCP request timeout after 200ms')), true);
 } finally {
   rmSync(toolHydrationTimeoutSite, { recursive: true, force: true });
 }
@@ -1163,7 +1185,7 @@ try {
     /MCP request timeout after 20ms/,
   );
   assert.equal(resetServers.reset.process.stdin.emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })), true);
-  const afterReset = await executeMcpTool(
+  const afterResetExecution = await withCapturedStdout(() => executeMcpTool(
     {
       id: 'call_after_reset',
       type: 'function',
@@ -1175,7 +1197,8 @@ try {
       turnId: 'turn_after_reset',
       emit: (event, payload) => admissionEvents.push({ event, ...payload }),
     },
-  );
+  ));
+  const afterReset = afterResetExecution.result;
   assert.equal(JSON.parse(afterReset.content).error, 'read ECONNRESET');
   assert.equal(admissionEvents.some((event) => event.event === 'carrier_diagnostic_recorded' && event.server_name === 'reset' && event.tool_name === 'fs_stat' && event.diagnostic_code === 'mcp_runtime_fault' && event.error_code === 'ECONNRESET'), true);
   const resetStatus = serverStatus({
@@ -1205,4 +1228,3 @@ function stripAnsiForTest(text) {
   return String(text).replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
 }
 
-console.log('agent-cli runtime tests PASSED.');

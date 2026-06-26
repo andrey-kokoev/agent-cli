@@ -20,6 +20,9 @@ importers:
       '@narada2/carrier-provider-contract':
         specifier: workspace:*
         version: link:../narada/packages/carrier-provider-contract
+      '@narada2/carrier-runtime':
+        specifier: workspace:*
+        version: link:../narada/packages/carrier-runtime
       '@narada2/carrier-terminal-projection':
         specifier: workspace:*
         version: link:../narada/packages/carrier-terminal-projection
@@ -35,10 +38,39 @@ importers:
 
   ../narada/packages/carrier-provider-contract: {}
 
-  ../narada/packages/carrier-terminal-projection: {}
+  ../narada/packages/carrier-provider-support: {}
+
+  ../narada/packages/carrier-runtime:
+    dependencies:
+      '@narada2/carrier-action-admission':
+        specifier: workspace:*
+        version: link:../carrier-action-admission
+      '@narada2/carrier-protocol':
+        specifier: workspace:*
+        version: link:../carrier-protocol
+      '@narada2/carrier-provider-contract':
+        specifier: workspace:*
+        version: link:../carrier-provider-contract
+      '@narada2/carrier-provider-support':
+        specifier: workspace:*
+        version: link:../carrier-provider-support
+      '@narada2/mcp-fabric':
+        specifier: workspace:*
+        version: link:../mcp-fabric
+      '@narada2/nars-client-projection-contract':
+        specifier: workspace:*
+        version: link:../nars-client-projection-contract
+
+  ../narada/packages/carrier-terminal-projection:
+    dependencies:
+      '@narada2/nars-client-projection-contract':
+        specifier: workspace:*
+        version: link:../nars-client-projection-contract
 
   ../narada/packages/mcp-fabric:
     dependencies:
       '@narada2/carrier-action-admission':
         specifier: workspace:*
         version: link:../carrier-action-admission
+
+  ../narada/packages/nars-client-projection-contract: {}

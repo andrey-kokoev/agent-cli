@@ -20,24 +20,10 @@ import {
   validateSessionEvent,
 } from '@narada2/carrier-protocol';
 import {
-  PROVIDER_SUPPORT_STATES,
-  REQUEST_ADAPTERS,
-  assertApiKeyConfigured,
-  buildAnthropicMessagesRequest,
-  buildCodexMcpRequest,
   buildChildProcessEnv,
-  buildCodexMcpServerArgs,
-  buildCodexSubprocessEnv,
-  buildCodexExecArgs,
-  codexExecMcpConfigArgs,
-  codexExecConfigToml,
-  codexRequestMcpServers,
-  codexExecMcpToolEventSummary,
-  buildOpenAiChatRequest,
   aggregateTools,
   providerToolNameForOriginal,
   originalToolNameForProvider,
-  codexExecEventText,
   copyToClipboard,
   consumeOperatorDirectiveInputText,
   createCarrierDirectiveEmitter,
@@ -50,8 +36,6 @@ import {
   createTerminalStyle,
   environmentBlockLength,
   directiveReceiptEvidence,
-  discoverAndStartMcpServers,
-  executeMcpTool,
   classifyCarrierHostCommandInput,
   executeCarrierHostCommand,
   formatDuration,
@@ -69,7 +53,6 @@ import {
   handleControlLine,
   handleObserverCommand,
   handleSlashCommand,
-  messagesWithCarrierGoal,
   mcpToolEffectAdmissionEvidence,
   handleToolOutputDisplayCommand,
   runCodexTranscriptStats,
@@ -83,30 +66,19 @@ import {
   parseArgs,
   parseBooleanEnv,
   parseColorEnv,
-  parseCodexMcpResponse,
   removeInvalidToolHistory,
-  parseAnthropicMessagesResponse,
-  parseCodexExecJsonLine,
-  parseNaradaToolCall,
   isObserverInputEvent,
-  isPotentialNaradaToolCallText,
   printAgentMessage,
   readCarrierHostCommandOutputRef,
   readMcpPreflightArtifact,
   readPersistedSessionEvents,
   readSessionInventory,
-  recordMcpPreflightArtifactLinkage,
   renderMarkdownForTerminal,
   rewriteSubmittedPromptForTest,
-  runConversationTurn,
   runSessionEventsRead,
   runSessionInventory,
   runSessionSync,
-  runServerMode,
-  serverStatus,
   sanitizeOperatorDirectiveDraftForDisplay,
-  resolveProviderAdapter,
-  resolveProviderSupportState,
   sessionEventEntry,
   sessionLogEntry,
   shouldDeferQueuedInput,
@@ -199,6 +171,7 @@ writeFileSync(join(sourceCarrierRoot, 'heartbeat.json'), `${JSON.stringify({
   session: sessionSyncSession,
 }, null, 2)}\n`, 'utf8');
 
+await withSilencedStdout(async () => {
 const sessionSyncUploadCode = await runSessionSync({
   session: sessionSyncSession,
   target: sessionSyncTargetRoot,
@@ -439,6 +412,7 @@ rmSync(targetSessionRoot, { recursive: true, force: true });
 rmSync(targetCarrierRoot, { recursive: true, force: true });
 rmSync(sessionSyncSourceRoot, { recursive: true, force: true });
 rmSync(sessionSyncTargetRoot, { recursive: true, force: true });
+});
 
 assert.deepEqual(parseArgs(['--host-command-output-read']), { hostCommandOutputRead: true });
 assert.deepEqual(parseArgs(['--host-command-output-read-json']), { hostCommandOutputReadJson: true });
@@ -1744,8 +1718,17 @@ assert.equal(stripAnsiForTest(styleInputRouteLabel('operator -> narada.architect
 assert.equal(formatToolResultContent({ content: [{ type: 'text', text: 'ok' }] }), '{"content":[{"type":"text","text":"ok"}]}');
 assert.equal(formatToolResultContent('{"status":"success","schema":"narada.test.v1","directive_count":2,"extra":true}'), '{"status":"success","schema":"narada.test.v1","directive_count":2,"extra":true}');
 
-console.log('agent-cli session utility tests PASSED.');
 
 function stripAnsiForTest(text) {
   return String(text).replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+}
+
+async function withSilencedStdout(fn) {
+  const originalWrite = process.stdout.write;
+  process.stdout.write = () => true;
+  try {
+    return await fn();
+  } finally {
+    process.stdout.write = originalWrite;
+  }
 }

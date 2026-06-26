@@ -18,7 +18,7 @@ This package is `@narada2/agent-cli`, an ESM Node CLI. Client/projection code li
 
 ## Coding Style & Naming Conventions
 
-Use ESM imports/exports and `.mjs` files. Keep modules focused around runtime concerns: provider adapters, MCP runtime, terminal rendering, CLI options, and session behavior. Prefer descriptive camelCase for functions and variables, PascalCase only for classes, and uppercase constants for process-wide configuration. Match the existing two-space indentation, semicolon style, and direct `node:` built-in imports. Keep comments sparse and useful.
+Use ESM imports/exports and `.mjs` files. Keep modules focused around terminal-client concerns: NARS attachment, projected terminal rendering, CLI options, and read-only session utilities. Provider adapters, MCP hosting, and carrier runtime behavior belong in Narada runtime packages, not this package. Prefer descriptive camelCase for functions and variables, PascalCase only for classes, and uppercase constants for process-wide configuration. Match the existing two-space indentation, semicolon style, and direct `node:` built-in imports. Keep comments sparse and useful.
 
 ## Testing Guidelines
 

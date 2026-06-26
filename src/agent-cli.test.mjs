@@ -25,7 +25,18 @@ for (const [exportName, exportTarget] of Object.entries(agentCliPackageJson.expo
 
 const rootModule = await import('./agent-cli.mjs');
 assert.equal(typeof rootModule.parseArgs, 'function');
-assert.equal(typeof rootModule.runServerMode, 'function');
-assert.equal(typeof rootModule.REQUEST_ADAPTERS, 'object');
+for (const runtimeOwnedExport of [
+  'REQUEST_ADAPTERS',
+  'executeMcpTool',
+  'assertApiKeyConfigured',
+  'callChatApi',
+  'messagesWithCarrierGoal',
+  'recordMcpPreflightArtifactLinkage',
+  'runConversationTurn',
+  'runMcpPreflight',
+  'runMcpPreflightDiagnostics',
+  'serverStatus',
+]) {
+  assert.equal(Object.hasOwn(rootModule, runtimeOwnedExport), false, `agent-cli root must not export runtime-owned ${runtimeOwnedExport}`);
+}
 
-console.log('agent-cli root compatibility tests PASSED.');
