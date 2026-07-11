@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This package is `@narada2/agent-cli`, an ESM Node CLI. Client/projection code lives in `src/`, with the main entry in `src/agent-cli.mjs` and focused modules such as `nars-attach-client.mjs`, `projected-terminal.mjs`, `terminal-rendering.mjs`, and `terminal-style.mjs`. Runtime-owned provider/MCP hosting now belongs under Narada proper runtime packages such as `@narada2/agent-runtime-server` and `@narada2/carrier-runtime`; do not add new terminal-client dependencies on provider or MCP hosting. CLI executables are in `bin/`. Tests are colocated in `src/*.test.mjs`. Documentation lives in `README.md` and `docs/`; PowerShell wrapper templates live in `templates/`. Workspace dependency wiring is in `pnpm-workspace.yaml`, and package exports/scripts are in `package.json`.
+This package is `@narada2/agent-cli`, an ESM Node CLI. Client/projection code lives in `src/`, with the main entry in `src/agent-cli.mjs` and focused modules such as `nars-attach-client.mjs`, `projected-terminal.mjs`, `terminal-rendering.mjs`, and `terminal-style.mjs`. Runtime-owned provider execution and MCP hosting belong to `@narada2/agent-runtime-server`, `@narada2/nars-provider-runtime`, and `@narada2/nars-capability-gateway`. `@narada2/carrier-runtime` is only a stateless turn adapter and is not a client dependency. CLI executables are in `bin/`. Tests are colocated in `src/*.test.mjs`. Documentation lives in `README.md`. Workspace dependency wiring is in `pnpm-workspace.yaml`, and package exports/scripts are in `package.json`.
 
 ## NARS Client Boundary
 
@@ -22,7 +22,7 @@ Use ESM imports/exports and `.mjs` files. Keep modules focused around terminal-c
 
 ## Testing Guidelines
 
-Tests use Node's built-in test runner plus `node:assert/strict`. Name test files `*.test.mjs` and colocate them under `src/`. Add targeted regression coverage near related assertions, especially for terminal output, provider parsing, MCP behavior, and server-mode events. For broad changes, run `pnpm test`; for narrow changes, run the touched test file plus `node --check` on edited modules.
+Tests use Node's built-in test runner plus `node:assert/strict`. Name test files `*.test.mjs` and colocate them under `src/`. Add targeted regression coverage for terminal input projection, event rendering, attachment, and session-file utilities. Provider, MCP, and server-mode tests belong in their runtime-owner packages. For broad changes, run `pnpm test`; for narrow changes, run the touched test file plus `node --check` on edited modules.
 
 ## Commit & Pull Request Guidelines
 
@@ -30,4 +30,4 @@ Recent history uses short imperative subjects, for example `Split agent CLI runt
 
 ## Security & Configuration Tips
 
-Do not commit API keys or local secrets. Provider behavior is controlled through environment variables such as `NARADA_INTELLIGENCE_PROVIDER`, `OPENAI_API_KEY`, `KIMI_API_KEY`, and `NARADA_CODEX_EXEC_PREFIX_ARGS`; tests should restore any process environment they mutate.
+Do not commit API keys or local secrets. The client must not read, project, or forward provider credentials. Tests should restore any process environment they mutate.

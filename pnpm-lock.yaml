@@ -8,27 +8,48 @@ importers:
 
   .:
     dependencies:
-      '@narada2/carrier-action-admission':
-        specifier: workspace:*
-        version: link:../narada/packages/carrier-action-admission
-      '@narada2/carrier-command-contract':
-        specifier: workspace:*
-        version: link:../narada/packages/carrier-command-contract
-      '@narada2/carrier-protocol':
-        specifier: workspace:*
-        version: link:../narada/packages/carrier-protocol
-      '@narada2/carrier-provider-contract':
-        specifier: workspace:*
-        version: link:../narada/packages/carrier-provider-contract
-      '@narada2/carrier-runtime':
-        specifier: workspace:*
-        version: link:../narada/packages/carrier-runtime
       '@narada2/carrier-terminal-projection':
         specifier: workspace:*
         version: link:../narada/packages/carrier-terminal-projection
-      '@narada2/mcp-fabric':
+    devDependencies:
+      '@narada2/agent-runtime-server':
         specifier: workspace:*
-        version: link:../narada/packages/mcp-fabric
+        version: link:../narada/packages/agent-runtime-server
+
+  ../narada/packages/agent-identity: {}
+
+  ../narada/packages/agent-runtime-server:
+    dependencies:
+      '@narada2/agent-identity':
+        specifier: workspace:*
+        version: link:../agent-identity
+      '@narada2/carrier-protocol':
+        specifier: workspace:*
+        version: link:../carrier-protocol
+      '@narada2/carrier-provider-contract':
+        specifier: workspace:*
+        version: link:../carrier-provider-contract
+      '@narada2/carrier-runtime':
+        specifier: workspace:*
+        version: link:../carrier-runtime
+      '@narada2/carrier-terminal-projection':
+        specifier: workspace:*
+        version: link:../carrier-terminal-projection
+      '@narada2/nars-capability-gateway':
+        specifier: workspace:*
+        version: link:../nars-capability-gateway
+      '@narada2/nars-provider-runtime':
+        specifier: workspace:*
+        version: link:../nars-provider-runtime
+      '@narada2/nars-session-core':
+        specifier: workspace:*
+        version: link:../nars-session-core
+      '@narada2/process-launch-posture':
+        specifier: workspace:*
+        version: link:../process-launch-posture
+      '@narada2/site-paths':
+        specifier: workspace:*
+        version: link:../site-paths
 
   ../narada/packages/carrier-action-admission: {}
 
@@ -38,16 +59,54 @@ importers:
 
   ../narada/packages/carrier-provider-contract: {}
 
-  ../narada/packages/carrier-provider-support: {}
+  ../narada/packages/carrier-provider-support:
+    dependencies:
+      '@narada2/process-launch-posture':
+        specifier: workspace:*
+        version: link:../process-launch-posture
 
-  ../narada/packages/carrier-runtime:
+  ../narada/packages/carrier-runtime: {}
+
+  ../narada/packages/carrier-terminal-projection:
+    dependencies:
+      '@narada2/agent-identity':
+        specifier: workspace:*
+        version: link:../agent-identity
+      '@narada2/nars-client-projection-contract':
+        specifier: workspace:*
+        version: link:../nars-client-projection-contract
+
+  ../narada/packages/launch-process-ownership: {}
+
+  ../narada/packages/mcp-fabric:
     dependencies:
       '@narada2/carrier-action-admission':
         specifier: workspace:*
         version: link:../carrier-action-admission
-      '@narada2/carrier-protocol':
+      '@narada2/process-launch-posture':
         specifier: workspace:*
-        version: link:../carrier-protocol
+        version: link:../process-launch-posture
+
+  ../narada/packages/nars-capability-gateway:
+    dependencies:
+      '@narada2/launch-process-ownership':
+        specifier: workspace:*
+        version: link:../launch-process-ownership
+      '@narada2/mcp-fabric':
+        specifier: workspace:*
+        version: link:../mcp-fabric
+      '@narada2/process-launch-posture':
+        specifier: workspace:*
+        version: link:../process-launch-posture
+
+  ../narada/packages/nars-client-projection-contract:
+    dependencies:
+      '@narada2/agent-identity':
+        specifier: workspace:*
+        version: link:../agent-identity
+
+  ../narada/packages/nars-provider-runtime:
+    dependencies:
       '@narada2/carrier-provider-contract':
         specifier: workspace:*
         version: link:../carrier-provider-contract
@@ -57,20 +116,22 @@ importers:
       '@narada2/mcp-fabric':
         specifier: workspace:*
         version: link:../mcp-fabric
-      '@narada2/nars-client-projection-contract':
+      '@narada2/process-launch-posture':
         specifier: workspace:*
-        version: link:../nars-client-projection-contract
+        version: link:../process-launch-posture
 
-  ../narada/packages/carrier-terminal-projection:
+  ../narada/packages/nars-session-core:
     dependencies:
-      '@narada2/nars-client-projection-contract':
+      '@narada2/agent-identity':
         specifier: workspace:*
-        version: link:../nars-client-projection-contract
-
-  ../narada/packages/mcp-fabric:
-    dependencies:
-      '@narada2/carrier-action-admission':
+        version: link:../agent-identity
+      '@narada2/carrier-protocol':
         specifier: workspace:*
-        version: link:../carrier-action-admission
+        version: link:../carrier-protocol
+      '@narada2/site-paths':
+        specifier: workspace:*
+        version: link:../site-paths
 
-  ../narada/packages/nars-client-projection-contract: {}
+  ../narada/packages/process-launch-posture: {}
+
+  ../narada/packages/site-paths: {}

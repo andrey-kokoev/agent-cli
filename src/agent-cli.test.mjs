@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict';
-import './host-command-runtime.test.mjs';
-import './input-queue.test.mjs';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -25,6 +23,7 @@ for (const [exportName, exportTarget] of Object.entries(agentCliPackageJson.expo
 
 const rootModule = await import('./agent-cli.mjs');
 assert.equal(typeof rootModule.parseArgs, 'function');
+assert.equal(Object.hasOwn(agentCliPackageJson.dependencies ?? {}, '@narada2/carrier-runtime'), false);
 for (const runtimeOwnedExport of [
   'REQUEST_ADAPTERS',
   'executeMcpTool',
