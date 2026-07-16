@@ -21,12 +21,14 @@
   },
   "scripts": {
     "test": "node --test src/*.test.mjs",
+    "test:e2e:pty": "node --test src/agent-cli-pty-e2e.mjs",
     "typecheck": "tsc --noEmit --allowJs --checkJs false bin/narada-agent-cli.mjs src/agent-cli.mjs src/nars-attach-client.mjs src/projected-terminal.mjs src/runtime-server-events.mjs src/session-persistence.mjs src/terminal-style.mjs src/terminal-rendering.mjs"
   },
   "dependencies": {
     "@narada2/carrier-terminal-projection": "workspace:*"
   },
   "devDependencies": {
-    "@narada2/agent-runtime-server": "workspace:*"
+    "@narada2/agent-runtime-server": "workspace:*",
+    "node-pty": "^1.0.0"
   }
 }
