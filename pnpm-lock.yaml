@@ -15,6 +15,9 @@ importers:
       '@narada2/agent-runtime-server':
         specifier: workspace:*
         version: link:../narada/packages/agent-runtime-server
+      '@xterm/headless':
+        specifier: ^6.0.0
+        version: 6.0.0
       node-pty:
         specifier: ^1.0.0
         version: 1.1.0
@@ -141,6 +144,9 @@ importers:
 
 packages:
 
+  '@xterm/headless@6.0.0':
+    resolution: {integrity: sha512-5Yj1QINYCyzrZtf8OFIHi47iQtI+0qYFPHmouEfG8dHNxbZ9Tb9YGSuLcsEwj9Z+OL75GJqPyJbyoFer80a2Hw==}
+
   node-addon-api@7.1.1:
     resolution: {integrity: sha512-5m3bsyrjFWE1xf7nz7YXdN4udnVtXK6/Yfgn5qnahL6bCkf2yKt4k3nuTKAtT4r3IG8JNR2ncsIMdZuAzJjHQQ==}
 
@@ -148,6 +154,8 @@ packages:
     resolution: {integrity: sha512-20JqtutY6JPXTUnL0ij1uad7Qe1baT46lyolh2sSENDd4sTzKZ4nmAFkeAARDKwmlLjPx6XKRlwRUxwjOy+lUg==}
 
 snapshots:
+
+  '@xterm/headless@6.0.0': {}
 
   node-addon-api@7.1.1: {}
 

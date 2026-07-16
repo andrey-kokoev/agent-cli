@@ -98,6 +98,23 @@ async function startFixtureRuntime({ callChatApiFn, toolGateway }) {
 
   const runtimeInput = new PassThrough();
   const runtimeOutput = new PassThrough();
+  const frames = [];
+  let frameBuffer = '';
+  const originalWrite = runtimeInput.write.bind(runtimeInput);
+  runtimeInput.write = (chunk, ...args) => {
+    frameBuffer += String(chunk ?? '');
+    const lines = frameBuffer.split(/\r?\n/);
+    frameBuffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        frames.push(JSON.parse(line));
+      } catch {
+        frames.push({ parse_error: true, raw: line });
+      }
+    }
+    return originalWrite(chunk, ...args);
+  };
   const eventHub = createEventHub();
   const events = [];
   let runtimeBuffer = '';
@@ -136,16 +153,29 @@ async function startFixtureRuntime({ callChatApiFn, toolGateway }) {
     }
   });
   const runtimeRun = runtime.run({ input: runtimeInput, output: runtimeOutput });
+  let projectionClosed = false;
+
+  async function closeProjection() {
+    if (projectionClosed) return;
+    projectionClosed = true;
+    await new Promise((resolve) => projection.server.close(resolve));
+  }
 
   async function close() {
     runtimeInput.end();
     await runtimeRun;
-    await new Promise((resolve) => projection.server.close(resolve));
+    if (frameBuffer.trim()) frames.push({ parse_error: true, raw: frameBuffer });
+    assert.equal(
+      frames.some((frame) => frame.parse_error),
+      false,
+      'fixture observed malformed protocol frame: ' + JSON.stringify(frames.find((frame) => frame.parse_error)),
+    );
+    await closeProjection();
     await toolGateway?.close?.();
     rmSync(siteRoot, { recursive: true, force: true });
   }
 
-  return { events, projection, close };
+  return { events, frames, projection, closeProjection, close };
 }
 
 function launchAgentCli(endpoint) {
@@ -245,6 +275,100 @@ test('agent-cli e2e sends and renders multiple conversation turns', async () => 
   }
 });
 
+test('agent-cli e2e interrupts an active turn and records the interrupted state', async () => {
+  const runtime = await startFixtureRuntime({
+    callChatApiFn: async (_messages, _tools, settings) => new Promise((_resolve, reject) => {
+      const abort = () => reject(new Error('fixture provider aborted'));
+      if (settings?.abortSignal?.aborted) {
+        abort();
+        return;
+      }
+      settings?.abortSignal?.addEventListener('abort', abort, { once: true });
+    }),
+    toolGateway: {
+      toolCatalog: async () => [],
+      invoke: async () => ({ status: 'refused', reason: 'no_fixture_tools' }),
+      close: async () => {},
+    },
+  });
+  const cli = launchAgentCli(runtime.projection.url);
+  try {
+    await waitFor(() => runtime.events.some((event) => event.event === 'session_started'), 7000, 'session_started');
+    cli.write('start cancellable turn\n');
+    await waitFor(() => runtime.events.some((event) => event.event === 'turn_started'), 7000, 'turn_started');
+    cli.write('/interrupt\n');
+    const cancelled = await waitFor(
+      () => runtime.events.find((event) => event.event === 'session_cancel' && event.cancelled === true),
+      7000,
+      'session_cancel',
+    );
+    const interrupted = await waitFor(
+      () => runtime.events.find((event) => (
+        event.event === 'turn_interrupted' && (event.terminal_state ?? event.terminal_status) === 'interrupted'
+      )),
+      7000,
+      'turn_interrupted',
+    );
+    const failed = await waitFor(
+      () => runtime.events.find((event) => event.event === 'carrier_turn_failed' && event.error === 'fixture provider aborted'),
+      7000,
+      'carrier_turn_aborted',
+    );
+    cli.write('/exit\n');
+    await closeCli(cli);
+
+    assert.equal(cancelled.cancelled, true);
+    assert.equal(interrupted.terminal_state ?? interrupted.terminal_status, 'interrupted');
+    assert.equal(failed.error, 'fixture provider aborted');
+    const cancelFrames = runtime.frames.filter((frame) => frame.method === 'session.cancel');
+    assert.equal(cancelFrames.length, 1);
+    assert.deepEqual(cancelFrames[0].params, {});
+    const out = normalizedOutput(cli.stdout());
+    assertNoProtocolNoise(out);
+    assert.equal(cli.stderr(), '');
+    const rejected = runtime.events.filter((event) => event.event === 'session_control_rejected');
+    assert.equal(rejected.length, 1);
+    assert.equal(rejected[0].method, 'session.submit');
+    assert.equal(rejected[0].error, 'fixture provider aborted');
+  } finally {
+    await killCli(cli);
+    await runtime.close();
+  }
+});
+
+test('agent-cli e2e renders session recovery and exits cleanly', async () => {
+  const runtime = await startFixtureRuntime({
+    callChatApiFn: async () => ({ choices: [{ message: { role: 'assistant', content: 'unused' } }] }),
+    toolGateway: {
+      toolCatalog: async () => [],
+      invoke: async () => ({ status: 'refused', reason: 'no_fixture_tools' }),
+      close: async () => {},
+    },
+  });
+  const cli = launchAgentCli(runtime.projection.url);
+  try {
+    await waitFor(() => runtime.events.some((event) => event.event === 'session_started'), 7000, 'session_started');
+    cli.write('/recovery\n');
+    const recovery = await waitFor(() => runtime.events.find((event) => event.event === 'session_recovery'), 7000, 'session_recovery');
+    await waitFor(() => normalizedOutput(cli.stdout()).includes('agent-cli: recovery '), 7000, 'visible_session_recovery');
+    cli.write('/exit\n');
+    await closeCli(cli);
+
+    assert.equal(recovery.event, 'session_recovery');
+    const recoveryFrames = runtime.frames.filter((frame) => frame.method === 'session.recovery');
+    assert.equal(recoveryFrames.length, 1);
+    assert.deepEqual(recoveryFrames[0].params, {});
+    const out = normalizedOutput(cli.stdout());
+    assertOrdered(out, ['agent-cli: recovery ']);
+    assertNoProtocolNoise(out);
+    assert.equal(cli.stderr(), '');
+    assert.equal(runtime.events.some((event) => event.event === 'session_control_rejected'), false);
+  } finally {
+    await killCli(cli);
+    await runtime.close();
+  }
+});
+
 test('agent-cli e2e executes and renders fixture tool calls', async () => {
   const providerCalls = [];
   const toolInvocations = [];
@@ -313,6 +437,116 @@ test('agent-cli e2e executes and renders fixture tool calls', async () => {
   }
 });
 
+test('agent-cli e2e renders provider failures and exits cleanly', async () => {
+  const runtime = await startFixtureRuntime({
+    callChatApiFn: async () => {
+      throw new Error('fixture provider failed');
+    },
+    toolGateway: {
+      toolCatalog: async () => [],
+      invoke: async () => ({ status: 'refused', reason: 'no_fixture_tools' }),
+      close: async () => {},
+    },
+  });
+  const cli = launchAgentCli(runtime.projection.url);
+  try {
+    await waitFor(() => runtime.events.some((event) => event.event === 'session_started'), 7000, 'session_started');
+    cli.write('trigger provider failure\n');
+    const failed = await waitFor(
+      () => runtime.events.find((event) => event.event === 'turn_failed'),
+      7000,
+      'turn_failed',
+    );
+    await waitFor(() => normalizedOutput(cli.stdout()).includes('turn failed:'), 7000, 'visible_turn_failed');
+    cli.write('/exit\n');
+    await closeCli(cli);
+
+    assert.equal(failed.terminal_status, 'failed');
+    const out = normalizedOutput(cli.stdout());
+    const lines = outputLines(cli.stdout());
+    assertLineCount(lines, /^agent-cli: turn failed: unknown error <timestamp>$/, 1);
+    assertOrdered(out, ['agent-cli: turn failed: unknown error']);
+    assertNoProtocolNoise(out);
+    assert.equal(cli.stderr(), '');
+    const rejected = runtime.events.find((event) => event.event === 'session_control_rejected');
+    assert.equal(rejected.code, 'request_dispatch_failed');
+  } finally {
+    await killCli(cli);
+    await runtime.close();
+  }
+});
+
+test('agent-cli e2e renders refused tool results and continues the turn', async () => {
+  const providerCalls = [];
+  const toolInvocations = [];
+  const runtime = await startFixtureRuntime({
+    callChatApiFn: async (messages) => {
+      providerCalls.push(messages.map((message) => ({ ...message })));
+      if (messages.some((message) => message.role === 'tool')) {
+        return { choices: [{ message: { role: 'assistant', content: 'Tool refusal was surfaced.' } }] };
+      }
+      assert.deepEqual(messages, [{ role: 'user', content: 'use the refused fixture tool' }]);
+      return {
+        choices: [{
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{
+              id: 'call-fixture-refusal',
+              function: {
+                name: 'fixture.lookup',
+                arguments: JSON.stringify({ query: 'refusal request' }),
+              },
+            }],
+          },
+        }],
+      };
+    },
+    toolGateway: {
+      toolCatalog: async () => [{
+        type: 'function',
+        function: {
+          name: 'fixture.lookup',
+          parameters: { type: 'object', properties: { query: { type: 'string' } } },
+        },
+      }],
+      invoke: async (request) => {
+        toolInvocations.push(request);
+        return { status: 'refused', reason: 'fixture tool refused' };
+      },
+      close: async () => {},
+    },
+  });
+  const cli = launchAgentCli(runtime.projection.url);
+  try {
+    await waitFor(() => runtime.events.some((event) => event.event === 'session_started'), 7000, 'session_started');
+    cli.write('use the refused fixture tool\n');
+    await waitFor(() => runtime.events.some((event) => (
+      event.event === 'carrier_tool_completed' && event.status === 'refused'
+    )), 7000, 'tool_refused');
+    await waitFor(() => runtime.events.some((event) => (
+      event.event === 'assistant_message' && event.content === 'Tool refusal was surfaced.'
+    )), 7000, 'tool_refusal_answer');
+    cli.write('/exit\n');
+    await closeCli(cli);
+
+    assert.equal(providerCalls.length, 2);
+    assert.equal(toolInvocations.length, 1);
+    assert.equal(toolInvocations[0].toolName, 'fixture.lookup');
+    const out = normalizedOutput(cli.stdout());
+    const lines = outputLines(cli.stdout());
+    assertLineCount(lines, /^agent-cli -> narada\.test: fixture\.lookup refused <timestamp>$/, 1);
+    assertLineCount(lines, /^  Tool refusal was surfaced\. <timestamp>$/, 1);
+    assertOrdered(out, ['fixture.lookup', 'fixture.lookup refused', 'Tool refusal was surfaced.']);
+    assertNoProtocolNoise(out);
+    assert.equal(cli.stderr(), '');
+    assert.equal(runtime.events.some((event) => event.event === 'session_control_rejected'), false);
+  } finally {
+    await killCli(cli);
+    await runtime.close();
+  }
+});
+
 test('agent-cli e2e renders slash health and exits cleanly', async () => {
   const runtime = await startFixtureRuntime({
     callChatApiFn: async () => ({ choices: [{ message: { role: 'assistant', content: 'unused' } }] }),
@@ -335,6 +569,12 @@ test('agent-cli e2e renders slash health and exits cleanly', async () => {
 
     const health = runtime.events.find((event) => event.event === 'session_health');
     assert.equal(health.status, 'healthy');
+    const healthFrames = runtime.frames.filter((frame) => frame.method === 'session.health');
+    assert.equal(healthFrames.length, 1);
+    assert.deepEqual(healthFrames[0].params, {});
+    const closeFrames = runtime.frames.filter((frame) => frame.method === 'session.close');
+    assert.equal(closeFrames.length, 1);
+    assert.deepEqual(closeFrames[0].params, {});
     const out = normalizedOutput(cli.stdout());
     const lines = outputLines(cli.stdout());
     assertLineCount(lines, /^agent-cli: health healthy; mcp disabled; endpoint none <timestamp>$/, 1);

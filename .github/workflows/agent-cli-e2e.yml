@@ -1,0 +1,48 @@
+name: Agent CLI E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  agent-cli-e2e:
+    runs-on: windows-latest
+    steps:
+      - name: Check out agent-cli
+        uses: actions/checkout@v4
+        with:
+          path: agent-cli
+
+      - name: Check out Narada runtime packages
+        uses: actions/checkout@v4
+        with:
+          repository: andrey-kokoev/narada
+          ref: main
+          path: narada
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: agent-cli/pnpm-lock.yaml
+
+      - name: Install agent-cli workspace dependencies
+        working-directory: agent-cli
+        run: pnpm install --filter @narada2/agent-cli... --no-frozen-lockfile
+
+      - name: Run pipe-backed e2e coverage
+        working-directory: agent-cli
+        run: pnpm test
+
+      - name: Run PTY-backed e2e coverage
+        working-directory: agent-cli
+        run: pnpm run test:e2e:pty

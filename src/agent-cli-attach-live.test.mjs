@@ -47,8 +47,15 @@ test('agent-cli attaches to the session-core runtime without constructing provid
   });
   const runtime = createSessionCoreRuntimeService({
     runtimeContext,
-    callChatApiFn: async () => ({
-      choices: [{ message: { role: 'assistant', content: 'session-core response' } }],
+    callChatApiFn: async (messages) => ({
+      choices: [{
+        message: {
+          role: 'assistant',
+          content: messages.at(-1)?.content === 'pre-attach replay request'
+            ? 'pre-attach replay response'
+            : 'session-core response',
+        },
+      }],
     }),
     toolGateway: {
       toolCatalog: async () => [],
@@ -82,23 +89,35 @@ test('agent-cli attaches to the session-core runtime without constructing provid
   let rendered = '';
   attachOutput.setEncoding('utf8');
   attachOutput.on('data', (chunk) => { rendered += String(chunk); });
-  const attached = runNarsAttachClient({
-    endpoint: projection.url,
-    input: attachInput,
-    output: attachOutput,
-  });
+  let attached = null;
 
   try {
     await waitFor(() => events.some((event) => event.event === 'session_started'));
+    runtimeInput.write(`${JSON.stringify({ id: 'replay-1', method: 'session.submit', params: { content: 'pre-attach replay request' } })}\n`);
+    await waitFor(() => events.some((event) => event.event === 'assistant_message' && event.content === 'pre-attach replay response'));
+    attached = runNarsAttachClient({
+      endpoint: projection.url,
+      input: attachInput,
+      output: attachOutput,
+    });
+    await waitFor(() => rendered.includes('pre-attach replay response'));
     attachInput.write('hello from agent-cli\n');
-    await waitFor(() => events.some((event) => event.event === 'assistant_message'));
+    await waitFor(() => events.some((event) => event.event === 'assistant_message' && event.content === 'session-core response'));
     attachInput.write('/health\n');
     await waitFor(() => events.some((event) => event.event === 'session_health'));
+    await waitFor(() => rendered.includes('session-core response'));
     assert.match(rendered, /session-core response/);
+    assert.match(rendered, /pre-attach replay response/);
+    assert.ok(rendered.indexOf('pre-attach replay response') < rendered.indexOf('session-core response'));
+    const durableSequences = events
+      .map((event) => Number(event.event_sequence ?? event.sequence))
+      .filter(Number.isFinite);
+    assert.ok(durableSequences.length >= 2);
+    assert.deepEqual(durableSequences, [...durableSequences].sort((left, right) => left - right));
     assert.equal(events.some((event) => event.event === 'session_control_rejected'), false);
   } finally {
     attachInput.end();
-    await attached;
+    if (attached) await attached;
     runtimeInput.end();
     await runtimeRun;
     await new Promise((resolve) => projection.server.close(resolve));
