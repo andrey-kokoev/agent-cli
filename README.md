@@ -15,8 +15,11 @@ It does not execute providers, start MCP servers, supervise runtime processes, o
 
 ```powershell
 pnpm test
+pnpm run test:e2e:pty
 pnpm typecheck
 ```
+
+`pnpm test` includes the PTY-backed suite; `pnpm run test:e2e:pty` remains the focused PTY command.
 
 Attach to a running session:
 

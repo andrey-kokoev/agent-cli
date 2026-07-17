@@ -139,7 +139,6 @@ export async function runAgentCli({
       output,
       WebSocketImpl,
       maxReplay: 50,
-      color: options.color,
     });
   }
 

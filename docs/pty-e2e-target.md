@@ -37,13 +37,13 @@ The harness must fail closed. If a PTY dependency is unavailable, the test comma
 
 ## Test command
 
-Keep the default `pnpm test` fast and deterministic. Add a separate command:
+Run the PTY suite as part of the default `pnpm test` verification, and retain a focused command for iterating on PTY cases:
 
 ```json
 "test:e2e:pty": "node --test src/agent-cli-pty-e2e.mjs"
 ```
 
-CI can run it on at least Windows because the bug class is Windows Terminal/ConPTY-sensitive. Local broad validation for terminal input changes should run both `pnpm test` and `pnpm run test:e2e:pty`.
+CI can run it on at least Windows because the bug class is Windows Terminal/ConPTY-sensitive. Local focused validation may use `pnpm run test:e2e:pty`; broad validation uses `pnpm test`.
 
 ## Required cases
 
@@ -189,5 +189,5 @@ The PTY-backed layer is complete when:
 - The required cases above pass against the deterministic runtime fixture.
 - At least one case fails if bracketed paste handling is disabled.
 - At least one case fails if raw Home/End escape handling regresses to literal text insertion.
-- The existing pipe-backed `pnpm test` suite still passes.
+- The full `pnpm test` suite, including the pipe-backed and PTY-backed tests, still passes.
 

@@ -10,7 +10,7 @@ This package is `@narada2/agent-cli`, an ESM Node CLI. Client/projection code li
 
 ## Build, Test, and Development Commands
 
-- `pnpm test`: runs all Node tests via `node --test src/*.test.mjs`.
+- `pnpm test`: runs all Node and PTY tests via `node --test src/*.test.mjs src/agent-cli-pty-e2e.mjs`.
 - `node --test src/agent-cli.test.mjs`: runs one focused test file while iterating.
 - `pnpm typecheck`: runs TypeScript checking over JS entry points without emitting files.
 - `pnpm run verify:native-codex-mcp`: verifies local Codex MCP discovery and native integration.
