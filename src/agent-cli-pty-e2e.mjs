@@ -156,7 +156,7 @@ async function startFixtureRuntime({ callChatApiFn, toolGateway }) {
     rmSync(siteRoot, { recursive: true, force: true });
   }
 
-  return { events, frames, projection, close };
+  return { events, frames, projection, runtimeInput, close };
 }
 
 function keySequence(name) {
@@ -276,6 +276,24 @@ async function createSimpleRuntime({ holdFirstTurn = false } = {}) {
   return { ...runtime, providerCalls, releaseFirstTurn };
 }
 
+async function createCancellableRuntime() {
+  return startFixtureRuntime({
+    callChatApiFn: async (_messages, _tools, settings) => new Promise((_resolve, reject) => {
+      const abort = () => reject(new Error('fixture provider aborted'));
+      if (settings?.abortSignal?.aborted) {
+        abort();
+        return;
+      }
+      settings?.abortSignal?.addEventListener('abort', abort, { once: true });
+    }),
+    toolGateway: {
+      toolCatalog: async () => [],
+      invoke: async () => ({ status: 'refused', reason: 'no_fixture_tools' }),
+      close: async () => {},
+    },
+  });
+}
+
 async function createToolRuntime() {
   const providerCalls = [];
   const toolInvocations = [];
@@ -332,6 +350,69 @@ function userMessages(runtime) {
 }
 
 if (pty) {
+  test('agent-cli PTY replays durable events through the spawned CLI process', async () => {
+    const runtime = await createSimpleRuntime();
+    let cli = null;
+    try {
+      await waitFor(() => runtime.events.some((event) => event.event === 'session_started'), 7000, 'session_started');
+      runtime.runtimeInput.write(`${JSON.stringify({
+        id: 'pty-replay-submit',
+        method: 'session.submit',
+        params: { content: 'pre-attach process replay' },
+      })}\n`);
+      await waitFor(() => runtime.events.some((event) => (
+        event.event === 'assistant_message' && event.content === 'fixture saw pre-attach process replay'
+      )), 7000, 'pre_attach_assistant');
+
+      cli = spawnAgentCliPty(runtime.projection.url);
+      await cli.waitForScreen('fixture saw pre-attach process replay', 'process_replay_screen');
+      assert.equal(runtime.frames.some((frame) => (
+        frame.method === 'session.submit' && frame.params.content === 'pre-attach process replay'
+      )), true);
+      assertNoProtocolNoise(cli.screenText());
+    } finally {
+      if (cli) await closePty(cli).catch(() => cli.kill());
+      await runtime.close();
+    }
+  });
+
+  test('agent-cli PTY cancels an active turn with Ctrl-C', async () => {
+    const runtime = await createCancellableRuntime();
+    let cli = null;
+    try {
+      cli = spawnAgentCliPty(runtime.projection.url);
+      await waitFor(() => runtime.events.some((event) => event.event === 'session_started'), 7000, 'session_started');
+      cli.write('start ctrl-c turn');
+      cli.key('enter');
+      await waitFor(() => runtime.events.some((event) => event.event === 'turn_started'), 7000, 'turn_started');
+      cli.write('\x03');
+      const cancelled = await waitFor(
+        () => runtime.events.find((event) => event.event === 'session_cancel' && event.cancelled === true),
+        7000,
+        'ctrl_c_session_cancel',
+      );
+      const interrupted = await waitFor(
+        () => runtime.events.find((event) => (
+          event.event === 'turn_interrupted' && (event.terminal_state ?? event.terminal_status) === 'interrupted'
+        )),
+        7000,
+        'ctrl_c_turn_interrupted',
+      );
+      await waitFor(() => runtime.events.some((event) => (
+        event.event === 'carrier_turn_failed' && event.error === 'fixture provider aborted'
+      )), 7000, 'ctrl_c_provider_aborted');
+      assert.equal(cancelled.cancelled, true);
+      assert.equal(interrupted.terminal_state ?? interrupted.terminal_status, 'interrupted');
+      const cancelFrames = runtime.frames.filter((frame) => frame.method === 'session.cancel');
+      assert.equal(cancelFrames.length, 1);
+      assert.deepEqual(cancelFrames[0].params, {});
+      assertNoProtocolNoise(cli.screenText());
+    } finally {
+      if (cli) await closePty(cli).catch(() => cli.kill());
+      await runtime.close();
+    }
+  });
+
   test('agent-cli PTY keeps single-line paste editable until enter', async () => {
     const runtime = await createSimpleRuntime();
     let cli = null;

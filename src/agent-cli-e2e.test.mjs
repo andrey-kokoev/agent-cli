@@ -275,6 +275,52 @@ test('agent-cli e2e sends and renders multiple conversation turns', async () => 
   }
 });
 
+test('agent-cli e2e reconnects after the event stream disconnects mid-session', async () => {
+  const runtime = await startFixtureRuntime({
+    callChatApiFn: async (messages) => ({
+      choices: [{ message: { role: 'assistant', content: `fixture saw ${messages.at(-1)?.content}` } }],
+    }),
+    toolGateway: {
+      toolCatalog: async () => [],
+      invoke: async () => ({ status: 'refused', reason: 'no_fixture_tools' }),
+      close: async () => {},
+    },
+  });
+  const cli = launchAgentCli(runtime.projection.url);
+  try {
+    await waitFor(() => runtime.events.some((event) => event.event === 'session_started'), 7000, 'session_started');
+    cli.write('before disconnect\n');
+    await waitFor(() => runtime.events.some((event) => (
+      event.event === 'assistant_message' && event.content === 'fixture saw before disconnect'
+    )), 7000, 'before_disconnect_response');
+    await waitFor(() => normalizedOutput(cli.stdout()).includes('fixture saw before disconnect'), 7000, 'before_disconnect_output');
+    await waitFor(() => runtime.projection.subscribeRequests.length >= 1, 7000, 'initial_subscription');
+
+    runtime.projection.closeConnections();
+    await waitFor(() => runtime.projection.subscribeRequests.length >= 2, 7000, 'reconnected_subscription');
+    const firstSubscription = runtime.projection.subscribeRequests[0];
+    const secondSubscription = runtime.projection.subscribeRequests[1];
+    assert.equal(secondSubscription.params.include_replay, true);
+    assert.equal(secondSubscription.params.subscription_id, firstSubscription.params.subscription_id);
+    assert.ok(Number.isInteger(secondSubscription.params.since_sequence));
+
+    cli.write('after disconnect\n');
+    await waitFor(() => runtime.events.some((event) => (
+      event.event === 'assistant_message' && event.content === 'fixture saw after disconnect'
+    )), 7000, 'after_disconnect_response');
+    await waitFor(() => normalizedOutput(cli.stdout()).includes('fixture saw after disconnect'), 7000, 'after_disconnect_output');
+    cli.write('/exit\n');
+    await closeCli(cli);
+
+    assert.equal(runtime.events.some((event) => event.event === 'session_control_rejected'), false);
+    assertNoProtocolNoise(normalizedOutput(cli.stdout()));
+    assert.equal(cli.stderr(), '');
+  } finally {
+    await killCli(cli);
+    await runtime.close();
+  }
+});
+
 test('agent-cli e2e interrupts an active turn and records the interrupted state', async () => {
   const runtime = await startFixtureRuntime({
     callChatApiFn: async (_messages, _tools, settings) => new Promise((_resolve, reject) => {
@@ -330,6 +376,63 @@ test('agent-cli e2e interrupts an active turn and records the interrupted state'
     assert.equal(rejected.length, 1);
     assert.equal(rejected[0].method, 'session.submit');
     assert.equal(rejected[0].error, 'fixture provider aborted');
+  } finally {
+    await killCli(cli);
+    await runtime.close();
+  }
+});
+
+test('agent-cli e2e cancels an active turn when stdin reaches EOF', async () => {
+  const runtime = await startFixtureRuntime({
+    callChatApiFn: async (_messages, _tools, settings) => new Promise((_resolve, reject) => {
+      const abort = () => reject(new Error('fixture provider aborted'));
+      if (settings?.abortSignal?.aborted) {
+        abort();
+        return;
+      }
+      settings?.abortSignal?.addEventListener('abort', abort, { once: true });
+    }),
+    toolGateway: {
+      toolCatalog: async () => [],
+      invoke: async () => ({ status: 'refused', reason: 'no_fixture_tools' }),
+      close: async () => {},
+    },
+  });
+  const cli = launchAgentCli(runtime.projection.url);
+  try {
+    await waitFor(() => runtime.events.some((event) => event.event === 'session_started'), 7000, 'session_started');
+    cli.write('start EOF turn\n');
+    await waitFor(() => runtime.events.some((event) => event.event === 'turn_started'), 7000, 'turn_started');
+    cli.closeInput();
+    const cancelled = await waitFor(
+      () => runtime.events.find((event) => event.event === 'session_cancel' && event.cancelled === true),
+      7000,
+      'eof_session_cancel',
+    );
+    const interrupted = await waitFor(
+      () => runtime.events.find((event) => (
+        event.event === 'turn_interrupted' && (event.terminal_state ?? event.terminal_status) === 'interrupted'
+      )),
+      7000,
+      'eof_turn_interrupted',
+    );
+    const failed = await waitFor(
+      () => runtime.events.find((event) => event.event === 'carrier_turn_failed' && event.error === 'fixture provider aborted'),
+      7000,
+      'eof_provider_aborted',
+    );
+    const result = await cli.exit;
+
+    assert.equal(result.signal, null);
+    assert.equal(result.code, 0, `agent-cli exited nonzero; stderr=${cli.stderr()}`);
+    assert.equal(cancelled.cancelled, true);
+    assert.equal(interrupted.terminal_state ?? interrupted.terminal_status, 'interrupted');
+    assert.equal(failed.error, 'fixture provider aborted');
+    const cancelFrames = runtime.frames.filter((frame) => frame.method === 'session.cancel');
+    assert.equal(cancelFrames.length, 1);
+    assert.deepEqual(cancelFrames[0].params, {});
+    assertNoProtocolNoise(normalizedOutput(cli.stdout()));
+    assert.equal(cli.stderr(), '');
   } finally {
     await killCli(cli);
     await runtime.close();
