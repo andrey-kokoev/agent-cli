@@ -57,6 +57,9 @@ function parseArgs(argv) {
       i++;
     } else if (argv[i] === '--attach') {
       opts.attach = true;
+    } else if (argv[i] === '--launch-binding' && i + 1 < argv.length) {
+      opts.launchBinding = argv[i + 1];
+      i++;
     } else if (argv[i] === '--mcp-preflight') {
       opts.mcpPreflight = true;
     } else if (argv[i] === '--mcp-preflight-json') {
@@ -196,6 +199,7 @@ function parseArgs(argv) {
 function isAgentCliUtilityCommandMode(opts = {}) {
   return opts.help === true
     || opts.attach === true
+    || typeof opts.launchBinding === 'string'
     || opts.mcpPreflight === true
     || opts.mcpPreflightJson === true
     || opts.mcpPreflightRead === true

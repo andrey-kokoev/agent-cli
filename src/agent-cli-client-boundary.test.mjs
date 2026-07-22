@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
 import { parseArgs, runAgentCli } from './agent-cli.mjs';
+import { resolveNarsAttachEndpoint } from './nars-attach-client.mjs';
 import {
   createExplicitJsonControlFrame,
   createOperatorConversationFrame,
@@ -59,6 +62,22 @@ test('agent-cli help and option parsing remain client-only', async () => {
   assert.equal(code, 0);
   assert.match(output.text(), /--attach/);
   assert.doesNotMatch(output.text(), /--mcp-preflight/);
+});
+
+test('agent-cli resolves the production launch binding without an explicit endpoint', () => {
+  const root = mkdtempSync(join(tmpdir(), 'narada-agent-cli-binding-'));
+  const path = join(root, 'launch-binding.json');
+  try {
+    writeFileSync(path, JSON.stringify({
+      schema: 'narada.operator_projection_launch_binding.v1',
+      status: 'ready',
+      event_endpoint: 'ws://127.0.0.1:9911/events',
+    }));
+    assert.equal(parseArgs(['--launch-binding', path]).launchBinding, path);
+    assert.equal(resolveNarsAttachEndpoint({ launchBinding: path }), 'ws://127.0.0.1:9911/events');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('terminal projection emits only narrow session-core controls', () => {

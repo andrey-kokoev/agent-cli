@@ -86,7 +86,7 @@ function normalizeSyncDirection(value) {
 
 function helpText() {
   return [
-    'Usage: narada-agent-cli --attach <ws://host/events> [--identity <name>] [--session <id>]',
+    'Usage: narada-agent-cli --attach <ws://host/events> | --launch-binding <path> [--identity <name>] [--session <id>]',
     '',
     'Session projections:',
     '  --session-inventory[--json]',
@@ -131,8 +131,13 @@ export async function runAgentCli({
     return 2;
   }
 
+  if (options.attach && options.launchBinding) {
+    writeLine(errorOutput, 'agent-cli accepts exactly one attach source: --attach or --launch-binding.');
+    return 2;
+  }
+
   const context = siteContext(options, env, cwd);
-  if (options.attach) {
+  if (options.attach || options.launchBinding) {
     return await runNarsAttachClient({
       endpoint: resolveNarsAttachEndpoint(options, env),
       input,

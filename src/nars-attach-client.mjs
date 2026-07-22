@@ -1,11 +1,107 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+
 import { createProjectedTerminalBridge } from './projected-terminal.mjs';
 import {
   createNarsAttachSessionMachine,
   createNarsEventSubscribeFrame,
 } from './nars-attach-session-machine.mjs';
 
+function firstString(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function record(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function readJson(path, code) {
+  try {
+    return record(JSON.parse(readFileSync(path, 'utf8')));
+  } catch {
+    throw new Error(code);
+  }
+}
+
+function validWebSocketEndpoint(value, code) {
+  const endpoint = firstString(value);
+  if (!endpoint) throw new Error(code);
+  let parsed;
+  try {
+    parsed = new URL(endpoint);
+  } catch {
+    throw new Error(code);
+  }
+  if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') throw new Error(code);
+  return parsed.toString();
+}
+
+function sessionRecordPath(value) {
+  const path = String(value);
+  return /\.jsonl?$/i.test(path) ? join(dirname(path), 'session-index-record.json') : join(path, 'session-index-record.json');
+}
+
+function resolveLaunchBinding(path) {
+  const binding = readJson(path, 'launch_binding_invalid');
+  if (!['narada.operator_projection_launch_binding.v1', 'narada.operator_projection_launch_binding_ref.v1'].includes(binding.schema)) {
+    throw new Error('launch_binding_schema_invalid');
+  }
+  if (binding.schema === 'narada.operator_projection_launch_binding.v1' && binding.status !== 'ready') {
+    throw new Error('launch_binding_not_ready');
+  }
+  if (binding.schema === 'narada.operator_projection_launch_binding_ref.v1' && binding.exact_attach_required !== true) {
+    throw new Error('launch_binding_exact_attach_required');
+  }
+
+  const nested = record(binding.session_started);
+  const events = record(binding.nars_events);
+  let endpoint = firstString(
+    binding.event_endpoint,
+    binding.events_endpoint,
+    binding.websocket_endpoint,
+    events.endpoint,
+    nested.event_endpoint,
+    nested.events_endpoint,
+    nested.websocket_endpoint,
+  );
+  const resultPath = firstString(binding.agent_start_result_file, binding.result_file);
+  if (resultPath) {
+    const result = readJson(resultPath, 'launch_binding_result_invalid');
+    const resultEvents = record(result.nars_events);
+    endpoint ??= firstString(result.event_endpoint, resultEvents.endpoint);
+    if (!endpoint) {
+      const launch = record(result.nars_launch);
+      const candidates = [
+        binding.session_path,
+        binding.session_dir,
+        result.session_path,
+        result.session_dir,
+        launch.session_path,
+        launch.session_dir,
+      ].filter((value) => typeof value === 'string' && value.trim());
+      for (const candidate of candidates) {
+        try {
+          const session = readJson(sessionRecordPath(candidate), 'launch_binding_session_record_invalid');
+          endpoint = firstString(session.event_endpoint, session.websocket_endpoint);
+          if (endpoint) break;
+        } catch {
+          // The runtime may publish the result before the session index.
+        }
+      }
+    }
+  }
+  return validWebSocketEndpoint(endpoint, 'nars_event_endpoint_missing_from_launch_binding');
+}
+
 function resolveNarsAttachEndpoint(options = {}, env = process.env) {
-  return String(options.attachEndpoint ?? options.attach ?? env.NARADA_EVENT_STREAM_URL ?? env.NARADA_WEBSOCKET_URL ?? '').trim() || null;
+  if (options.launchBinding) return resolveLaunchBinding(options.launchBinding);
+  return validWebSocketEndpoint(
+    options.attachEndpoint ?? options.attach ?? env.NARADA_EVENT_STREAM_URL ?? env.NARADA_WEBSOCKET_URL,
+    'NARS attach endpoint is required',
+  );
 }
 
 function normalizeNarsAttachIncomingEvent(message) {
@@ -295,6 +391,7 @@ export {
   createNarsEventSubscribeFrame,
   durableEventSequence,
   normalizeNarsAttachIncomingEvent,
+  resolveLaunchBinding,
   resolveNarsAttachEndpoint,
   runNarsAttachClient,
 };
